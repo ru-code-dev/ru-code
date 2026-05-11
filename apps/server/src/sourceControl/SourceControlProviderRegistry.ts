@@ -4,48 +4,41 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import {
-  SourceControlProviderError,
-  type SourceControlProviderDiscoveryItem,
-} from "@t3tools/contracts";
+import { SourceControlProviderError } from "@t3tools/contracts";
 import type { SourceControlProviderKind } from "@t3tools/contracts";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
-import * as AzureDevOpsSourceControlProvider from "./AzureDevOpsSourceControlProvider.ts";
-import * as BitbucketSourceControlProvider from "./BitbucketSourceControlProvider.ts";
+import {
+  SourceControlProvider,
+  type SourceControlProviderContext,
+  type SourceControlProviderShape,
+} from "./SourceControlProvider.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
-import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
-import * as SourceControlProvider from "./SourceControlProvider.ts";
-import * as SourceControlProviderDiscovery from "./SourceControlProviderDiscovery.ts";
-import { ServerConfig } from "../config.ts";
-import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { VcsDriverRegistry } from "../vcs/VcsDriverRegistry.ts";
 
 const PROVIDER_DETECTION_CACHE_CAPACITY = 2_048;
 const PROVIDER_DETECTION_CACHE_TTL = Duration.seconds(5);
 
 export interface SourceControlProviderRegistration {
   readonly kind: SourceControlProviderKind;
-  readonly provider: SourceControlProvider.SourceControlProviderShape;
-  readonly discovery: SourceControlProviderDiscovery.SourceControlProviderDiscoverySpec;
+  readonly provider: SourceControlProviderShape;
 }
 
 export interface SourceControlProviderHandle {
-  readonly provider: SourceControlProvider.SourceControlProviderShape;
-  readonly context: SourceControlProvider.SourceControlProviderContext | null;
+  readonly provider: SourceControlProviderShape;
+  readonly context: SourceControlProviderContext | null;
 }
 
 export interface SourceControlProviderRegistryShape {
   readonly get: (
     kind: SourceControlProviderKind,
-  ) => Effect.Effect<SourceControlProvider.SourceControlProviderShape, SourceControlProviderError>;
+  ) => Effect.Effect<SourceControlProviderShape, SourceControlProviderError>;
   readonly resolveHandle: (input: {
     readonly cwd: string;
   }) => Effect.Effect<SourceControlProviderHandle, SourceControlProviderError>;
   readonly resolve: (input: {
     readonly cwd: string;
-  }) => Effect.Effect<SourceControlProvider.SourceControlProviderShape, SourceControlProviderError>;
-  readonly discover: Effect.Effect<ReadonlyArray<SourceControlProviderDiscoveryItem>>;
+  }) => Effect.Effect<SourceControlProviderShape, SourceControlProviderError>;
 }
 
 export class SourceControlProviderRegistry extends Context.Service<
@@ -53,9 +46,7 @@ export class SourceControlProviderRegistry extends Context.Service<
   SourceControlProviderRegistryShape
 >()("t3/source-control/SourceControlProviderRegistry") {}
 
-function unsupportedProvider(
-  kind: SourceControlProviderKind,
-): SourceControlProvider.SourceControlProviderShape {
+function unsupportedProvider(kind: SourceControlProviderKind): SourceControlProviderShape {
   const unsupported = (operation: string) =>
     Effect.fail(
       new SourceControlProviderError({
@@ -65,7 +56,7 @@ function unsupportedProvider(
       }),
     );
 
-  return SourceControlProvider.SourceControlProvider.of({
+  return SourceControlProvider.of({
     kind,
     listChangeRequests: () => unsupported("listChangeRequests"),
     getChangeRequest: () => unsupported("getChangeRequest"),
@@ -91,7 +82,7 @@ function selectProviderContext(
     readonly name: string;
     readonly url: string;
   }>,
-): SourceControlProvider.SourceControlProviderContext | null {
+): SourceControlProviderContext | null {
   const candidates = remotes
     .map((remote) => {
       const provider = detectSourceControlProviderFromRemoteUrl(remote.url);
@@ -103,7 +94,7 @@ function selectProviderContext(
           }
         : null;
     })
-    .filter((value): value is SourceControlProvider.SourceControlProviderContext => value !== null);
+    .filter((value): value is SourceControlProviderContext => value !== null);
 
   return (
     candidates.find((candidate) => candidate.remoteName === "origin") ??
@@ -113,60 +104,12 @@ function selectProviderContext(
   );
 }
 
-function bindProviderContext(
-  provider: SourceControlProvider.SourceControlProviderShape,
-  context: SourceControlProvider.SourceControlProviderContext | null,
-): SourceControlProvider.SourceControlProviderShape {
-  if (context === null) {
-    return provider;
-  }
-
-  return SourceControlProvider.SourceControlProvider.of({
-    kind: provider.kind,
-    listChangeRequests: (input) =>
-      provider.listChangeRequests({
-        ...input,
-        context: input.context ?? context,
-      }),
-    getChangeRequest: (input) =>
-      provider.getChangeRequest({
-        ...input,
-        context: input.context ?? context,
-      }),
-    createChangeRequest: (input) =>
-      provider.createChangeRequest({
-        ...input,
-        context: input.context ?? context,
-      }),
-    getRepositoryCloneUrls: (input) =>
-      provider.getRepositoryCloneUrls({
-        ...input,
-        context: input.context ?? context,
-      }),
-    createRepository: (input) => provider.createRepository(input),
-    getDefaultBranch: (input) =>
-      provider.getDefaultBranch({
-        ...input,
-        context: input.context ?? context,
-      }),
-    checkoutChangeRequest: (input) =>
-      provider.checkoutChangeRequest({
-        ...input,
-        context: input.context ?? context,
-      }),
-  });
-}
-
 export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWithProviders")(
   function* (registrations: ReadonlyArray<SourceControlProviderRegistration>) {
-    const config = yield* ServerConfig;
-    const process = yield* VcsProcess.VcsProcess;
-    const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
-    const providers = new Map<
-      SourceControlProviderKind,
-      SourceControlProvider.SourceControlProviderShape
-    >(registrations.map((registration) => [registration.kind, registration.provider]));
-    const discoverySpecs = registrations.map((registration) => registration.discovery);
+    const vcsRegistry = yield* VcsDriverRegistry;
+    const providers = new Map<SourceControlProviderKind, SourceControlProviderShape>(
+      registrations.map((registration) => [registration.kind, registration.provider]),
+    );
 
     const get: SourceControlProviderRegistryShape["get"] = (kind) =>
       Effect.succeed(providers.get(kind) ?? unsupportedProvider(kind));
@@ -186,7 +129,7 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
 
     const providerContextCache = yield* Cache.makeWith<
       string,
-      SourceControlProvider.SourceControlProviderContext | null,
+      SourceControlProviderContext | null,
       SourceControlProviderError
     >(detectProviderContext, {
       capacity: PROVIDER_DETECTION_CACHE_CAPACITY,
@@ -197,9 +140,8 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
       Cache.get(providerContextCache, input.cwd).pipe(
         Effect.map((context) => {
           const kind = context?.provider.kind ?? "unknown";
-          const provider = providers.get(kind) ?? unsupportedProvider(kind);
           return {
-            provider: bindProviderContext(provider, context),
+            provider: providers.get(kind) ?? unsupportedProvider(kind),
             context,
           } satisfies SourceControlProviderHandle;
         }),
@@ -209,46 +151,16 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
       get,
       resolveHandle,
       resolve: (input) => resolveHandle(input).pipe(Effect.map((handle) => handle.provider)),
-      discover: Effect.all(
-        discoverySpecs.map((spec) =>
-          SourceControlProviderDiscovery.probeSourceControlProvider({
-            spec,
-            process,
-            cwd: config.cwd,
-          }),
-        ),
-        { concurrency: "unbounded" },
-      ),
     });
   },
 );
 
 export const make = Effect.fn("makeSourceControlProviderRegistry")(function* () {
   const github = yield* GitHubSourceControlProvider.make();
-  const gitlab = yield* GitLabSourceControlProvider.make();
-  const bitbucket = yield* BitbucketSourceControlProvider.make();
-  const bitbucketDiscovery = yield* BitbucketSourceControlProvider.makeDiscovery();
-  const azureDevOps = yield* AzureDevOpsSourceControlProvider.make();
   return yield* makeWithProviders([
     {
       kind: "github",
       provider: github,
-      discovery: GitHubSourceControlProvider.discovery,
-    },
-    {
-      kind: "gitlab",
-      provider: gitlab,
-      discovery: GitLabSourceControlProvider.discovery,
-    },
-    {
-      kind: "azure-devops",
-      provider: azureDevOps,
-      discovery: AzureDevOpsSourceControlProvider.discovery,
-    },
-    {
-      kind: "bitbucket",
-      provider: bitbucket,
-      discovery: bitbucketDiscovery,
     },
   ]);
 });

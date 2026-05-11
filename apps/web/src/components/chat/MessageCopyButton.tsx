@@ -32,7 +32,7 @@ const onCopyError = (ref: React.RefObject<HTMLButtonElement | null>, error: Erro
         anchor: ref.current,
       },
       timeout: ANCHORED_TOAST_TIMEOUT_MS,
-      title: "Failed to copy",
+      title: "Не удалось скопировать",
       description: error.message,
     });
   }

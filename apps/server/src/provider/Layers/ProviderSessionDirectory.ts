@@ -126,6 +126,14 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         issue: "providerInstanceId is required for provider session runtime bindings.",
       });
     }
+    const resolvedRuntimeMode = binding.runtimeMode ?? existingRuntime?.runtimeMode;
+    if (resolvedRuntimeMode === undefined) {
+      return yield* new ProviderValidationError({
+        operation: "ProviderSessionDirectory.upsert",
+        issue:
+          "runtimeMode is required when creating a new provider session runtime binding. The orchestration thread is the source of truth.",
+      });
+    }
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
@@ -134,7 +142,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         adapterKey:
           binding.adapterKey ??
           (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
-        runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
+        runtimeMode: resolvedRuntimeMode,
         status: binding.status ?? existingRuntime?.status ?? "running",
         lastSeenAt: now,
         resumeCursor:

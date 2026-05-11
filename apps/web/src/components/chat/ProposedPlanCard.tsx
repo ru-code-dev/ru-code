@@ -48,14 +48,14 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not copy plan",
-          description: error instanceof Error ? error.message : "An error occurred while copying.",
+          title: "Не удалось скопировать план",
+          description: error instanceof Error ? error.message : "Произошла ошибка при копировании.",
         }),
       );
     },
   });
   const savePathInputId = useId();
-  const title = proposedPlanTitle(planMarkdown) ?? "Proposed plan";
+  const title = proposedPlanTitle(planMarkdown) ?? "Предложенный план";
   const lineCount = planMarkdown.split("\n").length;
   const canCollapse = planMarkdown.length > 900 || lineCount > 20;
   const displayedPlanMarkdown = stripDisplayedPlanMarkdown(planMarkdown);
@@ -78,8 +78,8 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Workspace path is unavailable",
-          description: "This thread does not have a workspace path to save into.",
+          title: "Путь рабочей области недоступен",
+          description: "У этого диалога нет пути рабочей области для сохранения.",
         }),
       );
       return;
@@ -97,7 +97,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
     if (!relativePath) {
       toastManager.add({
         type: "warning",
-        title: "Enter a workspace path",
+        title: "Укажите путь в рабочей области",
       });
       return;
     }
@@ -113,7 +113,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
         setIsSaveDialogOpen(false);
         toastManager.add({
           type: "success",
-          title: "Plan saved to workspace",
+          title: "План сохранён в рабочей области",
           description: result.relativePath,
         });
       })
@@ -121,8 +121,9 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not save plan",
-            description: error instanceof Error ? error.message : "An error occurred while saving.",
+            title: "Не удалось сохранить план",
+            description:
+              error instanceof Error ? error.message : "Произошла ошибка при сохранении.",
           }),
         );
       })
@@ -140,7 +141,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
     <div className="rounded-[24px] border border-border/80 bg-card/70 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Badge variant="secondary">Plan</Badge>
+          <Badge variant="secondary">План</Badge>
           <p className="truncate text-sm font-medium text-foreground">{title}</p>
         </div>
         <Menu>
@@ -151,11 +152,11 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
           </MenuTrigger>
           <MenuPopup align="end">
             <MenuItem onClick={handleCopyPlan}>
-              {isCopied ? "Copied!" : "Copy to clipboard"}
+              {isCopied ? "Скопировано!" : "Копировать в буфер обмена"}
             </MenuItem>
-            <MenuItem onClick={handleDownload}>Download as markdown</MenuItem>
+            <MenuItem onClick={handleDownload}>Скачать как markdown</MenuItem>
             <MenuItem onClick={openSaveDialog} disabled={!workspaceRoot || isSavingToWorkspace}>
-              Save to workspace
+              Сохранить в рабочую область
             </MenuItem>
           </MenuPopup>
         </Menu>
@@ -179,7 +180,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               data-scroll-anchor-ignore
               onClick={() => setExpanded((value) => !value)}
             >
-              {expanded ? "Collapse plan" : "Expand plan"}
+              {expanded ? "Свернуть план" : "Развернуть план"}
             </Button>
           </div>
         ) : null}
@@ -195,14 +196,14 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
       >
         <DialogPopup className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>Save plan to workspace</DialogTitle>
+            <DialogTitle>Сохранить план в рабочую область</DialogTitle>
             <DialogDescription>
-              Enter a path relative to <code>{workspaceRoot ?? "the workspace"}</code>.
+              Укажите путь относительно <code>{workspaceRoot ?? "рабочей области"}</code>.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
             <label htmlFor={savePathInputId} className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Workspace path</span>
+              <span className="text-xs font-medium text-foreground">Путь в рабочей области</span>
               <Input
                 id={savePathInputId}
                 value={savePath}
@@ -220,14 +221,14 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               onClick={() => setIsSaveDialogOpen(false)}
               disabled={isSavingToWorkspace}
             >
-              Cancel
+              Отмена
             </Button>
             <Button
               size="sm"
               onClick={() => void handleSaveToWorkspace()}
               disabled={isSavingToWorkspace}
             >
-              {isSavingToWorkspace ? "Saving..." : "Save"}
+              {isSavingToWorkspace ? "Сохранение…" : "Сохранить"}
             </Button>
           </DialogFooter>
         </DialogPopup>

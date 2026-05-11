@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import type {
   EnvironmentId,
   MessageId,
@@ -37,6 +38,8 @@ import {
 import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
+// ru-fork: attachment <img src> URLs need the --base-url prefix.
+import { getBasePath } from "./ru-fork/basePath";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
 
 export interface EnvironmentState {
@@ -303,6 +306,8 @@ function mapThreadShell(
     hasPendingApprovals: thread.hasPendingApprovals,
     hasPendingUserInput: thread.hasPendingUserInput,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    hasPendingPlanApproval: thread.hasPendingPlanApproval,
+    pendingPlanApprovalRequestId: thread.pendingPlanApprovalRequestId,
   };
   return {
     shell,
@@ -403,7 +408,9 @@ function sidebarThreadSummariesEqual(
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
-    left.hasActionableProposedPlan === right.hasActionableProposedPlan
+    left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    left.hasPendingPlanApproval === right.hasPendingPlanApproval &&
+    left.pendingPlanApprovalRequestId === right.pendingPlanApprovalRequestId
   );
 }
 
@@ -1010,11 +1017,14 @@ function toLegacyProvider(providerName: string | null): ProviderDriverKind {
   if (isProviderDriverKindValue(providerName)) {
     return providerName;
   }
-  return ProviderDriverKind.make("codex");
+  return ProviderDriverKind.make(CLI_NAME);
 }
 
 function attachmentPreviewRoutePath(attachmentId: string): string {
-  return `/attachments/${encodeURIComponent(attachmentId)}`;
+  // ru-fork: prefix with the configured base-path so the URL is
+  // valid behind a reverse-proxy sub-path. getBasePath() returns ""
+  // when no prefix is configured.
+  return `${getBasePath()}/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
 function updateThreadState(
@@ -1906,20 +1916,6 @@ export function setActiveEnvironmentId(state: AppState, environmentId: Environme
   };
 }
 
-export function removeEnvironmentState(state: AppState, environmentId: EnvironmentId): AppState {
-  if (!state.environmentStateById[environmentId] && state.activeEnvironmentId !== environmentId) {
-    return state;
-  }
-
-  const { [environmentId]: _removed, ...environmentStateById } = state.environmentStateById;
-  return {
-    ...state,
-    activeEnvironmentId:
-      state.activeEnvironmentId === environmentId ? null : state.activeEnvironmentId,
-    environmentStateById,
-  };
-}
-
 export function setThreadBranch(
   state: AppState,
   threadRef: ScopedThreadRef,
@@ -1945,7 +1941,6 @@ export function setThreadBranch(
 
 interface AppStore extends AppState {
   setActiveEnvironmentId: (environmentId: EnvironmentId) => void;
-  removeEnvironmentState: (environmentId: EnvironmentId) => void;
   syncServerShellSnapshot: (
     snapshot: OrchestrationShellSnapshot,
     environmentId: EnvironmentId,
@@ -1969,8 +1964,6 @@ export const useStore = create<AppStore>((set) => ({
   ...initialState,
   setActiveEnvironmentId: (environmentId) =>
     set((state) => setActiveEnvironmentId(state, environmentId)),
-  removeEnvironmentState: (environmentId) =>
-    set((state) => removeEnvironmentState(state, environmentId)),
   syncServerShellSnapshot: (snapshot, environmentId) =>
     set((state) => syncServerShellSnapshot(state, snapshot, environmentId)),
   syncServerThreadDetail: (thread, environmentId) =>

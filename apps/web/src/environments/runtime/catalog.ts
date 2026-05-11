@@ -18,7 +18,6 @@ export interface SavedEnvironmentRecord {
   readonly httpBaseUrl: string;
   readonly createdAt: string;
   readonly lastConnectedAt: string | null;
-  readonly desktopSsh?: PersistedSavedEnvironmentRecord["desktopSsh"];
 }
 
 interface SavedEnvironmentRegistryState {
@@ -29,14 +28,13 @@ interface SavedEnvironmentRegistryStore extends SavedEnvironmentRegistryState {
   readonly upsert: (record: SavedEnvironmentRecord) => void;
   readonly remove: (environmentId: EnvironmentId) => void;
   readonly markConnected: (environmentId: EnvironmentId, connectedAt: string) => void;
-  readonly rename: (environmentId: EnvironmentId, label: string) => void;
   readonly reset: () => void;
 }
 
 let savedEnvironmentRegistryHydrated = false;
 let savedEnvironmentRegistryHydrationPromise: Promise<void> | null = null;
 
-export function toPersistedSavedEnvironmentRecord(
+function toPersistedSavedEnvironmentRecord(
   record: SavedEnvironmentRecord,
 ): PersistedSavedEnvironmentRecord {
   return {
@@ -46,7 +44,6 @@ export function toPersistedSavedEnvironmentRecord(
     wsBaseUrl: record.wsBaseUrl,
     createdAt: record.createdAt,
     lastConnectedAt: record.lastConnectedAt,
-    ...(record.desktopSsh ? { desktopSsh: record.desktopSsh } : {}),
   };
 }
 
@@ -151,23 +148,6 @@ export const useSavedEnvironmentRegistryStore = create<SavedEnvironmentRegistryS
       persistSavedEnvironmentRegistryState(byId);
       return { byId };
     }),
-  rename: (environmentId, label) =>
-    set((state) => {
-      const existing = state.byId[environmentId];
-      const nextLabel = label.trim();
-      if (!existing || nextLabel.length === 0 || existing.label === nextLabel) {
-        return state;
-      }
-      const byId = {
-        ...state.byId,
-        [environmentId]: {
-          ...existing,
-          label: nextLabel,
-        },
-      };
-      persistSavedEnvironmentRegistryState(byId);
-      return { byId };
-    }),
   reset: () => {
     persistSavedEnvironmentRegistryState({});
     set({
@@ -220,7 +200,12 @@ export function resolveEnvironmentHttpUrl(input: {
   }
 
   const url = new URL(httpBaseUrl);
-  url.pathname = input.pathname;
+  // ru-fork: httpBaseUrl.pathname may carry a reverse-proxy prefix;
+  // append the requested route instead of overwriting it.
+  const base = url.pathname.replace(/\/+$/, "");
+  url.pathname = input.pathname.startsWith("/")
+    ? `${base}${input.pathname}`
+    : `${base}/${input.pathname}`;
   if (input.searchParams) {
     url.search = new URLSearchParams(input.searchParams).toString();
   }

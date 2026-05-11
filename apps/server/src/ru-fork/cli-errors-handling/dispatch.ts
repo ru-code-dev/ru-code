@@ -1,0 +1,126 @@
+// ru-fork: dispatcher for `CliErrorDecision`. Routes a classified
+// decision to one of the three UI surfaces (B / T / T+N) or silently,
+// runs `killAcp` if requested, ends the turn per the surface's
+// implicit rules + the `endTurn` flag.
+//
+// The dispatcher is **closure-injected**: each catch site builds a
+// `CliErrorDispatchEnv` carrying its capabilities (kill function,
+// activity-kind, turnId, etc.) and passes it in. Lets one dispatcher
+// serve all four call sites without depending on any specific layer.
+//
+// **B-surface is NOT handled here.** It only makes sense inside the
+// prompt RPC scope at `CliAdapter.ts:1359`, where the catch can emit
+// a `content.delta` and return `{ stopReason: "end_turn" }` as the
+// prompt response. Site #1 short-circuits to that path before calling
+// `dispatch`. The dispatcher's `case "B"` is a no-op (logs nothing
+// extra; the per-decision `[cli-error.<id>]` line has already fired).
+//
+// Cross-reference: `ru-fork-instrumental/changes/server-errors-handaling.md`,
+// "Code structure" → dispatch.ts.
+
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+
+import type { CliErrorDecision } from "./recognizers.ts";
+import { describeRequestFailure } from "./requestLogFormat.ts";
+
+/**
+ * Capabilities each catch site must provide to the dispatcher.
+ *
+ * The dispatcher is generic over the error type `E`: callers' capability
+ * effects can carry any tagged error type (orchestration dispatches,
+ * persistence ops, etc.). The dispatcher's own error channel becomes
+ * the same `E`; the outer guard (`recoverTurnStartFailure` or
+ * equivalent) is responsible for swallowing those at the call-site
+ * boundary.
+ *
+ * `R` is the requirements channel. Most call sites already have all
+ * services in scope and pass closures that resolve to `R = never`, so
+ * this defaults; carry it through as a type parameter to keep the
+ * dispatcher service-agnostic.
+ */
+export interface CliErrorDispatchEnv<E, R = never> {
+  /**
+   * Force-kill the CLI child process. Called when `decision.killAcp`
+   * is true. Set to `undefined` at sites that don't have a session to
+   * kill (the dispatcher skips kill silently in that case).
+   */
+  readonly killAcp: Effect.Effect<void, E, R> | undefined;
+
+  /** Append a `tone: "error"` activity entry to the timeline. */
+  readonly appendActivity: (detail: string) => Effect.Effect<void, E, R>;
+
+  /** Set `session.lastError` (red notification). Used for T+N only. */
+  readonly setLastError: (detail: string) => Effect.Effect<void, E, R>;
+
+  /**
+   * Clear `session.activeTurnId` so the "Работаю" timer stops. Called
+   * when `decision.endTurn === true` on T or silent surfaces; on T+N
+   * the lastError dispatch already clears the turn so this is unused.
+   */
+  readonly endTurn: Effect.Effect<void, E, R>;
+}
+
+/**
+ * Apply a decision. Emits one `[cli-error.<id>]` `logError` line then
+ * does surface-specific routing.
+ *
+ * @param decision       the classifier output (or `UNRECOGNIZED_DECISION`).
+ * @param failureFields  log fields describing the failure (code/message/details
+ *                       or a stack-free message chain) — see `describeRequestFailure`.
+ * @param env            capabilities for the current catch site.
+ */
+export const dispatch = <E, R = never>(
+  decision: CliErrorDecision,
+  failureFields: Record<string, unknown>,
+  env: CliErrorDispatchEnv<E, R>,
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    yield* Effect.logError(`[cli-error.${decision.id}]`, failureFields);
+
+    if (decision.killAcp === true && env.killAcp !== undefined) {
+      yield* env.killAcp;
+    }
+
+    if (decision.surface === undefined) {
+      // Silent: no UI dispatch. `endTurn` still respected.
+      if (decision.endTurn === true) yield* env.endTurn;
+      return;
+    }
+
+    if (decision.surface === "B") {
+      // B-surface is handled inline at site #1 before reaching the
+      // dispatcher (it needs the prompt scope to return PromptResponse).
+      // Reaching here means a recognizer is misconfigured — its B-decision
+      // was passed to a non-prompt catch site. Surface as T+N as a safety
+      // net so the user still sees something, and log loudly.
+      yield* Effect.logError(`[cli-error.${decision.id}.b-surface-outside-prompt]`, {
+        hint: "B-surface decision dispatched at a non-prompt catch site. Falling back to T+N.",
+      });
+      yield* env.setLastError(decision.text);
+      yield* env.appendActivity(decision.text);
+      return;
+    }
+
+    if (decision.surface === "T") {
+      yield* env.appendActivity(decision.text);
+      if (decision.endTurn === true) yield* env.endTurn;
+      return;
+    }
+
+    // T+N — coupled write of lastError + activeTurnId in
+    // setLastError's underlying setThreadSession dispatch ends the turn.
+    yield* env.setLastError(decision.text);
+    yield* env.appendActivity(decision.text);
+  });
+
+/**
+ * Convenience: derive the stack-free log fields from a `Cause` and
+ * `dispatch`. Most catch sites have a `Cause` in hand, not the unwrapped
+ * error/cause pair the classifier wants.
+ */
+export const dispatchCause = <E, R = never>(
+  decision: CliErrorDecision,
+  cause: Cause.Cause<unknown>,
+  env: CliErrorDispatchEnv<E, R>,
+): Effect.Effect<void, E, R> => dispatch(decision, describeRequestFailure(cause), env);

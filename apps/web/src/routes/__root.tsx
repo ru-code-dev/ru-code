@@ -13,7 +13,6 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
-import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import {
   SlowRpcAckToastCoordinator,
@@ -48,41 +47,19 @@ import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import {
   ensureEnvironmentConnectionBootstrapped,
   getPrimaryEnvironmentConnection,
-  listSavedEnvironmentRecords,
-  waitForSavedEnvironmentRegistryHydration,
   startEnvironmentConnectionService,
-  useSavedEnvironmentRegistryStore,
 } from "../environments/runtime";
-import { configureClientTracing } from "../observability/clientTracing";
 import {
   ensurePrimaryEnvironmentReady,
   getPrimaryKnownEnvironment,
   resolveInitialServerAuthGateState,
   updatePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
-import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
 }>()({
-  beforeLoad: async ({ location }) => {
-    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
-      return {
-        authGateState: {
-          status: "hosted-pairing",
-        } as const,
-      };
-    }
-
-    if (isHostedStaticApp(new URL(window.location.href))) {
-      await waitForSavedEnvironmentRegistryHydration();
-      return {
-        authGateState: {
-          status: "hosted-static",
-        } as const,
-      };
-    }
-
+  beforeLoad: async () => {
     const [, authGateState] = await Promise.all([
       ensurePrimaryEnvironmentReady(),
       resolveInitialServerAuthGateState(),
@@ -112,11 +89,7 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair") {
-    return <Outlet />;
-  }
-
-  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
+  if (authGateState.status !== "authenticated") {
     return <Outlet />;
   }
 
@@ -131,11 +104,8 @@ function RootRouteView() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
-        {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
         <EnvironmentConnectionManagerBootstrap />
-        <SshPasswordPromptDialog />
-        <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
@@ -148,32 +118,6 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
-}
-
-function HostedStaticEnvironmentBootstrap() {
-  const savedEnvironmentCount = useSavedEnvironmentRegistryStore(
-    (state) => Object.keys(state.byId).length,
-  );
-
-  useEffect(() => {
-    if (getPrimaryKnownEnvironment()) {
-      return;
-    }
-
-    const currentActiveEnvironmentId = useStore.getState().activeEnvironmentId;
-    if (currentActiveEnvironmentId) {
-      return;
-    }
-
-    const firstSavedEnvironment = listSavedEnvironmentRecords()[0];
-    if (!firstSavedEnvironment) {
-      return;
-    }
-
-    useStore.getState().setActiveEnvironmentId(firstSavedEnvironment.environmentId);
-  }, [savedEnvironmentCount]);
-
-  return null;
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
@@ -254,14 +198,6 @@ function ServerStateBootstrap() {
     }
 
     return startServerStateSync(getPrimaryEnvironmentConnection().client.server);
-  }, []);
-
-  return null;
-}
-
-function AuthenticatedTracingBootstrap() {
-  useEffect(() => {
-    void configureClientTracing();
   }, []);
 
   return null;
@@ -362,8 +298,8 @@ function EventRouter() {
         lastKeybindingsSuccessToastAtRef.current = now;
         toastManager.add({
           type: "success",
-          title: "Keybindings updated",
-          description: "Keybindings configuration reloaded successfully.",
+          title: "Сочетания клавиш обновлены",
+          description: "Конфигурация сочетаний клавиш успешно перезагружена.",
         });
         return;
       }

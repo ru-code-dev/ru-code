@@ -26,10 +26,12 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { ACTIVITY_DETAIL_MAX_CHARS } from "../../config.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import { dispatchTurnCompletedCheckpointPlaceholder } from "../../ru-fork/turnCompletedCheckpointDispatch.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -55,7 +57,8 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
-const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+const STRICT_PROVIDER_LIFECYCLE_GUARD =
+  process.env.RU_FORK_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
   OrchestrationEvent,
@@ -163,7 +166,7 @@ function maxCheckpointTurnCount(
   return maxTurnCount;
 }
 
-function truncateDetail(value: string, limit = 180): string {
+function truncateDetail(value: string, limit = ACTIVITY_DETAIL_MAX_CHARS): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
@@ -286,12 +289,12 @@ function runtimeEventToActivities(
           kind: "approval.requested",
           summary:
             requestKind === "command"
-              ? "Command approval requested"
+              ? "Запрошено подтверждение команды"
               : requestKind === "file-read"
-                ? "File-read approval requested"
+                ? "Запрошено подтверждение чтения файла"
                 : requestKind === "file-change"
-                  ? "File-change approval requested"
-                  : "Approval requested",
+                  ? "Запрошено подтверждение изменения файла"
+                  : "Запрошено подтверждение",
           payload: {
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
@@ -315,7 +318,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "approval",
           kind: "approval.resolved",
-          summary: "Approval resolved",
+          summary: "Подтверждение получено",
           payload: {
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
@@ -335,7 +338,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "error",
           kind: "runtime.error",
-          summary: "Runtime error",
+          summary: "Ошибка выполнения",
           payload: {
             message: truncateDetail(event.payload.message),
           },
@@ -352,7 +355,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
+          summary: "Ошибка выполнения",
           payload: {
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
@@ -370,7 +373,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "turn.plan.updated",
-          summary: "Plan updated",
+          summary: "План обновлён",
           payload: {
             plan: event.payload.plan,
             ...(event.payload.explanation !== undefined
@@ -390,7 +393,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "user-input.requested",
-          summary: "User input requested",
+          summary: "Запрошен ввод пользователя",
           payload: {
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
@@ -408,7 +411,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "user-input.resolved",
-          summary: "User input submitted",
+          summary: "Ввод пользователя отправлен",
           payload: {
             ...(event.requestId ? { requestId: event.requestId } : {}),
             answers: event.payload.answers,
@@ -428,10 +431,10 @@ function runtimeEventToActivities(
           kind: "task.started",
           summary:
             event.payload.taskType === "plan"
-              ? "Plan task started"
+              ? "Запущена задача плана"
               : event.payload.taskType
-                ? `${event.payload.taskType} task started`
-                : "Task started",
+                ? `Запущена задача: ${event.payload.taskType}`
+                : "Задача запущена",
           payload: {
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
@@ -452,7 +455,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary: "Размышление",
           payload: {
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
@@ -475,10 +478,10 @@ function runtimeEventToActivities(
           kind: "task.completed",
           summary:
             event.payload.status === "failed"
-              ? "Task failed"
+              ? "Задача провалена"
               : event.payload.status === "stopped"
-                ? "Task stopped"
-                : "Task completed",
+                ? "Задача остановлена"
+                : "Задача завершена",
           payload: {
             taskId: event.payload.taskId,
             status: event.payload.status,
@@ -502,7 +505,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "context-compaction",
-          summary: "Context compacted",
+          summary: "Контекст уплотнён",
           payload: {
             state: event.payload.state,
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
@@ -525,7 +528,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "context-window.updated",
-          summary: "Context window updated",
+          summary: "Окно контекста обновлено",
           payload,
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -543,7 +546,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.updated",
-          summary: event.payload.title ?? "Tool updated",
+          summary: event.payload.title ?? "Инструмент обновлён",
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
@@ -566,7 +569,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.completed",
-          summary: event.payload.title ?? "Tool",
+          summary: event.payload.title ?? "Инструмент",
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
@@ -588,7 +591,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.started",
-          summary: `${event.payload.title ?? "Tool"} started`,
+          summary: `${event.payload.title ?? "Инструмент"} запущен`,
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
@@ -1265,10 +1268,10 @@ const make = Effect.gen(function* () {
         })();
         const lastError =
           event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
+            ? (event.payload.reason ?? thread.session?.lastError ?? "Ошибка сессии провайдера")
             : event.type === "turn.completed" &&
                 normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Шаг не выполнен")
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
@@ -1305,7 +1308,7 @@ const make = Effect.gen(function* () {
               ...(event.providerInstanceId !== undefined
                 ? { providerInstanceId: event.providerInstanceId }
                 : {}),
-              runtimeMode: thread.session?.runtimeMode ?? "full-access",
+              runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
               activeTurnId: nextActiveTurnId,
               lastError,
               updatedAt: now,
@@ -1518,6 +1521,20 @@ const make = Effect.gen(function* () {
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
+          // ru-fork: Cli/ACP doesn't emit `turn.diff.updated`, so the
+          // upstream Codex placeholder dispatch (above, in the
+          // `turn.diff.updated` block) never fires for it. We emit the same
+          // placeholder from `turn.completed` here so CheckpointReactor's
+          // reliable `captureCheckpointFromPlaceholder` path runs for Cli
+          // instead of the racy direct `turn.completed` capture in
+          // CheckpointReactor (which is disabled for ru-fork).
+          yield* dispatchTurnCompletedCheckpointPlaceholder({
+            event,
+            threadId: thread.id,
+            turnId,
+            assistantMessageIds,
+            now,
+          });
           yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
           yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
 
@@ -1555,7 +1572,7 @@ const make = Effect.gen(function* () {
               ...(event.providerInstanceId !== undefined
                 ? { providerInstanceId: event.providerInstanceId }
                 : {}),
-              runtimeMode: thread.session?.runtimeMode ?? "full-access",
+              runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
               updatedAt: now,

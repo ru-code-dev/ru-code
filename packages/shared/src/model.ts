@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -10,7 +11,7 @@ import {
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
 
-const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
+const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make(CLI_NAME);
 
 export interface SelectableModelOption {
   slug: string;

@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-fork/branding";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { type SlowRpcAckRequest, useSlowRpcAckRequests } from "../rpc/requestLatencyState";
@@ -38,7 +39,7 @@ function formatRetryCountdown(nextRetryAt: string, nowMs: number): string {
 }
 
 function describeOfflineToast(): string {
-  return "WebSocket disconnected. Waiting for network.";
+  return "WebSocket отключён. Ожидание сети.";
 }
 
 function formatReconnectAttemptLabel(status: WsConnectionStatus): string {
@@ -46,23 +47,15 @@ function formatReconnectAttemptLabel(status: WsConnectionStatus): string {
     1,
     Math.min(status.reconnectAttemptCount, WS_RECONNECT_MAX_ATTEMPTS),
   );
-  return `Attempt ${reconnectAttempt}/${status.reconnectMaxAttempts}`;
+  return `Попытка ${reconnectAttempt}/${status.reconnectMaxAttempts}`;
 }
 
 function describeExhaustedToast(): string {
-  return "Retries exhausted trying to reconnect";
+  return "Попытки переподключения исчерпаны";
 }
 
-function getConnectionDisplayName(status: WsConnectionStatus): string {
-  return status.connectionLabel?.trim() || "T3 Server";
-}
-
-function buildReconnectTitle(status: WsConnectionStatus): string {
-  return `Disconnected from ${getConnectionDisplayName(status)}`;
-}
-
-function buildRecoveredTitle(status: WsConnectionStatus): string {
-  return `Reconnected to ${getConnectionDisplayName(status)}`;
+function buildReconnectTitle(_status: WsConnectionStatus): string {
+  return `Соединение с сервером ${APP_NAME} потеряно`;
 }
 
 function describeRecoveredToast(
@@ -73,21 +66,21 @@ function describeRecoveredToast(
   const disconnectedAtLabel = formatConnectionMoment(previousDisconnectedAt);
 
   if (disconnectedAtLabel && reconnectedAtLabel) {
-    return `Disconnected at ${disconnectedAtLabel} and reconnected at ${reconnectedAtLabel}.`;
+    return `Отключено в ${disconnectedAtLabel}, восстановлено в ${reconnectedAtLabel}.`;
   }
 
   if (reconnectedAtLabel) {
-    return `Connection restored at ${reconnectedAtLabel}.`;
+    return `Соединение восстановлено в ${reconnectedAtLabel}.`;
   }
 
-  return "Connection restored.";
+  return "Соединение восстановлено.";
 }
 
 function describeSlowRpcAckToast(requests: ReadonlyArray<SlowRpcAckRequest>): string {
   const count = requests.length;
   const thresholdSeconds = Math.round((requests[0]?.thresholdMs ?? 0) / 1000);
 
-  return `${count} request${count === 1 ? "" : "s"} waiting longer than ${thresholdSeconds}s.`;
+  return `${count} ${count === 1 ? "запрос ждёт" : "запросов ждут"} дольше ${thresholdSeconds}с.`;
 }
 
 function SlowRpcAckRequestDetails({ requests }: { requests: ReadonlyArray<SlowRpcAckRequest> }) {
@@ -170,7 +163,7 @@ export function WebSocketConnectionCoordinator() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Reconnect failed",
+            title: "Не удалось переподключиться",
             description:
               error instanceof Error ? error.message : "Unable to restart the WebSocket.",
             data: {
@@ -291,13 +284,13 @@ export function WebSocketConnectionCoordinator() {
             },
             description: describeOfflineToast(),
             timeout: 0,
-            title: "Offline",
+            title: "Офлайн",
             type: "warning",
           })
         : shouldShowExhaustedToast
           ? stackedThreadToast({
               actionProps: {
-                children: "Retry",
+                children: "Повторить",
                 onClick: triggerManualReconnect,
               },
               data: {
@@ -305,12 +298,12 @@ export function WebSocketConnectionCoordinator() {
               },
               description: describeExhaustedToast(),
               timeout: 0,
-              title: buildReconnectTitle(status),
+              title: "Disconnected from T3 Server",
               type: "error",
             })
           : stackedThreadToast({
               actionProps: {
-                children: "Retry now",
+                children: "Повторить сейчас",
                 onClick: triggerManualReconnect,
               },
               data: {
@@ -318,8 +311,8 @@ export function WebSocketConnectionCoordinator() {
               },
               description:
                 status.nextRetryAt === null
-                  ? `Reconnecting... ${formatReconnectAttemptLabel(status)}`
-                  : `Reconnecting in ${formatRetryCountdown(status.nextRetryAt, nowMs)}... ${formatReconnectAttemptLabel(status)}`,
+                  ? `Переподключение… ${formatReconnectAttemptLabel(status)}`
+                  : `Переподключение через ${formatRetryCountdown(status.nextRetryAt, nowMs)}… ${formatReconnectAttemptLabel(status)}`,
               timeout: 0,
               title: buildReconnectTitle(status),
               type: "loading",
@@ -342,7 +335,7 @@ export function WebSocketConnectionCoordinator() {
     ) {
       const successToast = {
         description: describeRecoveredToast(previousDisconnectedAt, status.connectedAt),
-        title: buildRecoveredTitle(status),
+        title: `Соединение с сервером ${APP_NAME} восстановлено`,
         type: "success" as const,
         timeout: 0,
         data: {
@@ -408,7 +401,7 @@ export function SlowRpcAckToastCoordinator() {
       },
       description: describeSlowRpcAckToast(slowRequests),
       timeout: 0,
-      title: "Some requests are slow",
+      title: "Некоторые запросы выполняются медленно",
       type: "warning" as const,
     };
 

@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -13,7 +14,7 @@ import { createModelCapabilities, normalizeModelSlug } from "@t3tools/shared/mod
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+const DEFAULT_DRIVER_KIND = ProviderDriverKind.make(CLI_NAME);
 
 export function formatProviderDriverKindLabel(provider: ProviderDriverKind): string {
   return provider

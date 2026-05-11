@@ -22,6 +22,14 @@ apps/web/src/components/__screenshots__
 __screenshots__/
 .tanstack
 squashfs-root/
-.vercel
-dist-electron/
-.electron-runtime/
+**/package.json.publish-bak
+coverage
+caches
+.qwen
+.claude
+
+pnpm-lock.yaml
+staging
+.vscode
+dist-bundle
+ru-fork-instrumental

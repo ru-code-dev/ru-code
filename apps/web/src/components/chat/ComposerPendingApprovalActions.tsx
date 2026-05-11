@@ -24,7 +24,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "cancel")}
       >
-        Cancel turn
+        Прервать шаг
       </Button>
       <Button
         size="sm"
@@ -32,7 +32,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "decline")}
       >
-        Decline
+        Отклонить
       </Button>
       <Button
         size="sm"
@@ -40,7 +40,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
-        Always allow this session
+        Разрешить до конца сессии
       </Button>
       <Button
         size="sm"
@@ -48,7 +48,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "accept")}
       >
-        Approve once
+        Разрешить один раз
       </Button>
     </>
   );

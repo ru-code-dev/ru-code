@@ -92,6 +92,38 @@ export type RuntimeContentStreamKind = typeof RuntimeContentStreamKind.Type;
 const RuntimeSessionExitKind = Schema.Literals(["graceful", "error"]);
 export type RuntimeSessionExitKind = typeof RuntimeSessionExitKind.Type;
 
+/**
+ * AbortMethod — strategy for stopping or restarting a provider ACP
+ * session. Listed in increasing severity. Pick the least-disruptive
+ * method whose behaviour is acceptable at the call site.
+ *
+ *   "cancel-turn"
+ *     ACP `session/cancel` only. Session, child process, and conversation
+ *     context all survive. Use when the agent honours cancel reliably
+ *     for the active turn.
+ *
+ *   "reset-session"  [TODO — NOT IMPLEMENTED]
+ *     Drop the ACP session_id and create a new one in the SAME child
+ *     process. Conversation context is lost; child + MCP subprocesses
+ *     survive. Cheaper than end-graceful when implementable.
+ *     Requires splitting child-process scope from session-state scope,
+ *     which adapters don't do today. Calling this method throws until
+ *     the refactor lands.
+ *
+ *   "end-graceful"
+ *     ACP cancel, then close the scope (SIGTERM the child). Lets the
+ *     agent flush logs, shut down MCP subprocesses, etc. Can hang if the
+ *     agent ignores cancel + SIGTERM (the original mode-change hang we
+ *     hit before `acp.cancel`-before-scope-close was added).
+ *
+ *   "end-force"
+ *     SIGKILL the child directly, no cancel ceremony. Unmaskable by the
+ *     OS — cannot hang. Skips the agent's own cleanup. Use when the
+ *     session is being discarded anyway and hang-resistance trumps
+ *     cleanup.
+ */
+export type AbortMethod = "cancel-turn" | "reset-session" | "end-graceful" | "end-force";
+
 const RuntimeErrorClass = Schema.Literals([
   "provider_error",
   "transport_error",
@@ -141,6 +173,7 @@ export const CanonicalRequestType = Schema.Literals([
   "tool_user_input",
   "dynamic_tool_call",
   "auth_tokens_refresh",
+  "plan_approval",
   "unknown",
 ]);
 export type CanonicalRequestType = typeof CanonicalRequestType.Type;

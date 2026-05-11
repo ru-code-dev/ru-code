@@ -1,6 +1,7 @@
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon, ListTodoIcon } from "lucide-react";
+import { DISABLE_AUTO_APPROVE } from "../../ru-fork/config";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -20,10 +21,18 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
+  // Locks the mode radio groups while CLI is actively streaming OR
+  // parked on a user request — see ComposerFooterModeControls for
+  // rationale. `isParkedOnUser` is the ru-fork addition (see
+  // `instrumental/changes/pending-requests-handling.md`); upstream T3
+  // left the radios live during parking.
+  isStreamingActive: boolean;
+  isParkedOnUser: boolean;
   onToggleInteractionMode: () => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
+  const isModeChangeLocked = props.isStreamingActive || props.isParkedOnUser;
   return (
     <Menu>
       <MenuTrigger
@@ -47,31 +56,36 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         ) : null}
         {props.showInteractionModeToggle ? (
           <>
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Режим</div>
             <MenuRadioGroup
               value={props.interactionMode}
+              disabled={isModeChangeLocked}
               onValueChange={(value) => {
                 if (!value || value === props.interactionMode) return;
                 props.onToggleInteractionMode();
               }}
             >
-              <MenuRadioItem value="default">Chat</MenuRadioItem>
-              <MenuRadioItem value="plan">Plan</MenuRadioItem>
+              <MenuRadioItem value="default">Разработка</MenuRadioItem>
+              <MenuRadioItem value="plan">Планирование</MenuRadioItem>
             </MenuRadioGroup>
             <MenuDivider />
           </>
         ) : null}
-        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
+        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Доступ</div>
         <MenuRadioGroup
           value={props.runtimeMode}
+          disabled={isModeChangeLocked}
           onValueChange={(value) => {
             if (!value || value === props.runtimeMode) return;
             props.onRuntimeModeChange(value as RuntimeMode);
           }}
         >
-          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+          <MenuRadioItem value="approval-required">Ручное одобрение</MenuRadioItem>
+          <MenuRadioItem value="auto-accept-edits">Авто одобрение</MenuRadioItem>
+          {/* ru-fork: full-access locked from the dropdown; gated by DISABLE_AUTO_APPROVE so a single flag covers ChatComposer + CompactComposerControlsMenu */}
+          <MenuRadioItem value="full-access" disabled={DISABLE_AUTO_APPROVE}>
+            Без ограничений
+          </MenuRadioItem>
         </MenuRadioGroup>
         {props.activePlan ? (
           <>

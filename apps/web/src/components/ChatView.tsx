@@ -1,6 +1,8 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
+  DEFAULT_RUNTIME_MODE,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
@@ -74,6 +76,7 @@ import {
 } from "../pendingUserInput";
 import {
   selectProjectsAcrossEnvironments,
+  selectSidebarThreadSummaryByRef,
   selectThreadsAcrossEnvironments,
   useStore,
 } from "../store";
@@ -86,7 +89,6 @@ import {
 } from "../proposedPlan";
 import {
   DEFAULT_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
@@ -104,7 +106,7 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -121,7 +123,6 @@ import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
 import {
-  reconnectSavedEnvironment,
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
@@ -143,13 +144,22 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+// ru-fork: filesystem skill scanner — message-side chip rendering
+// also needs the cwd-scoped skill list (the dead `provider.skills` field
+// is no longer populated).
+import { useSkillsForCwd } from "../ru-fork/skills/useSkillsForCwd";
+// ru-fork: filesystem subagent scanner — message-side `#agent` chip rendering.
+import { useSubagentsForCwd } from "../ru-fork/subagents/useSubagentsForCwd";
+import { flattenSubagentBuckets } from "../ru-fork/subagents/composerIntegration";
+// ru-fork: strip leading /unknown-slug at submit so CLI never sees a
+// command outside its ACP allowlist (otherwise -32603 "Internal error" crash).
+import { applyUnknownSlashCommandStripToComposer } from "../ru-fork/unsupported-slash-commands/applyUnknownSlashCommandStripToComposer";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
@@ -182,26 +192,13 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
-import { Button } from "./ui/button";
-import {
-  buildVersionMismatchDismissalKey,
-  dismissVersionMismatch,
-  isVersionMismatchDismissed,
-  resolveServerConfigVersionMismatch,
-} from "../versionSkew";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
-const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
-type EnvironmentUnavailableState = {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly connectionState: "connecting" | "disconnected" | "error";
-};
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
@@ -680,6 +677,13 @@ export default function ChatView(props: ChatViewProps) {
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
+  // `composerRef` is a MutableRefObject (either from context or local). Reads
+  // of `composerRef.current` inside callbacks/effects intentionally bypass
+  // React's tracking — refs are mutable holders by design. Hooks throughout
+  // this file that read `composerRef.current` carry an
+  // `// eslint-disable-next-line react-hooks/exhaustive-deps` directive at the
+  // closing dep array because oxlint's exhaustive-deps doesn't implement the
+  // ref.current exemption that the canonical eslint-plugin-react-hooks does.
   const composerRef = useComposerHandleContext() ?? localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -794,7 +798,7 @@ export default function ChatView(props: ChatViewProps) {
             threadId,
             draftThread,
             fallbackDraftProject?.defaultModelSelection ?? {
-              instanceId: ProviderInstanceId.make("codex"),
+              instanceId: ProviderInstanceId.make(CLI_NAME),
               model: DEFAULT_MODEL,
             },
             localDraftError,
@@ -870,78 +874,6 @@ export default function ChatView(props: ChatViewProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
-  const activeSavedEnvironmentRecord =
-    activeThread && activeThread.environmentId !== primaryEnvironmentId
-      ? (savedEnvironmentRegistry[activeThread.environmentId] ?? null)
-      : null;
-  const activeSavedEnvironmentRuntime = activeSavedEnvironmentRecord
-    ? (savedEnvironmentRuntimeById[activeSavedEnvironmentRecord.environmentId] ?? null)
-    : null;
-  const activeSavedEnvironmentConnectionState = activeSavedEnvironmentRecord
-    ? (activeSavedEnvironmentRuntime?.connectionState ?? "disconnected")
-    : "connected";
-  const activeEnvironmentUnavailable =
-    activeSavedEnvironmentRecord !== null && activeSavedEnvironmentConnectionState !== "connected";
-  const activeSavedEnvironmentId = activeSavedEnvironmentRecord?.environmentId ?? null;
-  const activeEnvironmentUnavailableLabel = activeSavedEnvironmentRecord
-    ? resolveEnvironmentOptionLabel({
-        isPrimary: false,
-        environmentId: activeSavedEnvironmentRecord.environmentId,
-        runtimeLabel: activeSavedEnvironmentRuntime?.descriptor?.label ?? null,
-        savedLabel: activeSavedEnvironmentRecord.label,
-      })
-    : null;
-  const activeEnvironmentUnavailableState = useMemo<EnvironmentUnavailableState | null>(() => {
-    if (
-      !activeEnvironmentUnavailable ||
-      !activeEnvironmentUnavailableLabel ||
-      !activeSavedEnvironmentId
-    ) {
-      return null;
-    }
-
-    return {
-      environmentId: activeSavedEnvironmentId,
-      label: activeEnvironmentUnavailableLabel,
-      connectionState:
-        activeSavedEnvironmentConnectionState === "connecting" ||
-        activeSavedEnvironmentConnectionState === "error"
-          ? activeSavedEnvironmentConnectionState
-          : "disconnected",
-    };
-  }, [
-    activeEnvironmentUnavailable,
-    activeEnvironmentUnavailableLabel,
-    activeSavedEnvironmentConnectionState,
-    activeSavedEnvironmentId,
-  ]);
-  const [reconnectingEnvironmentId, setReconnectingEnvironmentId] = useState<EnvironmentId | null>(
-    null,
-  );
-  const handleReconnectActiveEnvironment = useCallback(
-    async (environmentId: EnvironmentId, label: string) => {
-      setReconnectingEnvironmentId(environmentId);
-      try {
-        await reconnectSavedEnvironment(environmentId);
-        toastManager.add({
-          type: "success",
-          title: "Environment reconnected",
-          description: `${label} is ready.`,
-        });
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not reconnect environment",
-            description: error instanceof Error ? error.message : "Failed to reconnect.",
-          }),
-        );
-      } finally {
-        setReconnectingEnvironmentId(null);
-      }
-    },
-    [],
-  );
   const projectGroupingSettings = useSettings((settings) => ({
     sidebarProjectGroupingMode: settings.sidebarProjectGroupingMode,
     sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
@@ -1142,124 +1074,10 @@ export default function ChatView(props: ChatViewProps) {
     primaryEnvironmentId && activeThread?.environmentId === primaryEnvironmentId
       ? primaryServerConfig
       : (activeEnvRuntimeState?.serverConfig ?? primaryServerConfig);
-  const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
-  const versionMismatchDismissKey =
-    versionMismatch && activeThread
-      ? buildVersionMismatchDismissalKey(activeThread.environmentId, versionMismatch)
-      : null;
-  const [dismissedVersionMismatchKey, setDismissedVersionMismatchKey] = useState<string | null>(
-    null,
-  );
-  const versionMismatchDismissed =
-    versionMismatchDismissKey === dismissedVersionMismatchKey ||
-    isVersionMismatchDismissed(versionMismatchDismissKey);
-  const showVersionMismatchBanner =
-    versionMismatch !== null && versionMismatchDismissKey !== null && !versionMismatchDismissed;
-  const hasMultipleRegisteredEnvironments = Object.keys(savedEnvironmentRegistry).length > 0;
-  const versionMismatchServerLabel = useMemo(() => {
-    if (!hasMultipleRegisteredEnvironments || !activeThread) {
-      return "server";
-    }
-
-    const isPrimary = activeThread.environmentId === primaryEnvironmentId;
-    const savedRecord = savedEnvironmentRegistry[activeThread.environmentId];
-    const runtimeState = savedEnvironmentRuntimeById[activeThread.environmentId];
-    return `${resolveEnvironmentOptionLabel({
-      isPrimary,
-      environmentId: activeThread.environmentId,
-      runtimeLabel: runtimeState?.descriptor?.label ?? serverConfig?.environment.label ?? null,
-      savedLabel: savedRecord?.label ?? null,
-    })} server`;
-  }, [
-    activeThread,
-    hasMultipleRegisteredEnvironments,
-    primaryEnvironmentId,
-    savedEnvironmentRegistry,
-    savedEnvironmentRuntimeById,
-    serverConfig?.environment.label,
-  ]);
-  const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
-    const items: ComposerBannerStackItem[] = [];
-    if (activeEnvironmentUnavailableState) {
-      items.push({
-        id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
-        variant:
-          activeEnvironmentUnavailableState.connectionState === "error" ? "error" : "warning",
-        icon: <WifiOffIcon />,
-        title: (
-          <>
-            {activeEnvironmentUnavailableState.label} is{" "}
-            {activeEnvironmentUnavailableState.connectionState === "connecting"
-              ? "connecting"
-              : "disconnected"}
-          </>
-        ),
-        description: "Reconnect this environment before sending messages or running actions.",
-        actions: (
-          <>
-            <Button
-              size="xs"
-              disabled={
-                activeEnvironmentUnavailableState.connectionState === "connecting" ||
-                reconnectingEnvironmentId === activeEnvironmentUnavailableState.environmentId
-              }
-              onClick={() =>
-                void handleReconnectActiveEnvironment(
-                  activeEnvironmentUnavailableState.environmentId,
-                  activeEnvironmentUnavailableState.label,
-                )
-              }
-            >
-              {activeEnvironmentUnavailableState.connectionState === "connecting" ||
-              reconnectingEnvironmentId === activeEnvironmentUnavailableState.environmentId
-                ? "Reconnecting..."
-                : "Reconnect"}
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void navigate({ to: "/settings/connections" })}
-            >
-              Connections
-            </Button>
-          </>
-        ),
-      });
-    }
-    if (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey) {
-      items.push({
-        id: `version-mismatch:${versionMismatchDismissKey}`,
-        variant: "warning",
-        icon: <TriangleAlertIcon />,
-        title: "Client and server versions differ",
-        description: (
-          <>
-            Client {versionMismatch.clientVersion} is connected to {versionMismatchServerLabel}{" "}
-            {versionMismatch.serverVersion}. Sync them if RPC calls or reconnects fail.
-          </>
-        ),
-        dismissLabel: "Dismiss version mismatch warning",
-        onDismiss: () => {
-          dismissVersionMismatch(versionMismatchDismissKey);
-          setDismissedVersionMismatchKey(versionMismatchDismissKey);
-        },
-      });
-    }
-    return items;
-  }, [
-    activeEnvironmentUnavailableState,
-    handleReconnectActiveEnvironment,
-    navigate,
-    reconnectingEnvironmentId,
-    showVersionMismatchBanner,
-    versionMismatch,
-    versionMismatchDismissKey,
-    versionMismatchServerLabel,
-  ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
-    selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
+    selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make(CLI_NAME),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
@@ -1313,15 +1131,11 @@ export default function ChatView(props: ChatViewProps) {
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
-  const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
-    return findLatestProposedPlan(
-      activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
-    );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+  const activeProposedPlan = useMemo(
+    () =>
+      findLatestProposedPlan(activeThread?.proposedPlans ?? [], activeLatestTurn?.turnId ?? null),
+    [activeLatestTurn?.turnId, activeThread?.proposedPlans],
+  );
   const sidebarProposedPlan = useMemo(
     () =>
       findSidebarProposedPlan({
@@ -1336,12 +1150,9 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
-  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "План" : "Задачи";
   const showPlanFollowUpPrompt =
-    pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
-    latestTurnSettled &&
-    hasActionableProposedPlan(activeProposedPlan);
+    interactionMode === "plan" && hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
   const {
     beginLocalDispatch,
@@ -1357,7 +1168,56 @@ export default function ChatView(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError: activeThread?.error,
   });
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  // Suppress the working/streaming indicator while Cli is parked on
+  // exit_plan_mode awaiting the user's plan decision. The session.status is
+  // still "running" during the held-open RPC, but the model isn't actually
+  // streaming — the timer + working row would lie about activity.
+  const hasPendingPlanApproval = useStore((state) =>
+    routeKind === "server"
+      ? (selectSidebarThreadSummaryByRef(state, routeThreadRef)?.hasPendingPlanApproval ?? false)
+      : false,
+  );
+  // Live requestId for the held exit_plan_mode Deferred on the server side.
+  // Drives the «Реализовать» primary button: non-null → server's
+  // pendingApprovals Map still has the Deferred → dispatch
+  // thread.approval.respond in this thread. null → Deferred is gone
+  // (server restart, ACP child died, follow-up already interrupted it) →
+  // route to new thread.
+  const pendingPlanApprovalRequestId = useStore((state) =>
+    routeKind === "server"
+      ? (selectSidebarThreadSummaryByRef(state, routeThreadRef)?.pendingPlanApprovalRequestId ??
+        null)
+      : null,
+  );
+  // Auto-flip composer mode → "plan" whenever a plan approval lands while
+  // the user is still in default mode. Predicate-based (not edge-based) so
+  // reload-while-pending on first mount also flips. Safe from oscillation:
+  // once mode is "plan" the condition is false; on resolve, mode → default
+  // is set explicitly elsewhere (onApproveInSameThread, etc.) and
+  // hasPendingPlanApproval flips false at the same time, so this effect
+  // doesn't re-fire.
+  // Edge-based: fire only when `hasPendingPlanApproval` transitions
+  // false → true. Predicate-based fired on every render where the
+  // condition held, which means after `setComposerDraftInteractionMode
+  // ("default")` in `onApproveInSameThread` it would fight back and
+  // re-flip to plan during the projection-catch-up window (while
+  // `hasPendingPlanApproval` was still true). Edge-based handles the
+  // initial-arrival and reload-while-pending cases (ref starts false,
+  // first observed `true` fires) without undoing intentional resets.
+  const prevHasPendingPlanApprovalRef = useRef(false);
+  useEffect(() => {
+    const wasParked = prevHasPendingPlanApprovalRef.current;
+    prevHasPendingPlanApprovalRef.current = hasPendingPlanApproval;
+    if (!wasParked && hasPendingPlanApproval && interactionMode === "default" && activeThread) {
+      setComposerDraftInteractionMode(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        "plan",
+      );
+    }
+  }, [hasPendingPlanApproval, interactionMode, activeThread, setComposerDraftInteractionMode]);
+  const isWorking =
+    (phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint) &&
+    !hasPendingPlanApproval;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -1592,6 +1452,15 @@ export default function ChatView(props: ChatViewProps) {
         if (!summary) {
           continue;
         }
+        // ru-fork: Path A in ru-fork/turnCompletedCheckpointDispatch.ts
+        // creates a TurnDiffSummary for every turn, including question-only
+        // ones with no file changes. Upstream's revert-button gate doesn't
+        // check `files.length`, so the button would render on "what's up?"-
+        // style turns. Match the changed-files block's gate (MessagesTimeline
+        // line ~661): only offer revert when there's something to revert to.
+        if (summary.files.length === 0) {
+          break;
+        }
         const turnCount =
           summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
         if (typeof turnCount !== "number") {
@@ -1612,7 +1481,7 @@ export default function ChatView(props: ChatViewProps) {
     if (!latestTurnHasToolActivity) return null;
 
     const elapsed = formatElapsed(activeLatestTurn.startedAt, activeLatestTurn.completedAt);
-    return elapsed ? `Worked for ${elapsed}` : null;
+    return elapsed ? `Заняло ${elapsed}` : null;
   }, [
     activeLatestTurn?.completedAt,
     activeLatestTurn?.startedAt,
@@ -1631,6 +1500,18 @@ export default function ChatView(props: ChatViewProps) {
       })
     : null;
   const gitStatusQuery = useGitStatus({ environmentId, cwd: gitCwd });
+  // ru-fork: cwd-scoped skill list for message-side chip rendering.
+  const cwdSkillsQuery = useSkillsForCwd(gitCwd);
+  const cwdSkillsFlat = useMemo(
+    () => [...(cwdSkillsQuery.data?.project ?? []), ...(cwdSkillsQuery.data?.global ?? [])],
+    [cwdSkillsQuery.data],
+  );
+  // ru-fork: cwd-scoped subagent list — flat ordering owned by helper.
+  const cwdSubagentsQuery = useSubagentsForCwd(gitCwd);
+  const cwdSubagentsFlat = useMemo(
+    () => flattenSubagentBuckets(cwdSubagentsQuery.data),
+    [cwdSubagentsQuery.data],
+  );
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
   // Prefer an instance-id match so a custom Codex instance (e.g.
@@ -1781,6 +1662,7 @@ export default function ChatView(props: ChatViewProps) {
 
   const focusComposer = useCallback(() => {
     composerRef.current?.focusAtEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -1789,6 +1671,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [focusComposer]);
   const addTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const setTerminalOpen = useCallback(
     (open: boolean) => {
@@ -2082,8 +1965,9 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not delete action",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            title: "Не удалось удалить действие",
+            description:
+              error instanceof Error ? error.message : "Произошла непредвиденная ошибка.",
           }),
         );
       }
@@ -2534,6 +2418,7 @@ export default function ChatView(props: ChatViewProps) {
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeProject,
     terminalState.terminalOpen,
@@ -2555,22 +2440,15 @@ export default function ChatView(props: ChatViewProps) {
       const localApi = readLocalApi();
       if (!api || !localApi || !activeThread || isRevertingCheckpoint) return;
 
-      if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
-        setThreadError(
-          activeThread.id,
-          `Reconnect ${activeEnvironmentUnavailableLabel} before reverting checkpoints.`,
-        );
-        return;
-      }
       if (phase === "running" || isSendBusy || isConnecting) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+        setThreadError(activeThread.id, "Прервите текущий шаг перед откатом чекпоинтов.");
         return;
       }
       const confirmed = await localApi.dialogs.confirm(
         [
-          `Revert this thread to checkpoint ${turnCount}?`,
-          "This will discard newer messages and turn diffs in this thread.",
-          "This action cannot be undone.",
+          `Откатить этот диалог к чекпоинту ${turnCount}?`,
+          "Это удалит более новые сообщения и diff'ы шагов в этом диалоге.",
+          "Это действие нельзя отменить.",
         ].join("\n"),
       );
       if (!confirmed) {
@@ -2597,8 +2475,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
-      activeEnvironmentUnavailable,
-      activeEnvironmentUnavailableLabel,
       environmentId,
       isConnecting,
       isRevertingCheckpoint,
@@ -2611,21 +2487,39 @@ export default function ChatView(props: ChatViewProps) {
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
-    if (
-      !api ||
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
+    if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
+    // Defensive guard: refuse to dispatch a new turn while CLI is
+    // actively streaming. The composer keyboard handler and the button
+    // rendering already gate the user-facing surfaces, but onSend is
+    // also reachable via form-level onSubmit, IME-synthesised Enter,
+    // and any future call sites — so the chokepoint check stays here
+    // as belt-and-suspenders. Parked sessions (held approval / plan-
+    // approval / user-input) explicitly DO NOT count as streaming —
+    // those still allow send so the server-side auto-interrupt can
+    // settle the held Deferred and start the new turn.
+    const isParkedOnUser =
+      pendingApprovals.length > 0 || pendingUserInputs.length > 0 || hasPendingPlanApproval;
+    if (phase === "running" && !isParkedOnUser) {
       return;
+    }
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx) return;
+    // ru-fork: drop leading /unknown-slug from the prompt so CLI never receives a slash command outside its ACP allowlist (-32603 "Internal error").
+    if (
+      !applyUnknownSlashCommandStripToComposer({
+        promptRef,
+        onClear: () => {
+          clearComposerDraftContent(composerDraftTarget);
+          composerRef.current?.resetCursorState();
+        },
+      })
+    ) {
+      return;
+    }
     const {
       images: composerImages,
       terminalContexts: composerTerminalContexts,
@@ -2793,7 +2687,7 @@ export default function ChatView(props: ChatViewProps) {
         } else if (composerTerminalContextsSnapshot.length > 0) {
           titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
         } else {
-          titleSeed = "New thread";
+          titleSeed = "Новый диалог";
         }
       }
       const title = truncate(titleSeed);
@@ -3021,6 +2915,7 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       composerRef.current?.resetCursorState({ cursor: 0 });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activePendingProgress?.activeQuestion, activePendingUserInput],
   );
 
@@ -3055,6 +2950,7 @@ export default function ChatView(props: ChatViewProps) {
         composerRef.current?.focusAt(nextCursor);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activePendingUserInput],
   );
 
@@ -3076,6 +2972,27 @@ export default function ChatView(props: ChatViewProps) {
     onRespondToUserInput,
     setActivePendingUserInputQuestionIndex,
   ]);
+
+  // Ru-fork addition: «Не хочу отвечать» — submits the active
+  // pending user-input request with an empty answers payload (`{}`).
+  // Dispatches the same `thread.user-input.respond` command as
+  // `onAdvanceActivePendingUserInput`; partial draft answers are
+  // intentionally dropped (model gets a fully-empty response and
+  // decides what to do next). On a dead session the server emits
+  // `provider.user-input.respond.failed` which clears the pending
+  // request and surfaces a localized warning in the timeline. See
+  // `instrumental/changes/pending-requests-handling.md`.
+  const onSkipActivePendingUserInput = useCallback(() => {
+    if (!activePendingUserInput) {
+      return;
+    }
+    console.info("[user-input] submit", {
+      threadId: activeThreadId,
+      requestId: activePendingUserInput.requestId,
+      skipped: true,
+    });
+    void onRespondToUserInput(activePendingUserInput.requestId, {});
+  }, [activePendingUserInput, activeThreadId, onRespondToUserInput]);
 
   const onPreviousActivePendingUserInputQuestion = useCallback(() => {
     if (!activePendingProgress) {
@@ -3169,6 +3086,20 @@ export default function ChatView(props: ChatViewProps) {
           nextInteractionMode,
         );
 
+        // The provider session may still be holding a permission RPC for an
+        // earlier exit_plan_mode (we hold those open until the user reacts —
+        // see CliAdapter exit_plan_mode branch). Interrupt before starting
+        // the new turn so the held permission resolves with "cancel" and
+        // the previous turn ends cleanly before the new one begins.
+        if (activeThread.session?.orchestrationStatus === "running") {
+          await api.orchestration.dispatchCommand({
+            type: "thread.turn.interrupt",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            createdAt: messageCreatedAt,
+          });
+        }
+
         await api.orchestration.dispatchCommand({
           type: "thread.turn.start",
           commandId: newCommandId(),
@@ -3213,6 +3144,7 @@ export default function ChatView(props: ChatViewProps) {
         resetLocalDispatch();
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       activeThread,
       activeProposedPlan,
@@ -3240,7 +3172,6 @@ export default function ChatView(props: ChatViewProps) {
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
-      activeEnvironmentUnavailable ||
       sendInFlightRef.current
     ) {
       return;
@@ -3340,22 +3271,20 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not start implementation thread",
+            title: "Не удалось запустить диалог реализации",
             description:
-              err instanceof Error
-                ? err.message
-                : "An error occurred while creating the new thread.",
+              err instanceof Error ? err.message : "Произошла ошибка при создании нового диалога.",
           }),
         );
       })
       .then(finish, finish);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeProject,
     activeProposedPlan,
     activeThreadBranch,
     activeThread,
     beginLocalDispatch,
-    activeEnvironmentUnavailable,
     isConnecting,
     isSendBusy,
     isServerThread,
@@ -3365,6 +3294,133 @@ export default function ChatView(props: ChatViewProps) {
     autoOpenPlanSidebar,
     environmentId,
   ]);
+
+  // Tracks the requestId of an in-flight same-thread plan approve so
+  // the watcher effect below can react to its resolution activity.
+  const sentPlanApprovalRequestIdRef = useRef<ApprovalRequestId | null>(null);
+
+  // Same-thread implement. Two routes depending on whether the server
+  // still holds an exit_plan_mode Deferred for this thread:
+  //  - Live (`pendingPlanApprovalRequestId !== null`): dispatch
+  //    `thread.approval.respond` directly — CLI continues from its own
+  //    context, no plan repost, no new turn. Server maps decision →
+  //    CLI wire outcome at CliAdapter.ts:761 (optionId from runtimeMode).
+  //    If dispatch fails with stale-detail (Map empty post-restart / ACP
+  //    died), silently fall back to the new-thread route and toast the
+  //    user — one smooth navigation instead of a stuck spinner + second
+  //    click. The server's `provider.approval.respond.failed` activity
+  //    still lands in the projection so the audit trail is intact.
+  //    Stale detection: `dispatchCommand` resolves successfully even
+  //    when the server-side Deferred is gone — the failure is recorded
+  //    as a `provider.approval.respond.failed` activity via the
+  //    `catchCause` at `ProviderCommandReactor.ts:985`. Watcher effect
+  //    below picks that up and triggers the new-thread fallback.
+  //    Ref is set right before `dispatchCommand` and cleared on
+  //    `approval.resolved` (success), stale failure, or RPC error.
+  //  - Sticky/Stale (no live Deferred — follow-up text reply consumed
+  //    the original, or projection already caught up): fall through the
+  //    legacy repost path via `onSubmitPlanFollowUp` empty-draft branch.
+  //    Dispatches `turn.interrupt` + `turn.start` with `sourceProposedPlan`
+  //    and the plan markdown as the user message — CLI receives the
+  //    plan in `default` interaction mode and implements.
+  const onApproveInSameThread = useCallback(async () => {
+    const api = readEnvironmentApi(environmentId);
+    if (!api || !activeThread || !activeThreadId) {
+      return;
+    }
+    if (pendingPlanApprovalRequestId !== null) {
+      const decision: ProviderApprovalDecision =
+        runtimeMode === "full-access" ? "acceptForSession" : "accept";
+      sentPlanApprovalRequestIdRef.current = pendingPlanApprovalRequestId;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.approval.respond",
+          commandId: newCommandId(),
+          threadId: activeThreadId,
+          requestId: pendingPlanApprovalRequestId,
+          decision,
+          createdAt: new Date().toISOString(),
+        });
+        setComposerDraftInteractionMode(
+          scopeThreadRef(activeThread.environmentId, activeThreadId),
+          "default",
+        );
+      } catch (err) {
+        // Genuine RPC error (network etc.). Stale is recorded as an
+        // activity, not a thrown error — see the watcher effect below.
+        sentPlanApprovalRequestIdRef.current = null;
+        setThreadError(
+          activeThreadId,
+          err instanceof Error ? err.message : "Failed to submit approval decision.",
+        );
+      }
+      return;
+    }
+    if (!activeProposedPlan) {
+      return;
+    }
+    const followUp = resolvePlanFollowUpSubmission({
+      draftText: "",
+      planMarkdown: activeProposedPlan.planMarkdown,
+    });
+    await onSubmitPlanFollowUp({
+      text: followUp.text,
+      interactionMode: followUp.interactionMode,
+    });
+  }, [
+    activeThread,
+    activeThreadId,
+    environmentId,
+    pendingPlanApprovalRequestId,
+    activeProposedPlan,
+    runtimeMode,
+    onSubmitPlanFollowUp,
+    setComposerDraftInteractionMode,
+    setThreadError,
+  ]);
+
+  // Watches activities for the resolution of an in-flight same-thread
+  // plan approve. `provider.approval.respond.failed` with a stale-detail
+  // payload means the Deferred was gone server-side — auto-route to the
+  // new-thread implementation + toast. `approval.resolved` means CLI
+  // received our approve; nothing to do (banner clears via the projection
+  // when implementedAt lands). Same stale-detail regex as
+  // `acpFailureLocalization.ts:15` so wording changes track in one place.
+  useEffect(() => {
+    const sentId = sentPlanApprovalRequestIdRef.current;
+    if (!sentId) return;
+    const activities = activeThread?.activities;
+    if (!activities || activities.length === 0) return;
+    for (let i = activities.length - 1; i >= 0; i -= 1) {
+      const activity = activities[i];
+      if (!activity) continue;
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : null;
+      if (payload?.requestId !== sentId) continue;
+      if (activity.kind === "approval.resolved") {
+        sentPlanApprovalRequestIdRef.current = null;
+        return;
+      }
+      if (activity.kind === "provider.approval.respond.failed") {
+        sentPlanApprovalRequestIdRef.current = null;
+        const detail = typeof payload?.detail === "string" ? payload.detail : "";
+        const isStale = /^Stale pending (?:approval|permission) request:/i.test(detail);
+        if (isStale) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Сессия устарела",
+              description: "План запущен в новом диалоге.",
+            }),
+          );
+          void onImplementPlanInNewThread();
+        }
+        return;
+      }
+    }
+  }, [activeThread?.activities, onImplementPlanInNewThread]);
 
   const onProviderModelSelect = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
@@ -3575,7 +3631,8 @@ export default function ChatView(props: ChatViewProps) {
               resolvedTheme={resolvedTheme}
               timestampFormat={timestampFormat}
               workspaceRoot={activeWorkspaceRoot}
-              skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+              skills={cwdSkillsFlat /* ru-fork: from filesystem scanner */}
+              subagents={cwdSubagentsFlat /* ru-fork: from filesystem scanner */}
               onIsAtEndChange={onIsAtEndChange}
             />
 
@@ -3588,7 +3645,7 @@ export default function ChatView(props: ChatViewProps) {
                   className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:border-border hover:text-foreground hover:cursor-pointer"
                 >
                   <ChevronDownIcon className="size-3.5" />
-                  Scroll to bottom
+                  Прокрутить вниз
                 </button>
               </div>
             )}
@@ -3603,82 +3660,77 @@ export default function ChatView(props: ChatViewProps) {
                 : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
             )}
           >
-            <div className="relative isolate">
-              <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
-              <div className="relative z-10">
-                <ChatComposer
-                  ref={composerRef}
-                  composerDraftTarget={composerDraftTarget}
-                  environmentId={environmentId}
-                  routeKind={routeKind}
-                  routeThreadRef={routeThreadRef}
-                  draftId={draftId}
-                  activeThreadId={activeThreadId}
-                  activeThreadEnvironmentId={activeThread?.environmentId}
-                  activeThread={activeThread}
-                  isServerThread={isServerThread}
-                  isLocalDraftThread={isLocalDraftThread}
-                  phase={phase}
-                  isConnecting={isConnecting}
-                  isSendBusy={isSendBusy}
-                  isPreparingWorktree={isPreparingWorktree}
-                  environmentUnavailable={activeEnvironmentUnavailableState}
-                  activePendingApproval={activePendingApproval}
-                  pendingApprovals={pendingApprovals}
-                  pendingUserInputs={pendingUserInputs}
-                  activePendingProgress={activePendingProgress}
-                  activePendingResolvedAnswers={activePendingResolvedAnswers}
-                  activePendingIsResponding={activePendingIsResponding}
-                  activePendingDraftAnswers={activePendingDraftAnswers}
-                  activePendingQuestionIndex={activePendingQuestionIndex}
-                  respondingRequestIds={respondingRequestIds}
-                  showPlanFollowUpPrompt={showPlanFollowUpPrompt}
-                  activeProposedPlan={activeProposedPlan}
-                  activePlan={activePlan as { turnId?: TurnId } | null}
-                  sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
-                  planSidebarLabel={planSidebarLabel}
-                  planSidebarOpen={planSidebarOpen}
-                  runtimeMode={runtimeMode}
-                  interactionMode={interactionMode}
-                  lockedProvider={lockedProvider}
-                  providerStatuses={providerStatuses as ServerProvider[]}
-                  activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
-                  activeThreadModelSelection={activeThread?.modelSelection}
-                  activeThreadActivities={activeThread?.activities}
-                  resolvedTheme={resolvedTheme}
-                  settings={settings}
-                  keybindings={keybindings}
-                  terminalOpen={Boolean(terminalState.terminalOpen)}
-                  gitCwd={gitCwd}
-                  promptRef={promptRef}
-                  composerImagesRef={composerImagesRef}
-                  composerTerminalContextsRef={composerTerminalContextsRef}
-                  shouldAutoScrollRef={isAtEndRef}
-                  scheduleStickToBottom={scrollToEnd}
-                  onSend={onSend}
-                  onInterrupt={onInterrupt}
-                  onImplementPlanInNewThread={onImplementPlanInNewThread}
-                  onRespondToApproval={onRespondToApproval}
-                  onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
-                  onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-                  onPreviousActivePendingUserInputQuestion={
-                    onPreviousActivePendingUserInputQuestion
-                  }
-                  onChangeActivePendingUserInputCustomAnswer={
-                    onChangeActivePendingUserInputCustomAnswer
-                  }
-                  onProviderModelSelect={onProviderModelSelect}
-                  toggleInteractionMode={toggleInteractionMode}
-                  handleRuntimeModeChange={handleRuntimeModeChange}
-                  handleInteractionModeChange={handleInteractionModeChange}
-                  togglePlanSidebar={togglePlanSidebar}
-                  focusComposer={focusComposer}
-                  scheduleComposerFocus={scheduleComposerFocus}
-                  setThreadError={setThreadError}
-                  onExpandImage={onExpandTimelineImage}
-                />
-              </div>
-            </div>
+            <ChatComposer
+              ref={composerRef}
+              composerDraftTarget={composerDraftTarget}
+              environmentId={environmentId}
+              routeKind={routeKind}
+              routeThreadRef={routeThreadRef}
+              draftId={draftId}
+              activeThreadId={activeThreadId}
+              activeThreadEnvironmentId={activeThread?.environmentId}
+              activeThread={activeThread}
+              isServerThread={isServerThread}
+              isLocalDraftThread={isLocalDraftThread}
+              phase={phase}
+              isConnecting={isConnecting}
+              isSendBusy={isSendBusy}
+              isPreparingWorktree={isPreparingWorktree}
+              activePendingApproval={activePendingApproval}
+              pendingApprovals={pendingApprovals}
+              pendingUserInputs={pendingUserInputs}
+              hasPendingPlanApproval={hasPendingPlanApproval}
+              activePendingProgress={activePendingProgress}
+              activePendingResolvedAnswers={activePendingResolvedAnswers}
+              activePendingIsResponding={activePendingIsResponding}
+              activePendingDraftAnswers={activePendingDraftAnswers}
+              activePendingQuestionIndex={activePendingQuestionIndex}
+              respondingRequestIds={respondingRequestIds}
+              showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+              activeProposedPlan={activeProposedPlan}
+              activePlan={activePlan as { turnId?: TurnId } | null}
+              sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
+              planSidebarLabel={planSidebarLabel}
+              planSidebarOpen={planSidebarOpen}
+              runtimeMode={runtimeMode}
+              interactionMode={interactionMode}
+              lockedProvider={lockedProvider}
+              providerStatuses={providerStatuses as ServerProvider[]}
+              activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
+              activeThreadModelSelection={activeThread?.modelSelection}
+              activeThreadActivities={activeThread?.activities}
+              resolvedTheme={resolvedTheme}
+              settings={settings}
+              keybindings={keybindings}
+              terminalOpen={Boolean(terminalState.terminalOpen)}
+              gitCwd={gitCwd}
+              promptRef={promptRef}
+              composerImagesRef={composerImagesRef}
+              composerTerminalContextsRef={composerTerminalContextsRef}
+              shouldAutoScrollRef={isAtEndRef}
+              scheduleStickToBottom={scrollToEnd}
+              onSend={onSend}
+              onInterrupt={onInterrupt}
+              onImplementPlanInNewThread={onImplementPlanInNewThread}
+              onApproveInSameThread={onApproveInSameThread}
+              pendingPlanApprovalRequestId={pendingPlanApprovalRequestId}
+              onRespondToApproval={onRespondToApproval}
+              onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
+              onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+              onSkipActivePendingUserInput={onSkipActivePendingUserInput}
+              onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
+              onChangeActivePendingUserInputCustomAnswer={
+                onChangeActivePendingUserInputCustomAnswer
+              }
+              onProviderModelSelect={onProviderModelSelect}
+              toggleInteractionMode={toggleInteractionMode}
+              handleRuntimeModeChange={handleRuntimeModeChange}
+              togglePlanSidebar={togglePlanSidebar}
+              focusComposer={focusComposer}
+              scheduleComposerFocus={scheduleComposerFocus}
+              setThreadError={setThreadError}
+              onExpandImage={onExpandTimelineImage}
+            />
             {isGitRepo && (
               <BranchToolbar
                 environmentId={activeThread.environmentId}
@@ -3697,8 +3749,12 @@ export default function ChatView(props: ChatViewProps) {
                 {...(canCheckoutPullRequestIntoThread
                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                   : {})}
-                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
-                availableEnvironments={logicalProjectEnvironments}
+                {...(hasMultipleEnvironments
+                  ? {
+                      availableEnvironments: logicalProjectEnvironments,
+                      onEnvironmentChange,
+                    }
+                  : {})}
               />
             )}
           </div>

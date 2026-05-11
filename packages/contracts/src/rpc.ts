@@ -77,13 +77,12 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
-  ServerTraceDiagnosticsResult,
-  ServerProcessDiagnosticsResult,
-  ServerSignalProcessInput,
-  ServerSignalProcessResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
+// ru-fork: skill + subagent contracts live under ./ru-fork/.
+import { ServerProviderSkill } from "./ru-fork/skills.ts";
+import { ServerProviderSubagent } from "./ru-fork/subagents.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   SourceControlCloneRepositoryInput,
@@ -143,9 +142,12 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
-  serverGetTraceDiagnostics: "server.getTraceDiagnostics",
-  serverGetProcessDiagnostics: "server.getProcessDiagnostics",
-  serverSignalProcess: "server.signalProcess",
+  // ru-fork: filesystem skill scanner — cwd-scoped reads.
+  serverListSkillsForCwd: "server.listSkillsForCwd",
+  serverRefreshSkillsForCwd: "server.refreshSkillsForCwd",
+  // ru-fork: filesystem subagent scanner — cwd-scoped reads.
+  serverListSubagentsForCwd: "server.listSubagentsForCwd",
+  serverRefreshSubagentsForCwd: "server.refreshSubagentsForCwd",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -214,19 +216,39 @@ export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscov
   success: SourceControlDiscoveryResult,
 });
 
-export const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnostics, {
-  payload: Schema.Struct({}),
-  success: ServerTraceDiagnosticsResult,
+// ru-fork: filesystem skill scanner — read/refresh per cwd.
+const SkillsForCwdInput = Schema.Struct({ cwd: Schema.NullOr(Schema.String) });
+const SkillsForCwdResult = Schema.Struct({
+  global: Schema.Array(ServerProviderSkill),
+  project: Schema.Array(ServerProviderSkill),
 });
 
-export const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
-  payload: Schema.Struct({}),
-  success: ServerProcessDiagnosticsResult,
+export const WsServerListSkillsForCwdRpc = Rpc.make(WS_METHODS.serverListSkillsForCwd, {
+  payload: SkillsForCwdInput,
+  success: SkillsForCwdResult,
 });
 
-export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
-  payload: ServerSignalProcessInput,
-  success: ServerSignalProcessResult,
+export const WsServerRefreshSkillsForCwdRpc = Rpc.make(WS_METHODS.serverRefreshSkillsForCwd, {
+  payload: SkillsForCwdInput,
+  success: SkillsForCwdResult,
+});
+
+// ru-fork: filesystem subagent scanner — read/refresh per cwd.
+const SubagentsForCwdInput = Schema.Struct({ cwd: Schema.NullOr(Schema.String) });
+const SubagentsForCwdResult = Schema.Struct({
+  builtin: Schema.Array(ServerProviderSubagent),
+  user: Schema.Array(ServerProviderSubagent),
+  project: Schema.Array(ServerProviderSubagent),
+});
+
+export const WsServerListSubagentsForCwdRpc = Rpc.make(WS_METHODS.serverListSubagentsForCwd, {
+  payload: SubagentsForCwdInput,
+  success: SubagentsForCwdResult,
+});
+
+export const WsServerRefreshSubagentsForCwdRpc = Rpc.make(WS_METHODS.serverRefreshSubagentsForCwd, {
+  payload: SubagentsForCwdInput,
+  success: SubagentsForCwdResult,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -470,9 +492,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
-  WsServerGetTraceDiagnosticsRpc,
-  WsServerGetProcessDiagnosticsRpc,
-  WsServerSignalProcessRpc,
+  // ru-fork: filesystem skill scanner
+  WsServerListSkillsForCwdRpc,
+  WsServerRefreshSkillsForCwdRpc,
+  // ru-fork: filesystem subagent scanner
+  WsServerListSubagentsForCwdRpc,
+  WsServerRefreshSubagentsForCwdRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

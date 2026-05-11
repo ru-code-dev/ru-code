@@ -9,27 +9,54 @@
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#161616" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#161616" />
-    <link rel="icon" href="/favicon.ico" sizes="48x48" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/icons/light/favicon-32x32.png"
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/icons/dark/favicon-32x32.png"
+      media="(prefers-color-scheme: dark)"
+    />
+    <link rel="apple-touch-icon" href="/app-icon-512.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <script>
       (() => {
         const LIGHT_BACKGROUND = "#ffffff";
         const DARK_BACKGROUND = "#161616";
         const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+        const VALID_THEME_NAMES = [
+          "ru-fork",
+          "aurora",
+          "onyx",
+          "grayscale",
+          "pastel-dreams",
+          "vs-code",
+          "caffeine",
+        ];
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
           const theme =
             storedTheme === "light" || storedTheme === "dark" || storedTheme === "system"
               ? storedTheme
               : "system";
+          const storedName = window.localStorage.getItem("t3code:themeName");
+          const themeName = VALID_THEME_NAMES.includes(storedName) ? storedName : "pastel-dreams";
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           const isDark = theme === "dark" || (theme === "system" && prefersDark);
           document.documentElement.classList.toggle("dark", isDark);
+          document.documentElement.setAttribute("data-theme", themeName);
           const chromeColor = isDark ? DARK_BACKGROUND : LIGHT_BACKGROUND;
           document.documentElement.style.backgroundColor = chromeColor;
           themeColorMeta?.setAttribute("content", chromeColor);
         } catch {
           document.documentElement.classList.add("dark");
+          document.documentElement.setAttribute("data-theme", "pastel-dreams");
           document.documentElement.style.backgroundColor = DARK_BACKGROUND;
           themeColorMeta?.setAttribute("content", DARK_BACKGROUND);
         }
@@ -89,13 +116,19 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..800;1,9..40,300..800&display=swap"
       rel="stylesheet"
     />
-    <title>T3 Code (Alpha)</title>
+    <title>%APP_NAME%</title>
   </head>
   <body>
     <div id="root">
       <div id="boot-shell">
-        <div id="boot-shell-card" aria-label="T3 Code splash screen">
-          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="T3 Code" />
+        <div id="boot-shell-card" aria-label="%APP_NAME% splash screen">
+          <picture>
+            <source
+              srcset="/icons/light/apple-touch-icon.png"
+              media="(prefers-color-scheme: light)"
+            />
+            <img id="boot-shell-logo" src="/icons/dark/apple-touch-icon.png" alt="%APP_NAME%" />
+          </picture>
         </div>
       </div>
     </div>

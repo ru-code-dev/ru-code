@@ -28,15 +28,14 @@ import type {
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
   ServerConfig,
-  ServerProcessDiagnosticsResult,
   ServerProviderUpdateInput,
   ServerProviderUpdatedPayload,
   ServerRemoveKeybindingResult,
-  ServerSignalProcessInput,
-  ServerSignalProcessResult,
-  ServerTraceDiagnosticsResult,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
+// ru-fork: skill + subagent contracts moved to ./ru-fork/.
+import type { ServerProviderSkill } from "./ru-fork/skills.ts";
+import type { ServerProviderSubagent } from "./ru-fork/subagents.ts";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -60,21 +59,10 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
-import { AuthBearerBootstrapResult, AuthSessionState, AuthWebSocketTokenResult } from "./auth.ts";
-import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import type { EnvironmentId } from "./baseSchemas.ts";
 import { EditorId } from "./editor.ts";
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
-import type {
-  SourceControlCloneRepositoryInput,
-  SourceControlCloneRepositoryResult,
-  SourceControlDiscoveryResult,
-  SourceControlPublishRepositoryInput,
-  SourceControlPublishRepositoryResult,
-  SourceControlRepositoryInfo,
-  SourceControlRepositoryLookupInput,
-} from "./sourceControl.ts";
+import { ServerSettings, type ClientSettings, type ServerSettingsPatch } from "./settings.ts";
+import type { SourceControlDiscoveryResult } from "./sourceControl.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -221,120 +209,14 @@ export interface DesktopEnvironmentBootstrap {
   bootstrapToken?: string;
 }
 
-export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
-  label: Schema.String,
-  httpBaseUrl: Schema.NullOr(Schema.String),
-  wsBaseUrl: Schema.NullOr(Schema.String),
-  bootstrapToken: Schema.optionalKey(Schema.String),
-});
-
-export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
-  alias: Schema.String,
-  hostname: Schema.String,
-  username: Schema.NullOr(Schema.String),
-  port: Schema.NullOr(Schema.Number),
-});
-export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
-
-export type DesktopSshHostSource = "ssh-config" | "known-hosts";
-export const DesktopSshHostSourceSchema = Schema.Literals(["ssh-config", "known-hosts"]);
-
-export interface DesktopDiscoveredSshHost extends DesktopSshEnvironmentTarget {
-  source: DesktopSshHostSource;
-}
-
-export const DesktopDiscoveredSshHostSchema = Schema.Struct({
-  alias: Schema.String,
-  hostname: Schema.String,
-  username: Schema.NullOr(Schema.String),
-  port: Schema.NullOr(Schema.Number),
-  source: DesktopSshHostSourceSchema,
-});
-
-export interface DesktopSshEnvironmentBootstrap {
-  target: DesktopSshEnvironmentTarget;
-  httpBaseUrl: string;
+export interface PersistedSavedEnvironmentRecord {
+  environmentId: EnvironmentId;
+  label: string;
   wsBaseUrl: string;
-  pairingToken: string | null;
-  remotePort?: number;
-  remoteServerKind?: "external" | "managed";
+  httpBaseUrl: string;
+  createdAt: string;
+  lastConnectedAt: string | null;
 }
-
-export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
-  target: DesktopSshEnvironmentTargetSchema,
-  httpBaseUrl: Schema.String,
-  wsBaseUrl: Schema.String,
-  pairingToken: Schema.NullOr(Schema.String),
-  remotePort: Schema.optionalKey(Schema.Number),
-  remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
-});
-
-export interface DesktopSshPasswordPromptRequest {
-  requestId: string;
-  destination: string;
-  username: string | null;
-  prompt: string;
-  expiresAt: string;
-}
-
-export const DesktopSshPasswordPromptRequestSchema = Schema.Struct({
-  requestId: Schema.String,
-  destination: Schema.String,
-  username: Schema.NullOr(Schema.String),
-  prompt: Schema.String,
-  expiresAt: Schema.String,
-});
-
-export const DesktopSshPasswordPromptCancelledType = "ssh-password-prompt-cancelled" as const;
-
-export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
-  type: Schema.Literal(DesktopSshPasswordPromptCancelledType),
-  message: Schema.String,
-});
-
-export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
-  issuePairingToken: Schema.optionalKey(Schema.Boolean),
-});
-
-export const DesktopSshEnvironmentEnsureInputSchema = Schema.Struct({
-  target: DesktopSshEnvironmentTargetSchema,
-  options: Schema.optionalKey(DesktopSshEnvironmentEnsureOptionsSchema),
-});
-
-export const DesktopSshEnvironmentEnsureResultSchema = Schema.Union([
-  DesktopSshEnvironmentBootstrapSchema,
-  DesktopSshPasswordPromptCancelledResultSchema,
-]);
-
-export const DesktopSshHttpBaseUrlInputSchema = Schema.Struct({
-  httpBaseUrl: Schema.String,
-});
-
-export const DesktopSshBearerRequestInputSchema = Schema.Struct({
-  httpBaseUrl: Schema.String,
-  bearerToken: Schema.String,
-});
-
-export const DesktopSshBearerBootstrapInputSchema = Schema.Struct({
-  httpBaseUrl: Schema.String,
-  credential: Schema.String,
-});
-
-export const DesktopSshPasswordPromptResolutionInputSchema = Schema.Struct({
-  requestId: Schema.String,
-  password: Schema.NullOr(Schema.String),
-});
-
-export const PersistedSavedEnvironmentRecordSchema = Schema.Struct({
-  environmentId: EnvironmentId,
-  label: Schema.String,
-  wsBaseUrl: Schema.String,
-  httpBaseUrl: Schema.String,
-  createdAt: Schema.String,
-  lastConnectedAt: Schema.NullOr(Schema.String),
-  desktopSsh: Schema.optionalKey(DesktopSshEnvironmentTargetSchema),
-});
-export type PersistedSavedEnvironmentRecord = typeof PersistedSavedEnvironmentRecordSchema.Type;
 
 export type DesktopServerExposureMode = "local-only" | "network-accessible";
 
@@ -347,8 +229,6 @@ export interface DesktopServerExposureState {
   mode: DesktopServerExposureMode;
   endpointUrl: string | null;
   advertisedHost: string | null;
-  tailscaleServeEnabled: boolean;
-  tailscaleServePort: number;
 }
 
 export const DesktopServerExposureStateSchema = Schema.Struct({
@@ -379,31 +259,8 @@ export interface DesktopBridge {
   getSavedEnvironmentSecret: (environmentId: EnvironmentId) => Promise<string | null>;
   setSavedEnvironmentSecret: (environmentId: EnvironmentId, secret: string) => Promise<boolean>;
   removeSavedEnvironmentSecret: (environmentId: EnvironmentId) => Promise<void>;
-  discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
-  ensureSshEnvironment: (
-    target: DesktopSshEnvironmentTarget,
-    options?: { issuePairingToken?: boolean },
-  ) => Promise<DesktopSshEnvironmentBootstrap>;
-  disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
-  fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
-  bootstrapSshBearerSession: (
-    httpBaseUrl: string,
-    credential: string,
-  ) => Promise<AuthBearerBootstrapResult>;
-  fetchSshSessionState: (httpBaseUrl: string, bearerToken: string) => Promise<AuthSessionState>;
-  issueSshWebSocketToken: (
-    httpBaseUrl: string,
-    bearerToken: string,
-  ) => Promise<AuthWebSocketTokenResult>;
-  onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
-  resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
-  setTailscaleServeEnabled: (input: {
-    readonly enabled: boolean;
-    readonly port?: number;
-  }) => Promise<DesktopServerExposureState>;
-  getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
@@ -473,9 +330,26 @@ export interface LocalApi {
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
     discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
-    getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
-    getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;
-    signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
+    // ru-fork: filesystem skill scanner — read/refresh skills for a cwd.
+    listSkillsForCwd: (input: { readonly cwd: string | null }) => Promise<{
+      readonly global: ReadonlyArray<ServerProviderSkill>;
+      readonly project: ReadonlyArray<ServerProviderSkill>;
+    }>;
+    refreshSkillsForCwd: (input: { readonly cwd: string | null }) => Promise<{
+      readonly global: ReadonlyArray<ServerProviderSkill>;
+      readonly project: ReadonlyArray<ServerProviderSkill>;
+    }>;
+    // ru-fork: filesystem subagent scanner — read/refresh for a cwd.
+    listSubagentsForCwd: (input: { readonly cwd: string | null }) => Promise<{
+      readonly builtin: ReadonlyArray<ServerProviderSubagent>;
+      readonly user: ReadonlyArray<ServerProviderSubagent>;
+      readonly project: ReadonlyArray<ServerProviderSubagent>;
+    }>;
+    refreshSubagentsForCwd: (input: { readonly cwd: string | null }) => Promise<{
+      readonly builtin: ReadonlyArray<ServerProviderSubagent>;
+      readonly user: ReadonlyArray<ServerProviderSubagent>;
+      readonly project: ReadonlyArray<ServerProviderSubagent>;
+    }>;
   };
 }
 
@@ -504,17 +378,6 @@ export interface EnvironmentApi {
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
-  };
-  sourceControl: {
-    lookupRepository: (
-      input: SourceControlRepositoryLookupInput,
-    ) => Promise<SourceControlRepositoryInfo>;
-    cloneRepository: (
-      input: SourceControlCloneRepositoryInput,
-    ) => Promise<SourceControlCloneRepositoryResult>;
-    publishRepository: (
-      input: SourceControlPublishRepositoryInput,
-    ) => Promise<SourceControlPublishRepositoryResult>;
   };
   vcs: {
     listRefs: (input: VcsListRefsInput) => Promise<VcsListRefsResult>;

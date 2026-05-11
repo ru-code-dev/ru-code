@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import {
@@ -21,6 +22,7 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
+import { localizeAcpFailureDetail } from "./ru-fork/acpFailureLocalization";
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -31,19 +33,10 @@ export const PROVIDER_OPTIONS: Array<{
   /** Shown on the model picker sidebar when relevant */
   pickerSidebarBadge?: "new" | "soon";
 }> = [
-  { value: ProviderDriverKind.make("codex"), label: "Codex", available: true },
-  { value: ProviderDriverKind.make("claudeAgent"), label: "Claude", available: true },
   {
-    value: ProviderDriverKind.make("opencode"),
-    label: "OpenCode",
+    value: ProviderDriverKind.make(CLI_NAME),
+    label: "Cli",
     available: true,
-    pickerSidebarBadge: "new",
-  },
-  {
-    value: ProviderDriverKind.make("cursor"),
-    label: "Cursor",
-    available: true,
-    pickerSidebarBadge: "new",
   },
 ];
 
@@ -55,7 +48,7 @@ export interface WorkLogEntry {
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
-  tone: "thinking" | "tool" | "info" | "error";
+  tone: "thinking" | "tool" | "info" | "error" | "warning";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
@@ -69,7 +62,13 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
-  requestKind: "command" | "file-read" | "file-change";
+  // "other" is the forward-compat fallback for any CLI `kind` we don't have
+  // a dedicated affordance for (search/fetch/agent/lsp/cron/mcp non-read/etc.).
+  // Without this, requestKindFromRequestType returned null for "unknown"
+  // canonicals → derivePendingApprovals filtered the entry → no popup → CLI
+  // waited forever and the wire-stall watchdog killed the session at 60s.
+  // See specs/architecture/approvals.md.
+  requestKind: "command" | "file-read" | "file-change" | "other";
   createdAt: string;
   detail?: string;
 }
@@ -121,15 +120,15 @@ export type TimelineEntry =
     };
 
 export function formatDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
-  if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
-  if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}s`;
-  if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}s`;
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "0мс";
+  if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}мс`;
+  if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}с`;
+  if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}с`;
   const minutes = Math.floor(durationMs / 60_000);
   const seconds = Math.round((durationMs % 60_000) / 1_000);
-  if (seconds === 0) return `${minutes}m`;
-  if (seconds === 60) return `${minutes + 1}m`;
-  return `${minutes}m ${seconds}s`;
+  if (seconds === 0) return `${minutes}м`;
+  if (seconds === 60) return `${minutes + 1}м`;
+  return `${minutes}м ${seconds}с`;
 }
 
 export function formatElapsed(startIso: string, endIso: string | undefined): string | null {
@@ -186,8 +185,11 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
     case "file_change_approval":
     case "apply_patch_approval":
       return "file-change";
-    default:
+    case "plan_approval":
+      // surfaced via hasPendingPlanApproval boolean, not via this list
       return null;
+    default:
+      return "other";
   }
 }
 
@@ -224,7 +226,8 @@ export function derivePendingApprovals(
       payload &&
       (payload.requestKind === "command" ||
         payload.requestKind === "file-read" ||
-        payload.requestKind === "file-change")
+        payload.requestKind === "file-change" ||
+        payload.requestKind === "other")
         ? payload.requestKind
         : payload
           ? requestKindFromRequestType(payload.requestType)
@@ -540,21 +543,39 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       : null
     : extractToolDetail(payload, title ?? activity.summary);
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
+  // Localized warning for ACP failure activities (ru-fork addition).
+  // The server emits `provider.user-input.respond.failed` with an
+  // English summary + detail; we re-tone it as `warning` (amber, vs
+  // `error`'s loud rose), promote the detail (localized when possible,
+  // otherwise raw) into the row label, and clear the detail field so
+  // the row doesn't render the noisy "Provider user input response
+  // failed - …" prefix. Keep this branch in sync with new failure
+  // kinds when extending the DRY mirror to approvals / plan-approval
+  // — see `instrumental/changes/pending-requests-handling.md`.
+  const localizedFailureDetail = localizeAcpFailureDetail(activity);
+  const isAcpFailureActivity =
+    activity.kind === "provider.user-input.respond.failed" ||
+    activity.kind === "provider.approval.respond.failed";
+  const acpFailureLabel = isAcpFailureActivity
+    ? (localizedFailureDetail ?? detail ?? activity.summary)
+    : null;
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
-    label: taskLabel || activity.summary,
+    label: acpFailureLabel ?? taskLabel ?? activity.summary,
     tone:
       activity.kind === "task.progress"
         ? "thinking"
-        : activity.tone === "approval"
-          ? "info"
-          : activity.tone,
+        : isAcpFailureActivity
+          ? "warning"
+          : activity.tone === "approval"
+            ? "info"
+            : activity.tone,
     activityKind: activity.kind,
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
-  if (detail) {
+  if (!isAcpFailureActivity && detail) {
     entry.detail = detail;
   }
   if (commandPreview.command) {
@@ -1036,7 +1057,8 @@ function extractWorkLogRequestKind(
   if (
     payload?.requestKind === "command" ||
     payload?.requestKind === "file-read" ||
-    payload?.requestKind === "file-change"
+    payload?.requestKind === "file-change" ||
+    payload?.requestKind === "other"
   ) {
     return payload.requestKind;
   }

@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -30,15 +31,14 @@ import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReac
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
 import {
   formatHeadlessServeOutput,
-  formatHostForUrl,
-  isWildcardHost,
   issueHeadlessServeAccessInfo,
+  resolveStartupBrowserTarget,
 } from "./startupAccess.ts";
+// ru-fork: TTY-gated reminder under the address line in foreground mode.
+import { printForegroundLaunchBanner } from "./ru-fork/local-startup/foregroundLaunchBanner.ts";
 
 export class ServerRuntimeStartupError extends Data.TaggedError("ServerRuntimeStartupError")<{
   readonly message: string;
@@ -122,39 +122,8 @@ export const makeCommandGate = Effect.gen(function* () {
   } satisfies CommandGate;
 });
 
-export const recordStartupHeartbeat = Effect.gen(function* () {
-  const analytics = yield* AnalyticsService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-
-  const { threadCount, projectCount } = yield* projectionSnapshotQuery.getCounts().pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("failed to gather startup projection counts for telemetry", {
-        cause,
-      }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
-    ),
-  );
-
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
-});
-
-export const launchStartupHeartbeat = recordStartupHeartbeat.pipe(
-  Effect.annotateSpans({ "startup.phase": "heartbeat.record" }),
-  Effect.withSpan("server.startup.heartbeat.record"),
-  Effect.ignoreCause({ log: true }),
-  Effect.forkScoped,
-  Effect.asVoid,
-);
-
 export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
-  instanceId: ProviderInstanceId.make("codex"),
+  instanceId: ProviderInstanceId.make(CLI_NAME),
   model: DEFAULT_MODEL,
 });
 
@@ -216,10 +185,10 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
           commandId: CommandId.make(crypto.randomUUID()),
           threadId: createdThreadId,
           projectId: nextProjectId,
-          title: "New thread",
+          title: "Новый диалог",
           modelSelection: nextProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
+          runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
           createdAt,
@@ -237,22 +206,6 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
     ...(bootstrapProjectId ? { bootstrapProjectId } : {}),
     ...(bootstrapThreadId ? { bootstrapThreadId } : {}),
   } as const;
-});
-
-const resolveStartupBrowserTarget = Effect.gen(function* () {
-  const serverConfig = yield* ServerConfig;
-  const serverAuth = yield* ServerAuth;
-  const localUrl = `http://localhost:${serverConfig.port}`;
-  const bindUrl =
-    serverConfig.host && !isWildcardHost(serverConfig.host)
-      ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
-      : localUrl;
-  const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;
-  return yield* Effect.succeed(serverConfig.mode === "desktop" ? baseTarget : undefined).pipe(
-    Effect.flatMap((target) =>
-      target ? Effect.succeed(target) : serverAuth.issueStartupPairingUrl(baseTarget),
-    ),
-  );
 });
 
 const maybeOpenBrowser = (target: string) =>
@@ -428,8 +381,6 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         }),
       );
 
-      yield* Effect.logDebug("startup phase: recording startup heartbeat");
-      yield* launchStartupHeartbeat;
       if (serverConfig.startupPresentation === "headless") {
         yield* Effect.logDebug("startup phase: headless access info");
         const accessInfo = yield* issueHeadlessServeAccessInfo();
@@ -440,11 +391,14 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       } else {
         yield* Effect.logDebug("startup phase: browser open check");
         const startupBrowserTarget = yield* resolveStartupBrowserTarget;
-        if (serverConfig.mode !== "desktop") {
-          yield* Effect.logInfo(
-            "Authentication required. Open T3 Code using the pairing URL.",
-          ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));
-        }
+        // ru-fork: bordered TTY banner with the address + a red "don't
+        // close the terminal" reminder. startupBrowserTarget is mode-correct
+        // by construction (desktop = plain URL via loopback bypass; web =
+        // URL with the one-time pairing token already in the query string).
+        // Daemon child's stdout is redirected to a log file → isTty is
+        // false there → banner is silently skipped (the daemon launcher
+        // prints its own announceReady output).
+        yield* printForegroundLaunchBanner(startupBrowserTarget);
         yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));
       }
       yield* Effect.logDebug("startup phase: complete");

@@ -21,6 +21,17 @@ function policyInstruction(instruction: string | undefined): ReadonlyArray<strin
 // Commit message
 // ---------------------------------------------------------------------------
 
+export const CommitMessageOutputSchema = Schema.Struct({
+  subject: Schema.String,
+  body: Schema.String,
+});
+
+export const CommitMessageWithBranchOutputSchema = Schema.Struct({
+  subject: Schema.String,
+  body: Schema.String,
+  branch: Schema.String,
+});
+
 export interface CommitMessagePromptInput {
   branch: string | null;
   stagedSummary: string;
@@ -38,10 +49,16 @@ export function buildCommitMessagePrompt(input: CommitMessagePromptInput) {
       ? "Return a JSON object with keys: subject, body, branch."
       : "Return a JSON object with keys: subject, body.",
     "Rules:",
-    "- subject must be imperative, <= 72 chars, and no trailing period",
-    "- body can be empty string or short bullet points",
+    "- subject MUST be in Russian (Русский язык), <= 72 chars, no trailing period",
+    "- subject MUST start with a Conventional Commits prefix (feat:, fix:, refactor:, chore:, docs:, test:, style:, perf:, build:, ci:) followed by the Russian description; pick the prefix that best matches the change type",
+    "- subject MAY keep technical identifiers in English (file names, function/symbol names, command names, library names)",
+    "- subject describes the change in neutral Russian (e.g. «добавлены …», «исправлен баг в …»); do not invent an English imperative",
+    "- body MUST be in Russian (Русский язык), short bullet points or empty string",
+    "- body bullets describe what changed and why, in Russian; technical identifiers stay in English",
     ...(wantsBranch
-      ? ["- branch must be a short semantic git branch fragment for this change"]
+      ? [
+          "- branch must be a short semantic git branch fragment for this change (English, kebab-case)",
+        ]
       : []),
     "- capture the primary user-visible or developer-visible change",
     ...policyInstruction(input.policy?.commitInstructions),
@@ -56,28 +73,20 @@ export function buildCommitMessagePrompt(input: CommitMessagePromptInput) {
   ].join("\n");
 
   if (wantsBranch) {
-    return {
-      prompt,
-      outputSchema: Schema.Struct({
-        subject: Schema.String,
-        body: Schema.String,
-        branch: Schema.String,
-      }),
-    };
+    return { prompt, outputSchema: CommitMessageWithBranchOutputSchema };
   }
 
-  return {
-    prompt,
-    outputSchema: Schema.Struct({
-      subject: Schema.String,
-      body: Schema.String,
-    }),
-  };
+  return { prompt, outputSchema: CommitMessageOutputSchema };
 }
 
 // ---------------------------------------------------------------------------
 // PR content
 // ---------------------------------------------------------------------------
+
+export const PrContentOutputSchema = Schema.Struct({
+  title: Schema.String,
+  body: Schema.String,
+});
 
 export interface PrContentPromptInput {
   baseBranch: string;
@@ -93,10 +102,12 @@ export function buildPrContentPrompt(input: PrContentPromptInput) {
     "You write GitHub pull request content.",
     "Return a JSON object with keys: title, body.",
     "Rules:",
-    "- title should be concise and specific",
-    "- body must be markdown and include headings '## Summary' and '## Testing'",
-    "- under Summary, provide short bullet points",
-    "- under Testing, include bullet points with concrete checks or 'Not run' where appropriate",
+    "- title MUST be in Russian (Русский язык), concise and specific, no trailing punctuation",
+    "- title MAY keep technical identifiers in English (file names, symbols, command names)",
+    "- body MUST be markdown and include EXACTLY these English headings: '## Summary' and '## Testing'",
+    "- bullet points and prose under those headings MUST be in Russian",
+    "- under Summary: short Russian bullet points describing the change",
+    "- under Testing: Russian bullet points with concrete checks, or 'Не запускалось' where appropriate",
     ...policyInstruction(input.policy?.changeRequestInstructions),
     "",
     `Base branch: ${input.baseBranch}`,
@@ -112,17 +123,16 @@ export function buildPrContentPrompt(input: PrContentPromptInput) {
     limitSection(input.diffPatch, 40_000),
   ].join("\n");
 
-  const outputSchema = Schema.Struct({
-    title: Schema.String,
-    body: Schema.String,
-  });
-
-  return { prompt, outputSchema };
+  return { prompt, outputSchema: PrContentOutputSchema };
 }
 
 // ---------------------------------------------------------------------------
 // Branch name
 // ---------------------------------------------------------------------------
+
+export const BranchNameOutputSchema = Schema.Struct({
+  branch: Schema.String,
+});
 
 export interface BranchNamePromptInput {
   message: string;
@@ -179,16 +189,17 @@ export function buildBranchNamePrompt(input: BranchNamePromptInput) {
     attachments: input.attachments,
     additionalInstructions: input.policy?.branchInstructions,
   });
-  const outputSchema = Schema.Struct({
-    branch: Schema.String,
-  });
 
-  return { prompt, outputSchema };
+  return { prompt, outputSchema: BranchNameOutputSchema };
 }
 
 // ---------------------------------------------------------------------------
 // Thread title
 // ---------------------------------------------------------------------------
+
+export const ThreadTitleOutputSchema = Schema.Struct({
+  title: Schema.String,
+});
 
 export interface ThreadTitlePromptInput {
   message: string;
@@ -201,18 +212,17 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
     instruction: "You write concise thread titles for coding conversations.",
     responseShape: "Return a JSON object with key: title.",
     rules: [
+      "Title MUST be in Russian (Русский язык).",
       "Title should summarize the user's request, not restate it verbatim.",
       "Keep it short and specific (3-8 words).",
       "Avoid quotes, filler, prefixes, and trailing punctuation.",
+      "Technical identifiers (file names, symbols, library names) MAY stay in English.",
       "If images are attached, use them as primary context for visual/UI issues.",
     ],
     message: input.message,
     attachments: input.attachments,
     additionalInstructions: input.policy?.threadTitleInstructions,
   });
-  const outputSchema = Schema.Struct({
-    title: Schema.String,
-  });
 
-  return { prompt, outputSchema };
+  return { prompt, outputSchema: ThreadTitleOutputSchema };
 }

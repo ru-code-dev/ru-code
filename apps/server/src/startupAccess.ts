@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-fork/branding";
 import { networkInterfaces } from "node:os";
 
 import { QrCode } from "@t3tools/shared/qrCode";
@@ -34,6 +35,28 @@ export const isWildcardHost = (host: string | undefined): boolean =>
 
 export const formatHostForUrl = (host: string): string =>
   host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+
+// Resolves the URL the foreground startup auto-opens — bare URL in desktop
+// mode, pairing URL with one-time token in web mode. Lifted here so both
+// `serverRuntimeStartup.ts` and the `/pair/startup` route can call it
+// without `http.ts` having to import the heavy startup module.
+export const resolveStartupBrowserTarget = Effect.gen(function* () {
+  const serverConfig = yield* ServerConfig;
+  const serverAuth = yield* ServerAuth;
+  const localUrl = `http://localhost:${serverConfig.port}`;
+  const bindUrl =
+    serverConfig.host && !isWildcardHost(serverConfig.host)
+      ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
+      : localUrl;
+  // ru-fork: include the configured --base-url prefix so the auto-
+  // opened browser target lands under the proxied path. `issueStartupPairingUrl`
+  // preserves any pathname already on the passed URL.
+  const baseTarget = serverConfig.devUrl?.toString() ?? `${bindUrl}${serverConfig.basePath}`;
+  if (serverConfig.mode === "desktop") {
+    return baseTarget;
+  }
+  return yield* serverAuth.issueStartupPairingUrl(baseTarget);
+});
 
 const normalizeHost = (host: string): string =>
   host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
@@ -89,9 +112,14 @@ export const resolveListeningPort = (address: unknown, fallbackPort: number): nu
   return fallbackPort;
 };
 
-export const buildPairingUrl = (connectionString: string, token: string): string => {
+export const buildPairingUrl = (
+  connectionString: string,
+  token: string,
+  // ru-fork: optional --base-url prefix; empty string when unconfigured.
+  basePath: string = "",
+): string => {
   const url = new URL(connectionString);
-  url.pathname = "/pair";
+  url.pathname = basePath.length > 0 ? `${basePath}/pair` : "/pair";
   url.searchParams.delete("token");
   url.hash = new URLSearchParams([["token", token]]).toString();
   return url.toString();
@@ -121,7 +149,7 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
-    "T3 Code server is ready.",
+    `${APP_NAME} server is ready.`,
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
     `Pairing URL: ${accessInfo.pairingUrl}`,
@@ -143,6 +171,6 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
   return {
     connectionString,
     token: issued.credential,
-    pairingUrl: buildPairingUrl(connectionString, issued.credential),
+    pairingUrl: buildPairingUrl(connectionString, issued.credential, serverConfig.basePath),
   } satisfies HeadlessServeAccessInfo;
 });

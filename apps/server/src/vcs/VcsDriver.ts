@@ -9,13 +9,13 @@ import type {
   VcsListWorkspaceFilesResult,
   VcsRepositoryIdentity,
 } from "@t3tools/contracts";
-import * as VcsProcess from "./VcsProcess.ts";
+import type { VcsProcessInput, VcsProcessOutput } from "./VcsProcess.ts";
 
 export interface VcsDriverShape {
   readonly capabilities: VcsDriverCapabilities;
   readonly execute: (
-    input: Omit<VcsProcess.VcsProcessInput, "command">,
-  ) => Effect.Effect<VcsProcess.VcsProcessOutput, VcsError>;
+    input: Omit<VcsProcessInput, "command">,
+  ) => Effect.Effect<VcsProcessOutput, VcsError>;
   readonly detectRepository: (cwd: string) => Effect.Effect<VcsRepositoryIdentity | null, VcsError>;
   readonly isInsideWorkTree: (cwd: string) => Effect.Effect<boolean, VcsError>;
   readonly listWorkspaceFiles: (

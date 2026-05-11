@@ -17,7 +17,6 @@ export interface CommandPaletteItem {
   readonly description?: string;
   readonly timestamp?: string;
   readonly icon: ReactNode;
-  readonly disabled?: boolean;
   /** Optional content rendered inline before the title text. */
   readonly titleLeadingContent?: ReactNode;
   /** Optional content rendered inline after the title text (before the timestamp). */
@@ -238,14 +237,14 @@ export function filterCommandPaletteGroups(input: {
     if (input.projectSearchItems.length > 0) {
       searchableGroups.push({
         value: "projects-search",
-        label: "Projects",
+        label: "Проекты",
         items: input.projectSearchItems,
       });
     }
     if (input.threadSearchItems.length > 0) {
       searchableGroups.push({
         value: "threads-search",
-        label: "Threads",
+        label: "Треды",
         items: input.threadSearchItems,
       });
     }
@@ -319,7 +318,7 @@ export function buildBrowseGroups(input: {
     });
   }
 
-  return [{ value: "directories", label: "Directories", items }];
+  return [{ value: "directories", label: "Каталоги", items }];
 }
 
 export function getCommandPaletteMode(input: {
@@ -338,12 +337,12 @@ export function buildRootGroups(input: {
 }): CommandPaletteGroup[] {
   const groups: CommandPaletteGroup[] = [];
   if (input.actionItems.length > 0) {
-    groups.push({ value: "actions", label: "Actions", items: input.actionItems });
+    groups.push({ value: "actions", label: "Действия", items: input.actionItems });
   }
   if (input.recentThreadItems.length > 0) {
     groups.push({
       value: "recent-threads",
-      label: "Recent Threads",
+      label: "Недавние диалоги",
       items: input.recentThreadItems,
     });
   }
@@ -353,12 +352,12 @@ export function buildRootGroups(input: {
 export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): string {
   switch (mode) {
     case "root":
-      return "Search commands, projects, and threads...";
+      return "Поиск команд, проектов и диалогов…";
     case "root-browse":
-      return "Enter project path (e.g. ~/projects/my-app)";
+      return "Введите путь к проекту (напр. ~/projects/my-app)";
     case "submenu":
-      return "Search...";
+      return "Поиск…";
     case "submenu-browse":
-      return "Enter path (e.g. ~/projects/my-app)";
+      return "Введите путь (напр. ~/projects/my-app)";
   }
 }

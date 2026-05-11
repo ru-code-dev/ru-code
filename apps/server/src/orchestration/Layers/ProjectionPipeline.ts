@@ -150,6 +150,64 @@ function derivePendingUserInputCountFromActivities(
   return openRequestIds.size;
 }
 
+function derivePendingPlanApprovalMeta(activities: ReadonlyArray<ProjectionThreadActivity>): {
+  hasPending: boolean;
+  requestId: ApprovalRequestId | null;
+} {
+  const openRequestIds = new Set<string>();
+  const insertionOrder: string[] = [];
+  const ordered = [...activities].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.activityId.localeCompare(right.activityId),
+  );
+
+  for (const activity of ordered) {
+    const requestId = extractActivityRequestId(activity.payload);
+    if (requestId === null) {
+      continue;
+    }
+    const payload =
+      typeof activity.payload === "object" && activity.payload !== null
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+
+    if (activity.kind === "approval.requested" && payload?.requestType === "plan_approval") {
+      if (!openRequestIds.has(requestId)) {
+        openRequestIds.add(requestId);
+        insertionOrder.push(requestId);
+      }
+      continue;
+    }
+
+    if (activity.kind === "approval.resolved") {
+      openRequestIds.delete(requestId);
+      continue;
+    }
+
+    if (
+      activity.kind === "provider.approval.respond.failed" &&
+      typeof payload?.detail === "string" &&
+      isStalePendingApprovalFailureDetail(payload.detail.toLowerCase())
+    ) {
+      openRequestIds.delete(requestId);
+    }
+  }
+
+  let latestOpenRequestId: ApprovalRequestId | null = null;
+  for (let index = insertionOrder.length - 1; index >= 0; index -= 1) {
+    const candidate = insertionOrder[index];
+    if (candidate !== undefined && openRequestIds.has(candidate)) {
+      latestOpenRequestId = ApprovalRequestId.make(candidate);
+      break;
+    }
+  }
+  return {
+    hasPending: openRequestIds.size > 0,
+    requestId: latestOpenRequestId,
+  };
+}
+
 function deriveHasActionableProposedPlan(input: {
   readonly latestTurnId: string | null;
   readonly proposedPlans: ReadonlyArray<ProjectionThreadProposedPlan>;
@@ -552,6 +610,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         latestTurnId: existingRow.value.latestTurnId,
         proposedPlans,
       });
+      const planApprovalMeta = derivePendingPlanApprovalMeta(activities);
 
       yield* projectionThreadRepository.upsert({
         ...existingRow.value,
@@ -559,6 +618,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         pendingApprovalCount,
         pendingUserInputCount,
         hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+        hasPendingPlanApproval: planApprovalMeta.hasPending ? 1 : 0,
+        pendingPlanApprovalRequestId: planApprovalMeta.requestId,
       });
     });
 
@@ -584,6 +645,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
+            hasPendingPlanApproval: 0,
+            pendingPlanApprovalRequestId: null,
             deletedAt: null,
           });
           return;

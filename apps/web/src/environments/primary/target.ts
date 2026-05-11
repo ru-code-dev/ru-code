@@ -1,6 +1,10 @@
 import type { DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 import type { KnownEnvironment } from "@t3tools/client-runtime";
 
+// ru-fork: read the server-injected --base-url prefix so the
+// window-origin target encodes it in its httpBaseUrl / wsBaseUrl.
+import { getBasePath } from "../../ru-fork/basePath";
+
 export interface PrimaryEnvironmentTarget {
   readonly source: KnownEnvironment["source"];
   readonly target: KnownEnvironment["target"];
@@ -91,20 +95,24 @@ function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
 }
 
 function resolveWindowOriginPrimaryTarget(): PrimaryEnvironmentTarget {
-  const httpBaseUrl = normalizeBaseUrl(window.location.origin);
-  const url = new URL(httpBaseUrl);
-  if (url.protocol === "http:") {
-    url.protocol = "ws:";
-  } else if (url.protocol === "https:") {
-    url.protocol = "wss:";
+  // ru-fork: the configured --base-url prefix lives on the target's
+  // pathname so every URL builder downstream just appends to it.
+  const basePath = getBasePath();
+  const httpUrl = new URL(window.location.origin);
+  httpUrl.pathname = basePath.length > 0 ? basePath : "/";
+  const wsUrl = new URL(httpUrl.toString());
+  if (wsUrl.protocol === "http:") {
+    wsUrl.protocol = "ws:";
+  } else if (wsUrl.protocol === "https:") {
+    wsUrl.protocol = "wss:";
   } else {
-    throw new Error(`Unsupported HTTP base URL protocol: ${url.protocol}`);
+    throw new Error(`Unsupported HTTP base URL protocol: ${wsUrl.protocol}`);
   }
   return {
     source: "window-origin",
     target: {
-      httpBaseUrl,
-      wsBaseUrl: url.toString(),
+      httpBaseUrl: httpUrl.toString(),
+      wsBaseUrl: wsUrl.toString(),
     },
   };
 }
@@ -142,7 +150,11 @@ export function resolvePrimaryEnvironmentHttpUrl(
   }
 
   const url = new URL(resolveHttpRequestBaseUrl(primaryTarget.target.httpBaseUrl));
-  url.pathname = pathname;
+  // ru-fork: append the requested route to whatever path lives on
+  // the target's base URL (its pathname carries --base-url). Replacing
+  // would silently drop the prefix.
+  const base = url.pathname.replace(/\/+$/, "");
+  url.pathname = pathname.startsWith("/") ? `${base}${pathname}` : `${base}/${pathname}`;
   if (searchParams) {
     url.search = new URLSearchParams(searchParams).toString();
   }

@@ -68,6 +68,12 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
+      readonly streamKind?: "reasoning_text";
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly used: number;
       readonly rawPayload: unknown;
     };
 
@@ -464,6 +470,17 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       }
       break;
     }
+    case "agent_thought_chunk": {
+      if (upd.content.type === "text" && upd.content.text.length > 0) {
+        events.push({
+          _tag: "ContentDelta",
+          text: upd.content.text,
+          streamKind: "reasoning_text",
+          rawPayload: params,
+        });
+      }
+      break;
+    }
     case "agent_message_chunk": {
       if (upd.content.type === "text" && upd.content.text.length > 0) {
         events.push({
@@ -471,6 +488,19 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           text: upd.content.text,
           rawPayload: params,
         });
+      }
+      // Cli attaches end-of-turn token usage on the final empty
+      // agent_message_chunk via `_meta.usage.totalTokens`.
+      const metaUsage = isRecord(upd._meta) ? (upd._meta as { usage?: unknown }).usage : undefined;
+      if (isRecord(metaUsage)) {
+        const total = Number((metaUsage as { totalTokens?: unknown }).totalTokens);
+        if (Number.isFinite(total) && total >= 0) {
+          events.push({
+            _tag: "UsageUpdated",
+            used: total,
+            rawPayload: params,
+          });
+        }
       }
       break;
     }

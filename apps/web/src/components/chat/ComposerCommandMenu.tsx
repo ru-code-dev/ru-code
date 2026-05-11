@@ -3,12 +3,21 @@ import {
   type ProviderDriverKind,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
+  type ServerProviderSubagent,
 } from "@t3tools/contracts";
-import { BotIcon } from "lucide-react";
+import { BotIcon, TerminalIcon } from "lucide-react";
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
+// ru-fork: locally-defined slash commands shown in the built-in group.
+import type { RuForkSlashCommandComposerItem } from "~/ru-fork/custom-commands/pickerItems";
 import { formatProviderSkillInstallSource } from "~/providerSkillPresentation";
+// ru-fork: subagent group splitter + glyph + source label.
+import {
+  SubagentGlyph,
+  formatSubagentSourceLabel,
+  groupSubagentCommandItems,
+} from "~/ru-fork/subagents/composerIntegration";
 import { cn } from "~/lib/utils";
 import {
   Command,
@@ -36,6 +45,8 @@ export type ComposerCommandItem =
       label: string;
       description: string;
     }
+  // ru-fork: sits alongside `slash-command` in the built-in group.
+  | RuForkSlashCommandComposerItem
   | {
       id: string;
       type: "provider-slash-command";
@@ -49,6 +60,14 @@ export type ComposerCommandItem =
       type: "skill";
       provider: ProviderDriverKind;
       skill: ServerProviderSkill;
+      label: string;
+      description: string;
+    }
+  // ru-fork: `#agent-name` picker item — parallel to skill.
+  | {
+      id: string;
+      type: "subagent";
+      subagent: ServerProviderSubagent;
       label: string;
       description: string;
     };
@@ -84,21 +103,26 @@ function groupCommandItems(
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroup[] {
   if (triggerKind === "skill") {
-    return items.length > 0 ? [{ id: "skills", label: "Skills", items }] : [];
+    return items.length > 0 ? [{ id: "skills", label: "Навыки", items }] : [];
   }
+  // ru-fork: subagent picker delegated to ru-fork helper.
+  if (triggerKind === "subagent") return groupSubagentCommandItems(items);
   if (triggerKind !== "slash-command" || !groupSlashCommandSections) {
     return [{ id: "default", label: null, items }];
   }
 
-  const builtInItems = items.filter((item) => item.type === "slash-command");
+  const builtInItems = items.filter(
+    // ru-fork: own commands sit alongside built-ins in the "Встроенные" group.
+    (item) => item.type === "slash-command" || item.type === "ru-fork-slash-command",
+  );
   const providerItems = items.filter((item) => item.type === "provider-slash-command");
 
   const groups: ComposerCommandGroup[] = [];
   if (builtInItems.length > 0) {
-    groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
+    groups.push({ id: "built-in", label: "Встроенные", items: builtInItems });
   }
   if (providerItems.length > 0) {
-    groups.push({ id: "provider", label: "Provider", items: providerItems });
+    groups.push({ id: "provider", label: "Провайдер", items: providerItems });
   }
   return groups;
 }
@@ -181,6 +205,13 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                       "No skills found. Try / to browse provider commands.")}
                 </p>
               </CommandGroup>
+            ) : props.triggerKind === "subagent" ? (
+              /* ru-fork: subagent picker empty state. */
+              <p className="text-muted-foreground/70 text-xs">
+                {props.isLoading
+                  ? "Поиск агентов…"
+                  : (props.emptyStateText ?? "Агенты не найдены.")}
+              </p>
             ) : (
               <p className="text-muted-foreground/70 text-xs">
                 {props.isLoading
@@ -207,6 +238,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
 }) {
   const skillSourceLabel =
     props.item.type === "skill" ? formatProviderSkillInstallSource(props.item.skill) : null;
+  // ru-fork: subagent source label resolved by the ru-fork helper.
+  const subagentSourceLabel = formatSubagentSourceLabel(props.item);
 
   return (
     <CommandItem
@@ -236,6 +269,10 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       {props.item.type === "slash-command" ? (
         <BotIcon className="size-4 shrink-0 text-muted-foreground/80" />
       ) : null}
+      {/* ru-fork: terminal glyph distinguishes our 4 commands from /refresh-skills. */}
+      {props.item.type === "ru-fork-slash-command" ? (
+        <TerminalIcon className="size-4 shrink-0 text-muted-foreground/80" />
+      ) : null}
       {props.item.type === "provider-slash-command" ? (
         <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/80">
           <SkillGlyph className="size-3.5" />
@@ -246,6 +283,12 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           <SkillGlyph className="size-3.5" />
         </span>
       ) : null}
+      {/* ru-fork: subagent glyph rendered by ru-fork component. */}
+      {props.item.type === "subagent" ? (
+        <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/80">
+          <SubagentGlyph className="size-3.5" />
+        </span>
+      ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0">{props.item.label}</span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground/70 text-xs">
@@ -254,6 +297,11 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       </span>
       {skillSourceLabel ? (
         <span className="shrink-0 pl-2 text-muted-foreground/70 text-xs">{skillSourceLabel}</span>
+      ) : null}
+      {subagentSourceLabel ? (
+        <span className="shrink-0 pl-2 text-muted-foreground/70 text-xs">
+          {subagentSourceLabel}
+        </span>
       ) : null}
     </CommandItem>
   );

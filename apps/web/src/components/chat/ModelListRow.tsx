@@ -72,7 +72,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
           }
         />
         <TooltipPopup side="top" align="center">
-          {props.isFavorite ? "Remove from favorites" : "Add to favorites"}
+          {props.isFavorite ? "Убрать из избранного" : "Добавить в избранное"}
         </TooltipPopup>
       </Tooltip>
 

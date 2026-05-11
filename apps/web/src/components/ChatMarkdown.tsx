@@ -381,7 +381,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     if (!api) {
       toastManager.add({
         type: "error",
-        title: "Open in editor is unavailable",
+        title: "Открытие в редакторе недоступно",
       });
       return;
     }
@@ -390,8 +390,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to open file",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: "Не удалось открыть файл",
+          description: error instanceof Error ? error.message : "Произошла ошибка.",
         }),
       );
     });
@@ -402,8 +402,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Failed to copy ${title.toLowerCase()}`,
-          description: "Clipboard API unavailable.",
+          title: `Не удалось скопировать: ${title.toLowerCase()}`,
+          description: "API буфера обмена недоступен.",
         }),
       );
       return;

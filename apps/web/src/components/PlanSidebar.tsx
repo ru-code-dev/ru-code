@@ -107,7 +107,7 @@ const PlanSidebar = memo(function PlanSidebar({
       .then((result) => {
         toastManager.add({
           type: "success",
-          title: "Plan saved",
+          title: "План сохранён",
           description: result.relativePath,
         });
       })
@@ -115,7 +115,7 @@ const PlanSidebar = memo(function PlanSidebar({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not save plan",
+            title: "Не удалось сохранить план",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -167,14 +167,14 @@ const PlanSidebar = memo(function PlanSidebar({
               </MenuTrigger>
               <MenuPopup align="end">
                 <MenuItem onClick={handleCopyPlan}>
-                  {isCopied ? "Copied!" : "Copy to clipboard"}
+                  {isCopied ? "Скопировано!" : "Копировать в буфер обмена"}
                 </MenuItem>
-                <MenuItem onClick={handleDownload}>Download as markdown</MenuItem>
+                <MenuItem onClick={handleDownload}>Скачать как markdown</MenuItem>
                 <MenuItem
                   onClick={handleSaveToWorkspace}
                   disabled={!workspaceRoot || isSavingToWorkspace}
                 >
-                  Save to workspace
+                  Сохранить в рабочую область
                 </MenuItem>
               </MenuPopup>
             </Menu>
@@ -205,7 +205,7 @@ const PlanSidebar = memo(function PlanSidebar({
           {activePlan && activePlan.steps.length > 0 ? (
             <div className="space-y-1">
               <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Steps
+                Шаги
               </p>
               {activePlan.steps.map((step) => (
                 <div
@@ -248,7 +248,7 @@ const PlanSidebar = memo(function PlanSidebar({
                   <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
                 )}
                 <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
-                  {planTitle ?? "Full Plan"}
+                  {planTitle ?? "Полный план"}
                 </span>
               </button>
               {proposedPlanExpanded ? (
@@ -266,9 +266,9 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Empty state */}
           {!activePlan && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
+              <p className="text-[13px] text-muted-foreground/40">Нет активного плана.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
+                Планы появятся здесь после генерации.
               </p>
             </div>
           ) : null}

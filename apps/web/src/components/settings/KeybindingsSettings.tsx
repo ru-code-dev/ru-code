@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-fork/branding";
 import {
   ChevronDownIcon,
   CircleXIcon,
@@ -117,13 +118,13 @@ function ExpandableHeaderSearch({
                 variant="ghost"
                 className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                 onClick={() => onOpenChange(true)}
-                aria-label="Search keybindings"
+                aria-label="Поиск сочетаний клавиш"
               >
                 <SearchIcon className="size-3" />
               </Button>
             }
           />
-          <TooltipPopup side="top">Search keybindings</TooltipPopup>
+          <TooltipPopup side="top">Поиск сочетаний клавиш</TooltipPopup>
         </Tooltip>
       </>
     );
@@ -148,8 +149,8 @@ function ExpandableHeaderSearch({
             onOpenChange(false);
           }
         }}
-        placeholder="Search keybindings"
-        aria-label="Search keybindings"
+        placeholder="Поиск сочетаний клавиш"
+        aria-label="Поиск сочетаний клавиш"
         className="h-6 w-44 rounded-md border border-input bg-background pl-7 pr-2 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24"
       />
     </div>
@@ -1165,17 +1166,27 @@ export function KeybindingsSettingsPanel() {
     [saveKeybinding],
   );
 
-  const bindingsCount = (
-    <span className="text-[11px] text-muted-foreground">
-      {rows.length + (isAddingBinding ? 1 : 0)}{" "}
-      {rows.length + (isAddingBinding ? 1 : 0) === 1 ? "binding" : "bindings"}
-    </span>
-  );
+  const bindingsCount = (() => {
+    const total = rows.length + (isAddingBinding ? 1 : 0);
+    const mod10 = total % 10;
+    const mod100 = total % 100;
+    const word =
+      mod10 === 1 && mod100 !== 11
+        ? "сочетание"
+        : mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)
+          ? "сочетания"
+          : "сочетаний";
+    return (
+      <span className="text-[11px] text-muted-foreground">
+        {total} {word}
+      </span>
+    );
+  })();
 
   return (
     <SettingsPageContainer className="max-w-5xl">
       <SettingsSection
-        title="Keybindings"
+        title="Сочетания клавиш"
         headerAction={
           <div className="flex items-center gap-1.5">
             <ExpandableHeaderSearch
@@ -1228,8 +1239,8 @@ export function KeybindingsSettingsPanel() {
           <div className="flex items-start gap-2 border-b border-warning/20 bg-warning/5 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground sm:px-4">
             <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
             <p>
-              Some shortcuts may be claimed by the browser before T3 Code sees them. Use the desktop
-              app for better keybinding support.
+              Некоторые сочетания клавиш могут перехватываться браузером раньше, чем их получит
+              {APP_NAME}. Для полноценной поддержки горячих клавиш используйте десктоп-приложение.
             </p>
           </div>
         ) : null}
@@ -1241,10 +1252,10 @@ export function KeybindingsSettingsPanel() {
           className="w-full max-w-full rounded-none"
         >
           <div className="grid min-w-[680px] grid-cols-[minmax(190px,1.1fr)_minmax(220px,0.85fr)_minmax(210px,1fr)_60px] border-b border-border/70 bg-muted/25 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
-            <div>Command</div>
-            <div>Keybinding</div>
-            <div>When</div>
-            <div>Status</div>
+            <div>Команда</div>
+            <div>Сочетание клавиш</div>
+            <div>Условие</div>
+            <div>Статус</div>
           </div>
           <div className="min-w-[680px] divide-y divide-border/60">
             {isAddingBinding ? (

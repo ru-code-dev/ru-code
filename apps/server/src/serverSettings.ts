@@ -214,7 +214,7 @@ function fallbackTextGenerationProvider(settings: ServerSettings): ServerSetting
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.
-const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
+const RU_FORK_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "automaticGitFetchInterval",
   "textGenerationModelSelection",
 ]);
@@ -235,7 +235,7 @@ function stripDefaultServerSettings(current: unknown, defaults: unknown): unknow
     const next: Record<string, unknown> = {};
 
     for (const key of Object.keys(currentRecord)) {
-      if (ATOMIC_SETTINGS_KEYS.has(key)) {
+      if (RU_FORK_SETTINGS_KEYS.has(key)) {
         if (!Equal.equals(currentRecord[key], defaultsRecord[key])) {
           next[key] = currentRecord[key];
         }

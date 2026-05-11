@@ -15,15 +15,12 @@ class RemoteEnvironmentAuthHttpError extends Error {
   }
 }
 
-export function isRemoteEnvironmentAuthHttpError(
-  error: unknown,
-): error is RemoteEnvironmentAuthHttpError {
-  return error instanceof RemoteEnvironmentAuthHttpError;
-}
-
 function remoteEndpointUrl(httpBaseUrl: string, pathname: string): string {
   const url = new URL(httpBaseUrl);
-  url.pathname = pathname;
+  // ru-fork: httpBaseUrl.pathname may carry a reverse-proxy prefix
+  // (e.g. /services/.../my-app); append the route instead of overwriting.
+  const base = url.pathname.replace(/\/+$/, "");
+  url.pathname = pathname.startsWith("/") ? `${base}${pathname}` : `${base}/${pathname}`;
   url.search = "";
   url.hash = "";
   return url.toString();

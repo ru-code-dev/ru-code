@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
 import { detectSourceControlProviderFromRemoteUrl } from "./sourceControl.ts";
 
-export const WORKTREE_BRANCH_PREFIX = "t3code";
+export const WORKTREE_BRANCH_PREFIX = "ru-fork";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
 
 /**
@@ -202,7 +202,6 @@ const EMPTY_GIT_STATUS_REMOTE: VcsStatusRemoteResult = {
   hasUpstream: false,
   aheadCount: 0,
   behindCount: 0,
-  aheadOfDefaultCount: 0,
   pr: null,
 };
 
@@ -221,9 +220,6 @@ function toRemoteStatusPart(status: VcsStatusResult): VcsStatusRemoteResult {
     hasUpstream: status.hasUpstream,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
-    ...(status.aheadOfDefaultCount === undefined
-      ? {}
-      : { aheadOfDefaultCount: status.aheadOfDefaultCount }),
     pr: status.pr,
   };
 }

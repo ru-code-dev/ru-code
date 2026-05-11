@@ -18,4 +18,14 @@ export default Effect.gen(function* () {
     CREATE INDEX IF NOT EXISTS idx_projection_thread_sessions_instance
     ON projection_thread_sessions(provider_instance_id)
   `;
+
+  yield* sql`
+    ALTER TABLE projection_threads
+    ADD COLUMN has_pending_plan_approval INTEGER NOT NULL DEFAULT 0
+  `.pipe(Effect.catch(() => Effect.void));
+
+  yield* sql`
+    ALTER TABLE projection_threads
+    ADD COLUMN pending_plan_approval_request_id TEXT
+  `.pipe(Effect.catch(() => Effect.void));
 });

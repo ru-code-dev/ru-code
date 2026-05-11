@@ -130,11 +130,12 @@ export interface WsRpcClient {
     readonly discoverSourceControl: RpcUnaryNoArgMethod<
       typeof WS_METHODS.serverDiscoverSourceControl
     >;
-    readonly getTraceDiagnostics: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetTraceDiagnostics>;
-    readonly getProcessDiagnostics: RpcUnaryNoArgMethod<
-      typeof WS_METHODS.serverGetProcessDiagnostics
-    >;
-    readonly signalProcess: RpcUnaryMethod<typeof WS_METHODS.serverSignalProcess>;
+    // ru-fork: filesystem skill scanner — see apps/server/src/ru-fork/skills.
+    readonly listSkillsForCwd: RpcUnaryMethod<typeof WS_METHODS.serverListSkillsForCwd>;
+    readonly refreshSkillsForCwd: RpcUnaryMethod<typeof WS_METHODS.serverRefreshSkillsForCwd>;
+    // ru-fork: filesystem subagent scanner — see apps/server/src/ru-fork/subagents.
+    readonly listSubagentsForCwd: RpcUnaryMethod<typeof WS_METHODS.serverListSubagentsForCwd>;
+    readonly refreshSubagentsForCwd: RpcUnaryMethod<typeof WS_METHODS.serverRefreshSubagentsForCwd>;
     readonly subscribeConfig: RpcStreamMethod<typeof WS_METHODS.subscribeServerConfig>;
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
@@ -256,18 +257,16 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.serverUpdateSettings]({ patch })),
       discoverSourceControl: () =>
         transport.request((client) => client[WS_METHODS.serverDiscoverSourceControl]({})),
-      getTraceDiagnostics: () =>
-        transport.request((client) =>
-          client[WS_METHODS.serverGetTraceDiagnostics]({}).pipe(Effect.withTracerEnabled(false)),
-        ),
-      getProcessDiagnostics: () =>
-        transport.request((client) =>
-          client[WS_METHODS.serverGetProcessDiagnostics]({}).pipe(Effect.withTracerEnabled(false)),
-        ),
-      signalProcess: (input) =>
-        transport.request((client) =>
-          client[WS_METHODS.serverSignalProcess](input).pipe(Effect.withTracerEnabled(false)),
-        ),
+      // ru-fork: filesystem skill scanner — see apps/server/src/ru-fork/skills.
+      listSkillsForCwd: (input) =>
+        transport.request((client) => client[WS_METHODS.serverListSkillsForCwd](input)),
+      refreshSkillsForCwd: (input) =>
+        transport.request((client) => client[WS_METHODS.serverRefreshSkillsForCwd](input)),
+      // ru-fork: filesystem subagent scanner — see apps/server/src/ru-fork/subagents.
+      listSubagentsForCwd: (input) =>
+        transport.request((client) => client[WS_METHODS.serverListSubagentsForCwd](input)),
+      refreshSubagentsForCwd: (input) =>
+        transport.request((client) => client[WS_METHODS.serverRefreshSubagentsForCwd](input)),
       subscribeConfig: (listener, options) =>
         transport.subscribe((client) => client[WS_METHODS.subscribeServerConfig]({}), listener, {
           ...options,

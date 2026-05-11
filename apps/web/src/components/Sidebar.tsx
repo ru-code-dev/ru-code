@@ -1,3 +1,4 @@
+import { APP_SHORT_NAME } from "@ru-fork/branding";
 import {
   ArchiveIcon,
   ArrowUpDownIcon,
@@ -17,6 +18,7 @@ import {
   terminalStatusFromRunningIds,
   ThreadStatusLabel,
 } from "./ThreadStatusIndicators";
+import { Logo } from "./Logo";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
@@ -62,7 +64,7 @@ import {
 } from "@t3tools/contracts/settings";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
-import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
+import { APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform, newCommandId } from "../lib/utils";
 import {
@@ -197,13 +199,13 @@ import {
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
-  updated_at: "Last user message",
-  created_at: "Created at",
-  manual: "Manual",
+  updated_at: "По последнему сообщению",
+  created_at: "По дате создания",
+  manual: "Вручную",
 };
 const SIDEBAR_THREAD_SORT_LABELS: Record<SidebarThreadSortOrder, string> = {
-  updated_at: "Last user message",
-  created_at: "Created at",
+  updated_at: "По последнему сообщению",
+  created_at: "По дате создания",
 };
 const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
@@ -211,10 +213,19 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
-  repository: "Group by repository",
-  repository_path: "Group by repository path",
-  separate: "Keep separate",
+  repository: "Группировать по репозиторию",
+  repository_path: "Группировать по пути в репозитории",
+  separate: "Не группировать",
 };
+
+function pluralizeProjects(count: number): string {
+  const abs = Math.abs(count) % 100;
+  const lastDigit = abs % 10;
+  if (abs >= 11 && abs <= 14) return "проектов";
+  if (lastDigit === 1) return "проект";
+  if (lastDigit >= 2 && lastDigit <= 4) return "проекта";
+  return "проектов";
+}
 
 function clampSidebarThreadPreviewCount(value: number): SidebarThreadPreviewCount {
   return Math.min(
@@ -237,11 +248,11 @@ function formatProjectMemberActionLabel(
 function projectGroupingModeDescription(mode: SidebarProjectGroupingMode): string {
   switch (mode) {
     case "repository":
-      return "Projects from the same repository share one sidebar row.";
+      return "Проекты из одного репозитория объединяются в одну строку.";
     case "repository_path":
-      return "Projects group only when both the repository and repo-relative path match.";
+      return "Проекты объединяются, только если совпадает и репозиторий, и относительный путь.";
     case "separate":
-      return "Every project path gets its own sidebar row.";
+      return "Каждый путь проекта получает свою строку.";
   }
 }
 
@@ -631,7 +642,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 onPointerDown={stopPropagationOnPointerDown}
                 onClick={handleConfirmArchiveClick}
               >
-                Confirm
+                Подтвердить
               </button>
             ) : !isThreadRunning ? (
               appSettingsConfirmThreadArchive ? (
@@ -667,7 +678,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </div>
                     }
                   />
-                  <TooltipPopup side="top">Archive</TooltipPopup>
+                  <TooltipPopup side="top">В архив</TooltipPopup>
                 </Tooltip>
               )
             ) : null}
@@ -816,7 +827,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             data-thread-selection-safe
             className="flex h-6 w-full translate-x-0 items-center px-2 text-left text-[10px] text-muted-foreground/60"
           >
-            <span>No threads yet</span>
+            <span>Пока нет диалогов</span>
           </div>
         </SidebarMenuSubItem>
       ) : null}
@@ -866,7 +877,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
           >
             <span className="flex min-w-0 flex-1 items-center gap-2">
               {hiddenThreadStatus && <ThreadStatusLabel status={hiddenThreadStatus} compact />}
-              <span>Show more</span>
+              <span>Показать ещё</span>
             </span>
           </SidebarMenuSubButton>
         </SidebarMenuSubItem>
@@ -882,7 +893,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               collapseThreadListForProject(projectKey);
             }}
           >
-            <span>Show less</span>
+            <span>Свернуть</span>
           </SidebarMenuSubButton>
         </SidebarMenuSubItem>
       )}
@@ -963,7 +974,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
-        title: "Thread ID copied",
+        title: "ID диалога скопирован",
         description: ctx.threadId,
       });
     },
@@ -971,8 +982,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy thread ID",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: "Не удалось скопировать ID диалога",
+          description: error instanceof Error ? error.message : "Произошла ошибка.",
         }),
       );
     },
@@ -983,7 +994,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
-        title: "Path copied",
+        title: "Путь скопирован",
         description: ctx.path,
       });
     },
@@ -991,8 +1002,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy path",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: "Не удалось скопировать путь",
+          description: error instanceof Error ? error.message : "Произошла ошибка.",
         }),
       );
     },
@@ -1005,7 +1016,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (!api) {
       toastManager.add({
         type: "error",
-        title: "Link opening is unavailable.",
+        title: "Открытие ссылок недоступно.",
       });
       return;
     }
@@ -1014,8 +1025,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to open pull request link",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: "Не удалось открыть ссылку на pull request",
+          description: error instanceof Error ? error.message : "Произошла ошибка.",
         }),
       );
     });
@@ -1326,11 +1337,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         const warningToastId = toastManager.add(
           stackedThreadToast({
             type: "warning",
-            title: "Project is not empty",
-            description: "Delete all threads in this project before removing it.",
+            title: "Проект не пуст",
+            description: "Удалите все диалоги в проекте перед его удалением.",
             actionVariant: "destructive",
             actionProps: {
-              children: "Delete anyway",
+              children: "Всё равно удалить",
               onClick: () => {
                 void (async () => {
                   toastManager.close(warningToastId);
@@ -1345,24 +1356,28 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   const confirmed = await api.dialogs.confirm(
                     latestProjectThreads.length > 0
                       ? [
-                          `Remove project "${member.name}" and delete its ${latestProjectThreads.length} thread${
-                            latestProjectThreads.length === 1 ? "" : "s"
+                          `Удалить проект "${member.name}" и его ${latestProjectThreads.length} диалог${
+                            latestProjectThreads.length === 1
+                              ? ""
+                              : latestProjectThreads.length < 5
+                                ? "а"
+                                : "ов"
                           }?`,
-                          `Path: ${member.cwd}`,
+                          `Путь: ${member.cwd}`,
                           ...(member.environmentLabel
-                            ? [`Environment: ${member.environmentLabel}`]
+                            ? [`Окружение: ${member.environmentLabel}`]
                             : []),
-                          "This permanently clears conversation history for those threads.",
-                          "This removes only this project entry.",
-                          "This action cannot be undone.",
+                          "История переписки этих диалогов будет удалена безвозвратно.",
+                          "Удаляется только эта запись проекта.",
+                          "Это действие нельзя отменить.",
                         ].join("\n")
                       : [
-                          `Remove project "${member.name}"?`,
-                          `Path: ${member.cwd}`,
+                          `Удалить проект "${member.name}"?`,
+                          `Путь: ${member.cwd}`,
                           ...(member.environmentLabel
-                            ? [`Environment: ${member.environmentLabel}`]
+                            ? [`Окружение: ${member.environmentLabel}`]
                             : []),
-                          "This removes only this project entry.",
+                          "Удаляется только эта запись проекта.",
                         ].join("\n"),
                   );
                   if (!confirmed) {
@@ -1394,10 +1409,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       const message = [
-        `Remove project "${member.name}"?`,
-        `Path: ${member.cwd}`,
-        ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
-        "This removes only this project entry.",
+        `Удалить проект "${member.name}"?`,
+        `Путь: ${member.cwd}`,
+        ...(member.environmentLabel ? [`Окружение: ${member.environmentLabel}`] : []),
+        "Удаляется только эта запись проекта.",
       ].join("\n");
       const confirmed = await api.dialogs.confirm(message);
       if (!confirmed) {
@@ -1500,10 +1515,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const clicked = await api.contextMenu.show(
           [
-            buildTargetedItem("rename", "Rename project"),
-            buildTargetedItem("grouping", "Project grouping…"),
-            buildTargetedItem("copy-path", "Copy Project Path"),
-            buildTargetedItem("delete", "Remove project", {
+            buildTargetedItem("rename", "Переименовать проект"),
+            buildTargetedItem("grouping", "Группировка проекта…"),
+            buildTargetedItem("copy-path", "Копировать путь проекта"),
+            buildTargetedItem("delete", "Удалить проект", {
               destructive: true,
             }),
           ],
@@ -1605,8 +1620,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       const clicked = await api.contextMenu.show(
         [
-          { id: "mark-unread", label: `Mark unread (${count})` },
-          { id: "delete", label: `Delete (${count})`, destructive: true },
+          { id: "mark-unread", label: `Отметить непрочитанным (${count})` },
+          { id: "delete", label: `Удалить (${count})`, destructive: true },
         ],
         position,
       );
@@ -1625,8 +1640,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           [
-            `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-            "This permanently clears conversation history for these threads.",
+            `Удалить ${count} диалог${count === 1 ? "" : count < 5 ? "а" : "ов"}?`,
+            "История переписки этих диалогов будет удалена безвозвратно.",
           ].join("\n"),
         );
         if (!confirmed) return;
@@ -1753,7 +1768,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           stackedThreadToast({
             type: "error",
             title: "Failed to archive thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description: error instanceof Error ? error.message : "Произошла ошибка.",
           }),
         );
       }
@@ -1781,7 +1796,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (trimmed.length === 0) {
         toastManager.add({
           type: "warning",
-          title: "Thread title cannot be empty",
+          title: "Название диалога не может быть пустым",
         });
         finishRename();
         return;
@@ -1806,8 +1821,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to rename thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: "Не удалось переименовать диалог",
+            description: error instanceof Error ? error.message : "Произошла ошибка.",
           }),
         );
       }
@@ -1830,7 +1845,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (trimmed.length === 0) {
       toastManager.add({
         type: "warning",
-        title: "Project title cannot be empty",
+        title: "Название проекта не может быть пустым",
       });
       return;
     }
@@ -1845,8 +1860,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to rename project",
-          description: "Project API unavailable.",
+          title: "Не удалось переименовать проект",
+          description: "API проекта недоступен.",
         }),
       );
       return;
@@ -1864,8 +1879,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to rename project",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: "Не удалось переименовать проект",
+          description: error instanceof Error ? error.message : "Произошла ошибка.",
         }),
       );
     }
@@ -1915,11 +1930,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const threadWorkspacePath = thread.worktreePath ?? threadProject?.cwd ?? project.cwd ?? null;
       const clicked = await api.contextMenu.show(
         [
-          { id: "rename", label: "Rename thread" },
-          { id: "mark-unread", label: "Mark unread" },
-          { id: "copy-path", label: "Copy Path" },
-          { id: "copy-thread-id", label: "Copy Thread ID" },
-          { id: "delete", label: "Delete", destructive: true },
+          { id: "rename", label: "Переименовать диалог" },
+          { id: "mark-unread", label: "Отметить непрочитанным" },
+          { id: "copy-path", label: "Копировать путь" },
+          { id: "copy-thread-id", label: "Копировать ID диалога" },
+          { id: "delete", label: "Удалить", destructive: true },
         ],
         position,
       );
@@ -1940,8 +1955,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Path unavailable",
-              description: "This thread does not have a workspace path to copy.",
+              title: "Путь недоступен",
+              description: "У этого диалога нет пути рабочей области для копирования.",
             }),
           );
           return;
@@ -1957,8 +1972,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           [
-            `Delete thread "${thread.title}"?`,
-            "This permanently clears conversation history for this thread.",
+            `Удалить диалог "${thread.title}"?`,
+            "История переписки этого диалога будет удалена безвозвратно.",
           ].join("\n"),
         );
         if (!confirmed) {
@@ -2023,7 +2038,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             </span>
             {project.groupedProjectCount > 1 ? (
               <span className="shrink-0 text-[10px] text-muted-foreground/60">
-                {project.groupedProjectCount} projects
+                {project.groupedProjectCount} {pluralizeProjects(project.groupedProjectCount)}
               </span>
             ) : null}
           </span>
@@ -2069,7 +2084,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }
           />
           <TooltipPopup side="top">
-            {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+            {newThreadShortcutLabel ? `Новый диалог (${newThreadShortcutLabel})` : "Новый диалог"}
           </TooltipPopup>
         </Tooltip>
       </div>
@@ -2120,16 +2135,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       >
         <DialogPopup className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Rename project</DialogTitle>
+            <DialogTitle>Переименовать проект</DialogTitle>
             <DialogDescription>
               {projectRenameTarget
-                ? `Update the title for ${projectRenameTarget.cwd}.`
-                : "Update the project title."}
+                ? `Изменить название для ${projectRenameTarget.cwd}.`
+                : "Изменить название проекта."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Project title</span>
+              <span className="text-xs font-medium text-foreground">Название проекта</span>
               <Input
                 aria-label="Project title"
                 value={projectRenameTitle}
@@ -2144,15 +2159,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             </div>
             {projectRenameTarget?.environmentLabel ? (
               <p className="text-xs text-muted-foreground">
-                Environment: {projectRenameTarget.environmentLabel}
+                Окружение: {projectRenameTarget.environmentLabel}
               </p>
             ) : null}
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={closeProjectRenameDialog}>
-              Cancel
+              Отмена
             </Button>
-            <Button onClick={() => void submitProjectRename()}>Save</Button>
+            <Button onClick={() => void submitProjectRename()}>Сохранить</Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -2167,16 +2182,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       >
         <DialogPopup className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Project grouping</DialogTitle>
+            <DialogTitle>Группировка проектов</DialogTitle>
             <DialogDescription>
               {projectGroupingTarget
-                ? `Choose how ${projectGroupingTarget.cwd} should be grouped in the sidebar.`
-                : "Choose how this project should be grouped in the sidebar."}
+                ? `Выберите, как группировать ${projectGroupingTarget.cwd} в боковой панели.`
+                : "Выберите, как группировать этот проект в боковой панели."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Grouping rule</span>
+              <span className="text-xs font-medium text-foreground">Правило группировки</span>
               <Select
                 value={projectGroupingSelection}
                 onValueChange={(value) => {
@@ -2193,13 +2208,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 <SelectTrigger className="w-full" aria-label="Project grouping rule">
                   <SelectValue>
                     {projectGroupingSelection === "inherit"
-                      ? `Use global default (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
+                      ? `Глобальное по умолчанию (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
                       : PROJECT_GROUPING_MODE_LABELS[projectGroupingSelection]}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem hideIndicator value="inherit">
-                    Use global default
+                    Глобальное по умолчанию
                   </SelectItem>
                   <SelectItem hideIndicator value="repository">
                     {PROJECT_GROUPING_MODE_LABELS.repository}
@@ -2221,9 +2236,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={closeProjectGroupingDialog}>
-              Cancel
+              Отмена
             </Button>
-            <Button onClick={saveProjectGroupingPreference}>Save</Button>
+            <Button onClick={saveProjectGroupingPreference}>Сохранить</Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -2238,22 +2253,6 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
     </SidebarMenuItem>
   );
 });
-
-function T3Wordmark() {
-  return (
-    <svg
-      aria-label="T3"
-      className="h-2.5 w-auto shrink-0 text-foreground"
-      viewBox="15.5309 37 94.3941 56.96"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M33.4509 93V47.56H15.5309V37H64.3309V47.56H46.4109V93H33.4509ZM86.7253 93.96C82.832 93.96 78.9653 93.4533 75.1253 92.44C71.2853 91.3733 68.032 89.88 65.3653 87.96L70.4053 78.04C72.5386 79.5867 75.0186 80.8133 77.8453 81.72C80.672 82.6267 83.5253 83.08 86.4053 83.08C89.6586 83.08 92.2186 82.44 94.0853 81.16C95.952 79.88 96.8853 78.12 96.8853 75.88C96.8853 73.7467 96.0586 72.0667 94.4053 70.84C92.752 69.6133 90.0853 69 86.4053 69H80.4853V60.44L96.0853 42.76L97.5253 47.4H68.1653V37H107.365V45.4L91.8453 63.08L85.2853 59.32H89.0453C95.9253 59.32 101.125 60.8667 104.645 63.96C108.165 67.0533 109.925 71.0267 109.925 75.88C109.925 79.0267 109.099 81.9867 107.445 84.76C105.792 87.48 103.259 89.6933 99.8453 91.4C96.432 93.1067 92.0586 93.96 86.7253 93.96Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
 
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
@@ -2303,12 +2302,12 @@ function ProjectSortMenu({
         >
           <ArrowUpDownIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup side="right">Sidebar options</TooltipPopup>
+        <TooltipPopup side="right">Параметры боковой панели</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" side="bottom" className="min-w-52">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-            Sort projects
+            Сортировать проекты
           </div>
           <MenuRadioGroup
             value={projectSortOrder}
@@ -2327,7 +2326,7 @@ function ProjectSortMenu({
         </MenuGroup>
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
-            Sort threads
+            Сортировать диалоги
           </div>
           <MenuRadioGroup
             value={threadSortOrder}
@@ -2346,7 +2345,7 @@ function ProjectSortMenu({
         </MenuGroup>
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 text-muted-foreground sm:text-xs font-medium">
-            Visible threads
+            Видимые диалоги
           </div>
           <div className="px-2 py-1">
             <NumberField
@@ -2383,7 +2382,7 @@ function ProjectSortMenu({
         <MenuSeparator />
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 font-medium text-muted-foreground sm:text-xs">
-            Group projects
+            Группировать проекты
           </div>
           <MenuRadioGroup
             value={projectGroupingMode}
@@ -2446,45 +2445,35 @@ function SortableProjectItem({
   );
 }
 
-const SidebarChromeHeader = memo(function SidebarChromeHeader({
-  isElectron,
-}: {
-  isElectron: boolean;
-}) {
-  const wordmark = (
-    <div className="flex items-center gap-2">
-      <SidebarTrigger className="shrink-0 md:hidden" />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Link
-              aria-label="Go to threads"
-              className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
-              to="/"
-            >
-              <T3Wordmark />
-              <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-                Code
-              </span>
-              <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
-                {APP_STAGE_LABEL}
-              </span>
-            </Link>
-          }
-        />
-        <TooltipPopup side="bottom" sideOffset={2}>
-          Version {APP_VERSION}
-        </TooltipPopup>
-      </Tooltip>
-    </div>
-  );
-
-  return isElectron ? (
-    <SidebarHeader className="drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[90px] wco:h-[env(titlebar-area-height)] wco:pl-[calc(env(titlebar-area-x)+1em)]">
-      {wordmark}
+const SidebarChromeHeader = memo(function SidebarChromeHeader() {
+  return (
+    <SidebarHeader className="gap-3 px-3 py-2 sm:gap-2.5 sm:px-4 sm:py-3">
+      <div className="flex items-center gap-2">
+        <SidebarTrigger className="shrink-0 md:hidden" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Link
+                aria-label="Go to threads"
+                className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-4 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
+                to="/"
+              >
+                <Logo src="/logo.png" size={56} />
+                <div className="flex min-w-0 flex-col justify-center leading-none">
+                  <span className="truncate text-lg font-semibold tracking-tight text-foreground">
+                    {APP_SHORT_NAME}
+                  </span>
+                  <span className="truncate text-lg font-semibold tracking-tight text-muted-foreground">Code</span>
+                </div>
+              </Link>
+            }
+          />
+          <TooltipPopup side="bottom" sideOffset={2}>
+            Version {APP_VERSION}
+          </TooltipPopup>
+        </Tooltip>
+      </div>
     </SidebarHeader>
-  ) : (
-    <SidebarHeader className="gap-3 px-3 py-2 sm:gap-2.5 sm:px-4 sm:py-3">{wordmark}</SidebarHeader>
   );
 });
 
@@ -2510,7 +2499,7 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
             onClick={handleSettingsClick}
           >
             <SettingsIcon className="size-3.5" />
-            <span className="text-xs">Settings</span>
+            <span className="text-xs">Настройки</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>
@@ -2637,7 +2626,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               }
             >
               <SearchIcon className="size-3.5" />
-              <span className="flex-1 truncate text-left text-xs">Search</span>
+              <span className="flex-1 truncate text-left text-xs">Поиск</span>
               {commandPaletteShortcutLabel ? (
                 <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">
                   {commandPaletteShortcutLabel}
@@ -2673,7 +2662,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-            Projects
+            Проекты
           </span>
           <div className="flex items-center gap-1">
             <ProjectSortMenu
@@ -2700,7 +2689,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               >
                 <FolderPlusIcon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
+              <TooltipPopup side="right">Добавить проект</TooltipPopup>
             </Tooltip>
           </div>
         </div>
@@ -2780,7 +2769,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 
         {projectsLength === 0 && (
           <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
-            No projects yet
+            Пока нет проектов
           </div>
         )}
       </SidebarGroup>
@@ -3419,7 +3408,7 @@ export default function Sidebar() {
 
   return (
     <>
-      <SidebarChromeHeader isElectron={isElectron} />
+      <SidebarChromeHeader />
 
       {isOnSettings ? (
         <SettingsSidebarNav pathname={pathname} />

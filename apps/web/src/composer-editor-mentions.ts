@@ -2,6 +2,10 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
+// ru-fork: leading `/command` chip support in editor — regex covers both cli-mapped built-ins and rewrite stubs (/agents, /skills, /mcp).
+import { RU_FORK_SLASH_COMMAND_EDITOR_REGEX } from "./ru-fork/unsupported-slash-commands/chipRegex";
+// ru-fork: `#agent-name` token scan kept in an ru-fork-only helper.
+import { collectSubagentTokenMatches } from "./ru-fork/subagents/subagentTokenScan";
 
 export type ComposerPromptSegment =
   | {
@@ -14,6 +18,16 @@ export type ComposerPromptSegment =
     }
   | {
       type: "skill";
+      name: string;
+    }
+  // ru-fork: `#agent-name` token rendered as a chip parallel to `$skill-name`.
+  | {
+      type: "subagent";
+      name: string;
+    }
+  // ru-fork: leading `/<name>` token rendered as a chip in the editor and bubble.
+  | {
+      type: "slash-command";
       name: string;
     }
   | {
@@ -50,6 +64,13 @@ type InlineTokenMatch =
       value: string;
       start: number;
       end: number;
+    }
+  // ru-fork: subagent token match — parallel to skill.
+  | {
+      type: "subagent";
+      value: string;
+      start: number;
+      end: number;
     };
 
 function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
@@ -78,6 +99,9 @@ function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
       matches.push({ type: "skill", value: skillName, start, end });
     }
   }
+
+  // ru-fork: subagent matches collected by an ru-fork-only helper.
+  matches.push(...collectSubagentTokenMatches(text));
 
   return matches.toSorted((left, right) => left.start - right.start);
 }
@@ -160,13 +184,24 @@ function forEachMentionMatch(
   });
 }
 
-function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegment[] {
+function splitPromptTextIntoComposerSegments(
+  text: string,
+  // ru-fork: only the prompt-start slice may begin with a `/command` chip.
+  isPromptStart: boolean,
+): ComposerPromptSegment[] {
   const segments: ComposerPromptSegment[] = [];
   if (!text) {
     return segments;
   }
 
-  const tokenMatches = collectInlineTokenMatches(text);
+  // ru-fork: leading `/command` segment
+  const slashMatch = isPromptStart ? RU_FORK_SLASH_COMMAND_EDITOR_REGEX.exec(text) : null;
+  if (slashMatch) {
+    segments.push({ type: "slash-command", name: slashMatch[1]! });
+  }
+  const remaining = slashMatch ? text.slice(slashMatch[0].length) : text;
+
+  const tokenMatches = collectInlineTokenMatches(remaining);
   let cursor = 0;
   for (const match of tokenMatches) {
     if (match.start < cursor) {
@@ -174,11 +209,14 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
     }
 
     if (match.start > cursor) {
-      pushTextSegment(segments, text.slice(cursor, match.start));
+      pushTextSegment(segments, remaining.slice(cursor, match.start));
     }
 
     if (match.type === "mention") {
       segments.push({ type: "mention", path: match.value });
+    } else if (match.type === "subagent") {
+      // ru-fork: `#agent-name` chip — parallel to skill.
+      segments.push({ type: "subagent", name: match.value });
     } else {
       segments.push({ type: "skill", name: match.value });
     }
@@ -186,8 +224,8 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
     cursor = match.end;
   }
 
-  if (cursor < text.length) {
-    pushTextSegment(segments, text.slice(cursor));
+  if (cursor < remaining.length) {
+    pushTextSegment(segments, remaining.slice(cursor));
   }
 
   return segments;
@@ -242,7 +280,8 @@ export function splitPromptIntoComposerSegments(
   let terminalContextIndex = 0;
   forEachPromptSegmentSlice(prompt, (slice) => {
     if (slice.type === "text") {
-      segments.push(...splitPromptTextIntoComposerSegments(slice.text));
+      // ru-fork: `isPromptStart` enables the leading `/command` chip detection.
+      segments.push(...splitPromptTextIntoComposerSegments(slice.text, slice.promptOffset === 0));
       return false;
     }
 

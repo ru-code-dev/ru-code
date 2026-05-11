@@ -119,13 +119,15 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  yield* Effect.log(
+  // ru-fork: demoted from info — migration startup logs too chatty for default level.
+  yield* Effect.logDebug(
     toMigrationInclusive === undefined
       ? "Running all migrations..."
       : `Running migrations 1 through ${toMigrationInclusive}...`,
   );
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
-  yield* Effect.log("Migrations ran successfully").pipe(
+  // ru-fork: demoted from info — see above.
+  yield* Effect.logDebug("Migrations ran successfully").pipe(
     Effect.annotateLogs({ migrations: executedMigrations.map(([id, name]) => `${id}_${name}`) }),
   );
   return executedMigrations;

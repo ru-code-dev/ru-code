@@ -9,12 +9,14 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { AuthError, ServerAuth } from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { browserApiCorsHeaders } from "../httpCors.ts";
+// ru-fork: mount auth routes under the configured --base-url prefix.
+import { prefixedRouteLayer } from "../ru-fork/basePath/basePath.ts";
 
 export const respondToAuthError = (error: AuthError) =>
   Effect.gen(function* () {
@@ -32,17 +34,31 @@ export const respondToAuthError = (error: AuthError) =>
     );
   });
 
-export const authSessionRouteLayer = HttpRouter.add(
+export const authSessionRouteLayer = prefixedRouteLayer(
   "GET",
   "/api/auth/session",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* ServerAuth;
-    const session = yield* serverAuth.getSessionState(request);
-    return HttpServerResponse.jsonUnsafe(session, {
+    const sessions = yield* SessionCredentialService;
+    const resolution = yield* serverAuth.getSessionState(request);
+    const response = HttpServerResponse.jsonUnsafe(resolution.state, {
       status: 200,
       headers: browserApiCorsHeaders,
     });
+    if (resolution.mintedSession) {
+      // Loopback bypass minted a fresh session; attach the persistent cookie
+      // so subsequent requests carry it. Mirrors the bootstrap flow below.
+      return yield* response.pipe(
+        HttpServerResponse.setCookie(sessions.cookieName, resolution.mintedSession.token, {
+          expires: DateTime.toDate(resolution.mintedSession.expiresAt),
+          httpOnly: true,
+          path: "/",
+          sameSite: "lax",
+        }),
+      );
+    }
+    return response;
   }),
 );
 
@@ -63,7 +79,7 @@ function hasRequestBody(headers: typeof PairingCredentialRequestHeaders.Type) {
   return typeof headers["transfer-encoding"] === "string";
 }
 
-export const authBootstrapRouteLayer = HttpRouter.add(
+export const authBootstrapRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/bootstrap",
   Effect.gen(function* () {
@@ -99,7 +115,7 @@ export const authBootstrapRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authBearerBootstrapRouteLayer = HttpRouter.add(
+export const authBearerBootstrapRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/bootstrap/bearer",
   Effect.gen(function* () {
@@ -126,7 +142,7 @@ export const authBearerBootstrapRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authWebSocketTokenRouteLayer = HttpRouter.add(
+export const authWebSocketTokenRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/ws-token",
   Effect.gen(function* () {
@@ -141,7 +157,7 @@ export const authWebSocketTokenRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authPairingCredentialRouteLayer = HttpRouter.add(
+export const authPairingCredentialRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/pairing-token",
   Effect.gen(function* () {
@@ -194,7 +210,7 @@ const authenticateOwnerSession = Effect.gen(function* () {
   return { serverAuth, session } as const;
 });
 
-export const authPairingLinksRouteLayer = HttpRouter.add(
+export const authPairingLinksRouteLayer = prefixedRouteLayer(
   "GET",
   "/api/auth/pairing-links",
   Effect.gen(function* () {
@@ -204,7 +220,7 @@ export const authPairingLinksRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authPairingLinksRevokeRouteLayer = HttpRouter.add(
+export const authPairingLinksRevokeRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/pairing-links/revoke",
   Effect.gen(function* () {
@@ -224,7 +240,7 @@ export const authPairingLinksRevokeRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authClientsRouteLayer = HttpRouter.add(
+export const authClientsRouteLayer = prefixedRouteLayer(
   "GET",
   "/api/auth/clients",
   Effect.gen(function* () {
@@ -234,7 +250,7 @@ export const authClientsRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authClientsRevokeRouteLayer = HttpRouter.add(
+export const authClientsRevokeRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/clients/revoke",
   Effect.gen(function* () {
@@ -254,7 +270,7 @@ export const authClientsRevokeRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authClientsRevokeOthersRouteLayer = HttpRouter.add(
+export const authClientsRevokeOthersRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/auth/clients/revoke-others",
   Effect.gen(function* () {

@@ -15,6 +15,10 @@ import {
   VcsProcessSpawnError,
   VcsProcessTimeoutError,
 } from "@t3tools/contracts";
+// ru-fork: spawn-policy helper. Generic VCS process — preserve the
+// pre-existing shell:false default; bash-route on opt-in via
+// --windows-use-bash-for. See ru-fork/spawn/policy.ts.
+import { resolveSpawn } from "../ru-fork/spawn/policy.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
 export interface VcsProcessInput {
@@ -107,14 +111,19 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
 
   const spawn = Effect.fn("VcsProcess.spawn")(function* (input: VcsProcessInput) {
     const label = commandLabel(input.command, input.args);
+    // ru-fork: generic VCS process. Preserve the existing
+    // shell:false default (changing it could mis-parse args via cmd.exe
+    // shell quoting). Bash-route on opt-in.
+    const resolved = resolveSpawn(input.command, input.args, { shell: false });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(input.command, [...input.args], {
+        ChildProcess.make(resolved.command, [...resolved.args], {
           cwd: input.cwd,
           env: {
             ...process.env,
             ...input.env,
           },
+          shell: resolved.shell,
         }),
       )
       .pipe(

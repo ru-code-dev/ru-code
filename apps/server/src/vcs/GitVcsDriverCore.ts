@@ -18,7 +18,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type VcsRef } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
-import { compactTraceAttributes } from "@t3tools/shared/observability";
+import { compactTraceAttributes } from "../observability/Attributes.ts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -27,7 +27,17 @@ import {
   parseRemoteNamesInGitOrder,
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
+// ru-fork: spawn-policy helper. git.exe is a PE binary so the
+// resolved shell value stays false unless --windows-use-bash-for
+// explicitly lists "git". See ru-fork/spawn/policy.ts.
+import { resolveSpawn } from "../ru-fork/spawn/policy.ts";
+// ru-fork: exclude Windows reserved-name junk (e.g. a stray `nul`) from
+// staging so it can't abort `git add -A`. See git-issues.md.
+import { WINDOWS_RESERVED_EXCLUDES } from "../ru-fork/vcs/reservedNames.ts";
 import { ServerConfig } from "../config.ts";
+// ru-fork: needed so `refreshStatusUpstreamIfStale` can short-circuit when
+// the user sets `automaticGitFetchInterval` to 0.
+import { ServerSettingsService } from "../serverSettings.ts";
 const isGitCommandError = Schema.is(GitCommandError);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -38,8 +48,12 @@ const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
-const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
-const STATUS_UPSTREAM_REFRESH_FAILURE_COOLDOWN = Duration.seconds(5);
+// ru-fork: 5s was too tight — proxy HTTPS fetch can legitimately
+// exceed that on the first round trip. 15s gives the network real headroom.
+const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
+// ru-fork: on failure, back off for 15s (matching the success cadence)
+// instead of 5s so we don't hot-loop and spam the log every few seconds.
+const STATUS_UPSTREAM_REFRESH_FAILURE_COOLDOWN = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
   SSH_ASKPASS_REQUIRE: "never",
@@ -390,7 +404,7 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const traceFilePath = yield* fs.makeTempFileScoped({
-    prefix: `t3code-git-trace2-${process.pid}-`,
+    prefix: `ru-fork-git-trace2-${process.pid}-`,
     suffix: ".json",
   });
   const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
@@ -610,6 +624,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
+  // ru-fork: gives `refreshStatusUpstreamIfStale` access to the live
+  // `automaticGitFetchInterval` value so it can bail when the user has set 0.
+  const serverSettings = yield* ServerSettingsService;
 
   const executeRaw: GitVcsDriver.GitVcsDriverShape["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -627,15 +644,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.mapError(toGitCommandError(commandInput, "failed to create trace2 monitor.")),
         );
+        // ru-fork: git.exe is a PE binary; default shell:false stays.
+        // resolveSpawn only switches to bash routing when --windows-use-bash-for
+        // lists "git".
+        const resolved = resolveSpawn("git", commandInput.args, { shell: false });
         const child = yield* commandSpawner
           .spawn(
-            ChildProcess.make("git", commandInput.args, {
+            ChildProcess.make(resolved.command, [...resolved.args], {
               cwd: commandInput.cwd,
               env: {
                 ...process.env,
                 ...input.env,
                 ...trace2Monitor.env,
               },
+              shell: resolved.shell,
             }),
           )
           .pipe(Effect.mapError(toGitCommandError(commandInput, "failed to spawn.")));
@@ -908,6 +930,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const refreshStatusUpstreamIfStale = Effect.fn("refreshStatusUpstreamIfStale")(function* (
     cwd: string,
   ) {
+    // ru-fork: interval=0 means "never auto-fetch from anywhere." Read the
+    // current value each call so flipping the slider in Settings takes effect
+    // on the next status RPC without a restart. If reading settings fails, fall
+    // through to the legacy behavior so a broken settings layer never silently
+    // hides remote state.
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    const intervalMs =
+      settings === null ? null : Duration.toMillis(settings.automaticGitFetchInterval);
+    const gated = settings !== null && Duration.isZero(settings.automaticGitFetchInterval);
+    // ru-fork: visibility — confirms the gate sees live setting changes.
+    yield* Effect.logDebug("VCS upstream refresh", {
+      cwd,
+      intervalMs,
+      action: gated ? "skipped (interval=0)" : "proceeding",
+    });
+    if (gated) {
+      return;
+    }
+
     const upstream = yield* resolveCurrentUpstream(cwd);
     if (!upstream) return;
     const gitCommonDir = yield* resolveGitCommonDir(cwd);
@@ -1359,9 +1402,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "-A",
         "--",
         ...filePaths,
+        // ru-fork: drop reserved-name junk if it was selected.
+        ...WINDOWS_RESERVED_EXCLUDES,
       ]);
     } else {
-      yield* runGit("GitVcsDriver.prepareCommitContext.addAll", cwd, ["add", "-A"]);
+      // ru-fork: `git add -A` over the whole tree dies on a stray reserved
+      // name (e.g. `nul`); exclude them so the commit still stages everything else.
+      yield* runGit("GitVcsDriver.prepareCommitContext.addAll", cwd, [
+        "add",
+        "-A",
+        "--",
+        ".",
+        ...WINDOWS_RESERVED_EXCLUDES,
+      ]);
     }
 
     const stagedSummary = yield* runGitStdout(

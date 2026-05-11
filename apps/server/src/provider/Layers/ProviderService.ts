@@ -55,8 +55,6 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "./ProviderEventLoggers.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
-const isModelSelection = Schema.is(ModelSelection);
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -66,6 +64,8 @@ const isModelSelection = Schema.is(ModelSelection);
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
 }
+
+const isModelSelection = Schema.is(ModelSelection);
 
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
@@ -200,7 +200,6 @@ const correlateRuntimeEventWithInstance = (
 const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
-  const analytics = yield* Effect.service(AnalyticsService);
   const eventLoggers = yield* ProviderEventLoggers;
   // Options-provided logger wins (test overrides); otherwise we take whatever
   // the `ProviderEventLoggers` tag exposes — `undefined` means "no canonical
@@ -364,11 +363,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             { ...existing, providerInstanceId: bindingInstanceId },
             input.binding.threadId,
           );
-          yield* analytics.record("provider.session.recovered", {
-            provider: existing.provider,
-            strategy: "adopt-existing",
-            hasResumeCursor: existing.resumeCursor !== undefined,
-          });
           return { adapter, session: existing } as const;
         }
       }
@@ -383,6 +377,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
+      if (input.binding.runtimeMode === undefined) {
+        return yield* toValidationError(
+          input.operation,
+          `Cannot recover thread '${input.binding.threadId}': persisted binding is missing runtimeMode.`,
+        );
+      }
+
       const resumed = yield* adapter.startSession({
         threadId: input.binding.threadId,
         provider: input.binding.provider,
@@ -390,7 +391,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ...(persistedCwd ? { cwd: persistedCwd } : {}),
         ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
         ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
-        runtimeMode: input.binding.runtimeMode ?? "full-access",
+        runtimeMode: input.binding.runtimeMode,
       });
       if (resumed.provider !== adapter.provider) {
         return yield* toValidationError(
@@ -403,11 +404,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         { ...resumed, providerInstanceId: bindingInstanceId },
         input.binding.threadId,
       );
-      yield* analytics.record("provider.session.recovered", {
-        provider: resumed.provider,
-        strategy: "resume-thread",
-        hasResumeCursor: resumed.resumeCursor !== undefined,
-      });
       return { adapter, session: resumed } as const;
     }).pipe(
       withMetrics({
@@ -483,11 +479,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               }
 
               yield* adapter.stopSession(input.threadId).pipe(
-                Effect.tap(() =>
-                  analytics.record("provider.session.stopped", {
-                    provider: adapter.provider,
-                  }),
-                ),
                 Effect.catchCause((cause) =>
                   Effect.logWarning("provider.session.stop-stale-failed", {
                     threadId: input.threadId,
@@ -597,15 +588,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
         });
-        yield* analytics.record("provider.session.started", {
-          provider: sessionWithInstance.provider,
-          runtimeMode: input.runtimeMode,
-          hasResumeCursor: sessionWithInstance.resumeCursor !== undefined,
-          hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
-          hasModel:
-            typeof input.modelSelection?.model === "string" &&
-            input.modelSelection.model.trim().length > 0,
-        });
 
         return sessionWithInstance;
       }).pipe(
@@ -671,13 +653,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           lastRuntimeEventAt: yield* nowIso,
         },
       });
-      yield* analytics.record("provider.turn.sent", {
-        provider: routed.adapter.provider,
-        model: input.modelSelection?.model,
-        interactionMode: input.interactionMode,
-        attachmentCount: input.attachments.length,
-        hasInput: typeof input.input === "string" && input.input.trim().length > 0,
-      });
       return turn;
     }).pipe(
       withMetrics({
@@ -717,9 +692,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.turn_id": input.turnId,
         });
         yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
-        yield* analytics.record("provider.turn.interrupted", {
-          provider: routed.adapter.provider,
-        });
       }).pipe(
         withMetrics({
           counter: providerTurnsTotal,
@@ -741,10 +713,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
+        // allowRecovery: false — pending approvals/plan-approvals are
+        // in-memory only. If the adapter ctx is gone the Deferred is
+        // gone too, so a fresh ACP child would have nothing to resolve.
+        // Skip the wasted spawn and fail fast; the reactor's catchCause
+        // surfaces it as a stale-request failure. See
+        // `instrumental/changes/pending-requests-handling.md`.
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.respondToRequest",
-          allowRecovery: true,
+          allowRecovery: false,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
@@ -753,11 +731,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.request_id": input.requestId,
         });
-        yield* routed.adapter.respondToRequest(routed.threadId, input.requestId, input.decision);
-        yield* analytics.record("provider.request.responded", {
-          provider: routed.adapter.provider,
-          decision: input.decision,
-        });
+        yield* routed.adapter.respondToRequest(
+          routed.threadId,
+          input.requestId,
+          input.decision,
+          input.runtimeMode,
+        );
       }).pipe(
         withMetrics({
           counter: providerTurnsTotal,
@@ -780,10 +759,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
+      // allowRecovery: false — pending user-input Deferreds are
+      // in-memory only. If the adapter ctx is gone the Deferred is
+      // gone too, so a fresh ACP child would have nothing to resolve.
+      // Skip the wasted spawn and fail fast; the reactor's catchCause
+      // surfaces it as a stale-request failure. See
+      // `instrumental/changes/pending-requests-handling.md`.
       const routed = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.respondToUserInput",
-        allowRecovery: true,
+        allowRecovery: false,
       });
       metricProvider = routed.adapter.provider;
       yield* Effect.annotateCurrentSpan({
@@ -835,9 +820,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           runtimePayload: {
             activeTurnId: null,
           },
-        });
-        yield* analytics.record("provider.session.stopped", {
-          provider: routed.adapter.provider,
         });
       }).pipe(
         withMetrics({
@@ -961,10 +943,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.rollback_turns": input.numTurns,
       });
       yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
-      yield* analytics.record("provider.conversation.rolled_back", {
-        provider: routed.adapter.provider,
-        turns: input.numTurns,
-      });
     }).pipe(
       withMetrics({
         counter: providerTurnsTotal,
@@ -977,7 +955,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
-    const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
     const activeSessions = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
       adapter.listSessions().pipe(
@@ -1018,10 +995,30 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
       }),
     ).pipe(Effect.asVoid);
-    yield* analytics.record("provider.sessions.stopped_all", {
-      sessionCount: threadIds.length,
-    });
-    yield* analytics.flush;
+  });
+
+  const hasParkedRequests: ProviderServiceShape["hasParkedRequests"] = Effect.fn(
+    "hasParkedRequests",
+  )(function* (threadId: ThreadId) {
+    // Resolve without recovery — we don't want to spawn a new session
+    // just to ask whether the existing one is parked. If there's no
+    // active session, there's nothing parked by definition.
+    const routed = yield* resolveRoutableSession({
+      threadId,
+      operation: "ProviderService.hasParkedRequests",
+      allowRecovery: false,
+    }).pipe(
+      Effect.catchTag(
+        "ProviderAdapterValidationError",
+        () =>
+          // No persisted binding (thread never had a session) → not parked.
+          Effect.void,
+      ),
+    );
+    if (!routed || !routed.isActive) {
+      return false;
+    }
+    return yield* routed.adapter.hasParkedRequests(routed.threadId);
   });
 
   yield* Effect.addFinalizer(() =>
@@ -1039,7 +1036,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    stopAll: runStopAll,
     listSessions,
+    hasParkedRequests,
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,

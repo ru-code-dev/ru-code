@@ -1,0 +1,19 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "oxlint-plugin-t3code"
+  - "scripts"
+
+catalog:
+  effect: 4.0.0-beta.59
+  "@effect/atom-react": 4.0.0-beta.59
+  "@effect/openapi-generator": 4.0.0-beta.59
+  "@effect/platform-node": 4.0.0-beta.59
+  "@effect/platform-node-shared": 4.0.0-beta.59
+  "@effect/language-service": 0.84.2
+  "@effect/vitest": 4.0.0-beta.59
+  "@types/node": 24.10.13
+  tsdown: 0.20.3
+  typescript: 5.9.3
+  vitest: 3.2.4
+  "@vitest/coverage-v8": 3.2.4

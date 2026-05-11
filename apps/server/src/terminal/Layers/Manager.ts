@@ -189,7 +189,10 @@ function defaultShellResolver(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (platform === "win32") {
-    return "pwsh.exe";
+    // ru-fork: Git Bash is the required launch context on Windows (preflight
+    // enforces MSYSTEM), so default the in-app terminal to it. git-bash exports
+    // EXEPATH = the Git install root; cmd.exe is the in-box signed fallback.
+    return gitBashPath(env) ?? WINDOWS_GIT_BASH_FALLBACKS[0];
   }
   return env.SHELL ?? "bash";
 }
@@ -230,6 +233,10 @@ function shellCandidateFromCommand(
 ): ShellCandidate | null {
   if (!command || command.length === 0) return null;
   const shellName = basename(command, platform).toLowerCase();
+  // ru-fork: Git Bash needs --login -i to source /etc/profile + set PATH.
+  if (platform === "win32" && shellName === "bash.exe") {
+    return { shell: command, args: ["--login", "-i"] };
+  }
   if (platform === "win32" && (shellName === "pwsh.exe" || shellName === "powershell.exe")) {
     return { shell: command, args: ["-NoLogo"] };
   }
@@ -255,6 +262,18 @@ function windowsPowerShellPath(env: NodeJS.ProcessEnv): string {
 
 function windowsCmdPath(env: NodeJS.ProcessEnv): string {
   return joinWindowsPath(windowsSystemRoot(env), "System32", "cmd.exe");
+}
+
+// ru-fork: Git Bash discovery for the default Windows terminal shell.
+// git-bash exports EXEPATH = the Git install root (e.g. C:\Program Files\Git).
+const WINDOWS_GIT_BASH_FALLBACKS = [
+  "C:\\Program Files\\Git\\bin\\bash.exe",
+  "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+] as const;
+
+function gitBashPath(env: NodeJS.ProcessEnv): string | null {
+  const exePath = env.EXEPATH?.trim();
+  return exePath ? joinWindowsPath(exePath, "bin", "bash.exe") : null;
 }
 
 function formatShellCandidate(candidate: ShellCandidate): string {
@@ -286,14 +305,21 @@ function resolveShellCandidates(
   );
 
   if (platform === "win32") {
+    // ru-fork: prefer Git Bash, then in-box signed cmd.exe (System32 —
+    // AppLocker-friendly), and only then PowerShell
+    // `requested` is Git Bash by default. trySpawn walks this order.
     return uniqueShellCandidates([
       requested,
+      shellCandidateFromCommand(gitBashPath(env), platform),
+      ...WINDOWS_GIT_BASH_FALLBACKS.map((candidate) =>
+        shellCandidateFromCommand(candidate, platform),
+      ),
+      shellCandidateFromCommand(windowsCmdPath(env), platform),
+      shellCandidateFromCommand(env.ComSpec ?? null, platform),
+      shellCandidateFromCommand("cmd.exe", platform),
       shellCandidateFromCommand("pwsh.exe", platform),
       shellCandidateFromCommand(windowsPowerShellPath(env), platform),
       shellCandidateFromCommand("powershell.exe", platform),
-      shellCandidateFromCommand(env.ComSpec ?? null, platform),
-      shellCandidateFromCommand(windowsCmdPath(env), platform),
-      shellCandidateFromCommand("cmd.exe", platform),
     ]);
   }
 
@@ -661,7 +687,7 @@ function toSessionKey(threadId: string, terminalId: string): string {
 
 function shouldExcludeTerminalEnvKey(key: string): boolean {
   const normalizedKey = key.toUpperCase();
-  if (normalizedKey.startsWith("T3CODE_")) {
+  if (normalizedKey.startsWith("RU_FORK_")) {
     return true;
   }
   if (normalizedKey.startsWith("VITE_")) {
@@ -1915,6 +1941,32 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         }),
       );
 
+    // Drain every active PTY straight to SIGKILL. The standard close path
+    // does SIGTERM + 1s grace + SIGKILL (`runKillEscalation` above) which
+    // is the right behavior for user-initiated close; this path is for
+    // process exit where every millisecond counts and the user explicitly
+    // asked for `stop`.
+    const killAll: TerminalManagerShape["killAll"] = Effect.gen(function* () {
+      const sessions = yield* modifyManagerState(
+        (state) => [[...state.sessions.values()], { ...state, sessions: new Map() }] as const,
+      );
+      for (const session of sessions) {
+        if (!session.process) continue;
+        const proc = session.process;
+        // Swallow errors — PTY may have already exited or its handle
+        // may be invalidated. The caller is about to `process.exit(0)`.
+        yield* Effect.try({
+          try: () => proc.kill("SIGKILL"),
+          catch: (cause) =>
+            new TerminalProcessSignalError({
+              message: "Failed to send SIGKILL to terminal process during shutdown.",
+              cause,
+              signal: "SIGKILL",
+            }),
+        }).pipe(Effect.ignore);
+      }
+    });
+
     return {
       open,
       write,
@@ -1922,6 +1974,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       clear,
       restart,
       close,
+      killAll,
       subscribe: (listener) =>
         Effect.sync(() => {
           terminalEventListeners.add(listener);

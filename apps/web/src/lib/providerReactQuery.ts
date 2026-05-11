@@ -67,12 +67,12 @@ function asCheckpointErrorMessage(error: unknown): string {
 function normalizeCheckpointErrorMessage(error: unknown): string {
   const message = asCheckpointErrorMessage(error).trim();
   if (message.length === 0) {
-    return "Failed to load checkpoint diff.";
+    return "Не удалось загрузить diff чекпоинта.";
   }
 
   const lower = message.toLowerCase();
   if (lower.includes("not a git repository")) {
-    return "Turn diffs are unavailable because this project is not a git repository.";
+    return "Diff по шагу недоступен — проект не является git-репозиторием.";
   }
 
   if (

@@ -26,23 +26,24 @@ export function formatProviderSkillInstallSource(
   skill: Pick<ServerProviderSkill, "path" | "scope">,
 ): string | null {
   const normalizedPath = normalizePathSeparators(skill.path);
+  // ru-fork: Russian labels for the skill install-source chip.
   if (normalizedPath.includes("/.codex/plugins/") || normalizedPath.includes("/.agents/plugins/")) {
-    return "App";
+    return "Системный";
   }
 
   const normalizedScope = skill.scope?.trim().toLowerCase();
   if (normalizedScope === "system") {
-    return "System";
+    return "Системный";
   }
   if (
     normalizedScope === "project" ||
     normalizedScope === "workspace" ||
     normalizedScope === "local"
   ) {
-    return "Project";
+    return "Проектный";
   }
   if (normalizedScope === "user" || normalizedScope === "personal") {
-    return "Personal";
+    return "Глобальный";
   }
   if (normalizedScope) {
     return titleCaseWords(normalizedScope);

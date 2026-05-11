@@ -321,6 +321,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          has_pending_plan_approval AS "hasPendingPlanApproval",
+          pending_plan_approval_request_id AS "pendingPlanApprovalRequestId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -349,6 +351,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          has_pending_plan_approval AS "hasPendingPlanApproval",
+          pending_plan_approval_request_id AS "pendingPlanApprovalRequestId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -379,6 +383,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          has_pending_plan_approval AS "hasPendingPlanApproval",
+          pending_plan_approval_request_id AS "pendingPlanApprovalRequestId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -741,6 +747,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          has_pending_plan_approval AS "hasPendingPlanApproval",
+          pending_plan_approval_request_id AS "pendingPlanApprovalRequestId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1468,6 +1476,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     hasPendingApprovals: row.pendingApprovalCount > 0,
                     hasPendingUserInput: row.pendingUserInputCount > 0,
                     hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                    hasPendingPlanApproval: row.hasPendingPlanApproval > 0,
+                    pendingPlanApprovalRequestId: row.pendingPlanApprovalRequestId,
                   }),
                 ),
               updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -1599,6 +1609,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                  hasPendingPlanApproval: row.hasPendingPlanApproval > 0,
+                  pendingPlanApprovalRequestId: row.pendingPlanApprovalRequestId,
                 }),
               ),
               updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -1810,6 +1822,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
+        hasPendingPlanApproval: threadRow.value.hasPendingPlanApproval > 0,
+        pendingPlanApprovalRequestId: threadRow.value.pendingPlanApprovalRequestId,
       } satisfies OrchestrationThreadShell);
     });
 

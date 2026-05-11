@@ -391,7 +391,7 @@ export function TerminalViewport({
       selectionActionOpenRef.current = true;
       try {
         const clicked = await localApi.contextMenu.show(
-          [{ id: "add-to-chat", label: "Add to chat" }],
+          [{ id: "add-to-chat", label: "Добавить в чат" }],
           nextAction.position,
         );
         if (requestId !== selectionActionRequestIdRef.current || clicked !== "add-to-chat") {
@@ -989,16 +989,16 @@ export default function ThreadTerminalDrawer({
     [normalizedTerminalIds],
   );
   const splitTerminalActionLabel = hasReachedSplitLimit
-    ? `Split Terminal (max ${MAX_TERMINALS_PER_GROUP} per group)`
+    ? `Разделить терминал (максимум ${MAX_TERMINALS_PER_GROUP} на группу)`
     : splitShortcutLabel
-      ? `Split Terminal (${splitShortcutLabel})`
-      : "Split Terminal";
+      ? `Разделить терминал (${splitShortcutLabel})`
+      : "Разделить терминал";
   const newTerminalActionLabel = newShortcutLabel
-    ? `New Terminal (${newShortcutLabel})`
-    : "New Terminal";
+    ? `Новый терминал (${newShortcutLabel})`
+    : "Новый терминал";
   const closeTerminalActionLabel = closeShortcutLabel
-    ? `Close Terminal (${closeShortcutLabel})`
-    : "Close Terminal";
+    ? `Закрыть терминал (${closeShortcutLabel})`
+    : "Закрыть терминал";
   const onSplitTerminalAction = useCallback(() => {
     if (hasReachedSplitLimit) return;
     onSplitTerminal();
@@ -1183,7 +1183,7 @@ export default function ThreadTerminalDrawer({
                         threadRef={threadRef}
                         threadId={threadId}
                         terminalId={terminalId}
-                        terminalLabel={terminalLabelById.get(terminalId) ?? "Terminal"}
+                        terminalLabel={terminalLabelById.get(terminalId) ?? "Терминал"}
                         cwd={cwd}
                         {...(worktreePath !== undefined ? { worktreePath } : {})}
                         {...(runtimeEnv ? { runtimeEnv } : {})}
@@ -1206,7 +1206,7 @@ export default function ThreadTerminalDrawer({
                   threadRef={threadRef}
                   threadId={threadId}
                   terminalId={resolvedActiveTerminalId}
-                  terminalLabel={terminalLabelById.get(resolvedActiveTerminalId) ?? "Terminal"}
+                  terminalLabel={terminalLabelById.get(resolvedActiveTerminalId) ?? "Терминал"}
                   cwd={cwd}
                   {...(worktreePath !== undefined ? { worktreePath } : {})}
                   {...(runtimeEnv ? { runtimeEnv } : {})}
@@ -1307,7 +1307,7 @@ export default function ThreadTerminalDrawer({
                               >
                                 <TerminalSquare className="size-3 shrink-0" />
                                 <span className="truncate">
-                                  {terminalLabelById.get(terminalId) ?? "Terminal"}
+                                  {terminalLabelById.get(terminalId) ?? "Терминал"}
                                 </span>
                               </button>
                               {normalizedTerminalIds.length > 1 && (

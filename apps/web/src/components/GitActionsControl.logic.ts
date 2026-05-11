@@ -26,7 +26,7 @@ export interface GitActionMenuItem {
 export interface GitQuickAction {
   label: string;
   disabled: boolean;
-  kind: "run_action" | "run_pull" | "open_pr" | "open_publish" | "show_hint";
+  kind: "run_action" | "run_pull" | "open_pr" | "show_hint";
   action?: GitStackedAction;
   hint?: string;
 }
@@ -61,12 +61,12 @@ export function buildGitActionProgressStages(input: {
   terminology?: ChangeRequestTerminology;
 }): string[] {
   const terminology = input.terminology ?? DEFAULT_CHANGE_REQUEST_TERMINOLOGY;
-  const branchStages = input.featureBranch ? ["Preparing feature ref..."] : [];
-  const pushStage = input.pushTarget ? `Pushing to ${input.pushTarget}...` : "Pushing...";
+  const branchStages = input.featureBranch ? ["Подготовка feature ref…"] : [];
+  const pushStage = input.pushTarget ? `Push в ${input.pushTarget}…` : "Push…";
   const prStages = [
-    `Preparing ${terminology.shortLabel}...`,
-    `Generating ${terminology.shortLabel} content...`,
-    `Creating ${terminology.singular}...`,
+    `Подготовка ${terminology.shortLabel}…`,
+    `Генерация контента ${terminology.shortLabel}…`,
+    `Создание ${terminology.singular}…`,
   ];
 
   if (input.action === "push") {
@@ -81,7 +81,7 @@ export function buildGitActionProgressStages(input: {
     ? []
     : input.hasCustomCommitMessage
       ? ["Committing..."]
-      : ["Generating commit message...", "Committing..."];
+      : ["Генерация сообщения коммита…", "Коммит…"];
   if (input.action === "commit") {
     return [...branchStages, ...commitStages];
   }
@@ -103,12 +103,12 @@ export function buildMenuItems(
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isBehind = gitStatus.behindCount > 0;
-  const hasDefaultBranchDelta = (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0;
   const canPushWithoutUpstream = hasPrimaryRemote && !gitStatus.hasUpstream;
   const canCommit = !isBusy && hasChanges;
   const canPush =
     !isBusy &&
     hasBranch &&
+    !hasChanges &&
     !isBehind &&
     gitStatus.aheadCount > 0 &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
@@ -117,26 +117,20 @@ export function buildMenuItems(
     hasBranch &&
     !hasChanges &&
     !hasOpenPr &&
-    hasDefaultBranchDelta &&
+    gitStatus.aheadCount > 0 &&
     !isBehind &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canOpenPr = !isBusy && hasOpenPr;
 
-  const commitItem: GitActionMenuItem = {
-    id: "commit",
-    label: "Commit",
-    disabled: !canCommit,
-    icon: "commit",
-    kind: "open_dialog",
-    dialogAction: "commit",
-  };
-
-  if (!hasPrimaryRemote) {
-    return [commitItem];
-  }
-
   return [
-    commitItem,
+    {
+      id: "commit",
+      label: "Commit",
+      disabled: !canCommit,
+      icon: "commit",
+      kind: "open_dialog",
+      dialogAction: "commit",
+    },
     {
       id: "push",
       label: "Push",
@@ -148,14 +142,14 @@ export function buildMenuItems(
     hasOpenPr
       ? {
           id: "pr",
-          label: `View ${terminology.shortLabel}`,
+          label: `Открыть ${terminology.shortLabel}`,
           disabled: !canOpenPr,
           icon: "pr",
           kind: "open_pr",
         }
       : {
           id: "pr",
-          label: `Create ${terminology.shortLabel}`,
+          label: `Создать ${terminology.shortLabel}`,
           disabled: !canCreatePr,
           icon: "pr",
           kind: "open_dialog",
@@ -171,7 +165,12 @@ export function resolveQuickAction(
   hasPrimaryRemote = true,
 ): GitQuickAction {
   if (isBusy) {
-    return { label: "Commit", disabled: true, kind: "show_hint", hint: "Git action in progress." };
+    return {
+      label: "Commit",
+      disabled: true,
+      kind: "show_hint",
+      hint: "Выполняется git-действие.",
+    };
   }
 
   if (!gitStatus) {
@@ -179,7 +178,7 @@ export function resolveQuickAction(
       label: "Commit",
       disabled: true,
       kind: "show_hint",
-      hint: "Git status is unavailable.",
+      hint: "Статус git недоступен.",
     };
   }
 
@@ -187,7 +186,6 @@ export function resolveQuickAction(
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isAhead = gitStatus.aheadCount > 0;
-  const hasDefaultBranchDelta = (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0;
   const isBehind = gitStatus.behindCount > 0;
   const isDiverged = isAhead && isBehind;
   const terminology = resolveChangeRequestTerminology(gitStatus);
@@ -197,7 +195,7 @@ export function resolveQuickAction(
       label: "Commit",
       disabled: true,
       kind: "show_hint",
-      hint: `Create and checkout a ref before pushing or opening a ${terminology.singular}.`,
+      hint: `Создайте и переключитесь на ref перед push или открытием ${terminology.singular}.`,
     };
   }
 
@@ -219,23 +217,24 @@ export function resolveQuickAction(
   if (!gitStatus.hasUpstream) {
     if (!hasPrimaryRemote) {
       if (hasOpenPr && !isAhead) {
-        return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
-      }
-      return {
-        label: "Publish repository",
-        disabled: false,
-        kind: "open_publish",
-      };
-    }
-    if (!isAhead) {
-      if (hasOpenPr) {
-        return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
+        return { label: `Открыть ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
       }
       return {
         label: "Push",
         disabled: true,
         kind: "show_hint",
-        hint: "No local commits to push.",
+        hint: `Добавьте remote "origin" перед push или созданием ${terminology.singular}.`,
+      };
+    }
+    if (!isAhead) {
+      if (hasOpenPr) {
+        return { label: `Открыть ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
+      }
+      return {
+        label: "Push",
+        disabled: true,
+        kind: "show_hint",
+        hint: "Нет локальных коммитов для push.",
       };
     }
     if (hasOpenPr || isDefaultRef) {
@@ -247,7 +246,7 @@ export function resolveQuickAction(
       };
     }
     return {
-      label: `Push & create ${terminology.shortLabel}`,
+      label: `Push & создать ${terminology.shortLabel}`,
       disabled: false,
       kind: "run_action",
       action: "create_pr",
@@ -256,10 +255,10 @@ export function resolveQuickAction(
 
   if (isDiverged) {
     return {
-      label: "Sync ref",
+      label: "Синхронизировать ref",
       disabled: true,
       kind: "show_hint",
-      hint: "Branch has diverged from upstream. Rebase/merge first.",
+      hint: "Ветка разошлась с upstream. Сначала rebase/merge.",
     };
   }
 
@@ -281,7 +280,7 @@ export function resolveQuickAction(
       };
     }
     return {
-      label: `Push & create ${terminology.shortLabel}`,
+      label: `Push & создать ${terminology.shortLabel}`,
       disabled: false,
       kind: "run_action",
       action: "create_pr",
@@ -289,23 +288,14 @@ export function resolveQuickAction(
   }
 
   if (hasOpenPr && gitStatus.hasUpstream) {
-    return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
-  }
-
-  if (hasDefaultBranchDelta && !isDefaultRef) {
-    return {
-      label: `Create ${terminology.shortLabel}`,
-      disabled: false,
-      kind: "run_action",
-      action: "create_pr",
-    };
+    return { label: `Открыть ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
   }
 
   return {
     label: "Commit",
     disabled: true,
     kind: "show_hint",
-    hint: "Branch is up to date. No action needed.",
+    hint: "Ветка актуальна. Действий не требуется.",
   };
 }
 
@@ -329,35 +319,35 @@ export function resolveDefaultBranchActionDialogCopy(input: {
   terminology?: ChangeRequestTerminology;
 }): DefaultBranchActionDialogCopy {
   const branchLabel = input.branchName;
-  const suffix = ` on "${branchLabel}". You can continue on this ref or create a feature ref and run the same action there.`;
+  const suffix = ` на "${branchLabel}". Можно продолжить на этой ref или создать feature ref и выполнить то же действие там.`;
   const terminology = input.terminology ?? DEFAULT_CHANGE_REQUEST_TERMINOLOGY;
 
   if (input.action === "push" || input.action === "commit_push") {
     if (input.includesCommit) {
       return {
-        title: "Commit & push to default ref?",
-        description: `This action will commit and push changes${suffix}`,
-        continueLabel: `Commit & push to ${branchLabel}`,
+        title: "Commit & push в default ref?",
+        description: `Это действие сделает commit и push изменений${suffix}`,
+        continueLabel: `Commit & push в ${branchLabel}`,
       };
     }
     return {
-      title: "Push to default ref?",
-      description: `This action will push local commits${suffix}`,
-      continueLabel: `Push to ${branchLabel}`,
+      title: "Push в default ref?",
+      description: `Это действие сделает push локальных коммитов${suffix}`,
+      continueLabel: `Push в ${branchLabel}`,
     };
   }
 
   if (input.includesCommit) {
     return {
-      title: `Commit, push & create ${terminology.shortLabel} from default ref?`,
-      description: `This action will commit, push, and create a ${terminology.singular}${suffix}`,
-      continueLabel: `Commit, push & create ${terminology.shortLabel}`,
+      title: `Commit, push & создать ${terminology.shortLabel} из default ref?`,
+      description: `Это действие сделает commit, push и создаст ${terminology.singular}${suffix}`,
+      continueLabel: `Commit, push & создать ${terminology.shortLabel}`,
     };
   }
   return {
-    title: `Push & create ${terminology.shortLabel} from default ref?`,
-    description: `This action will push local commits and create a ${terminology.singular}${suffix}`,
-    continueLabel: `Push & create ${terminology.shortLabel}`,
+    title: `Push & создать ${terminology.shortLabel} из default ref?`,
+    description: `Это действие сделает push локальных коммитов и создаст ${terminology.singular}${suffix}`,
+    continueLabel: `Push & создать ${terminology.shortLabel}`,
   };
 }
 

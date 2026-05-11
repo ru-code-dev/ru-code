@@ -530,7 +530,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
               )}
             >
-              <div className="text-[10px] leading-tight font-medium">All turns</div>
+              <div className="text-[10px] leading-tight font-medium">Все шаги</div>
             </div>
           </button>
           {orderedTurnDiffSummaries.map((summary) => (
@@ -552,7 +552,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               >
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] leading-tight font-medium">
-                    Turn{" "}
+                    Шаг{" "}
                     {summary.checkpointTurnCount ??
                       inferredCheckpointTurnCountByTurnId[summary.turnId] ??
                       "?"}
@@ -641,13 +641,13 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             )}
             {!renderablePatch ? (
               isLoadingCheckpointDiff ? (
-                <DiffPanelLoadingState label="Loading checkpoint diff..." />
+                <DiffPanelLoadingState label="Загрузка diff чекпоинта…" />
               ) : (
                 <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
                   <p>
                     {hasNoNetChanges
-                      ? "No net changes in this selection."
-                      : "No patch available for this selection."}
+                      ? "В этом выборе нет изменений."
+                      : "Для этого выбора patch недоступен."}
                   </p>
                 </div>
               )

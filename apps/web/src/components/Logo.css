@@ -1,0 +1,20 @@
+.logo_fx-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background: linear-gradient(
+    115deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.6) 50%,
+    transparent 54%
+  );
+  transform: translateX(-140%) rotate(8deg);
+  filter: blur(6px);
+  animation: logo_sweep 2s linear infinite;
+}
+
+@keyframes logo_sweep {
+  to {
+    transform: translateX(140%) rotate(8deg);
+  }
+}

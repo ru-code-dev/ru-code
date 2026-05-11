@@ -1,12 +1,7 @@
-import {
-  ClaudeSettings,
-  CodexSettings,
-  CursorSettings,
-  OpenCodeSettings,
-  ProviderDriverKind,
-} from "@t3tools/contracts";
+import { CLI_NAME } from "@ru-fork/branding";
+import { ProviderDriverKind, CliSettings } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
-import { ClaudeAI, CursorIcon, type Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { type Icon, CliIcon } from "../Icons";
 
 type ProviderSettingsSchema = {
   readonly fields: Readonly<Record<string, Schema.Top>>;
@@ -35,29 +30,10 @@ export interface ProviderClientDefinition {
 
 export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
-    value: ProviderDriverKind.make("codex"),
-    label: "Codex",
-    icon: OpenAI,
-    settingsSchema: CodexSettings,
-  },
-  {
-    value: ProviderDriverKind.make("claudeAgent"),
-    label: "Claude",
-    icon: ClaudeAI,
-    settingsSchema: ClaudeSettings,
-  },
-  {
-    value: ProviderDriverKind.make("cursor"),
-    label: "Cursor",
-    icon: CursorIcon,
-    badgeLabel: "Early Access",
-    settingsSchema: CursorSettings,
-  },
-  {
-    value: ProviderDriverKind.make("opencode"),
-    label: "OpenCode",
-    icon: OpenCodeIcon,
-    settingsSchema: OpenCodeSettings,
+    value: ProviderDriverKind.make(CLI_NAME),
+    label: "Cli",
+    icon: CliIcon,
+    settingsSchema: CliSettings,
   },
 ];
 

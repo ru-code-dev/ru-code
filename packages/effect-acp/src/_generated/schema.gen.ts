@@ -7757,6 +7757,14 @@ export const RequestPermissionRequest = Schema.Struct({
 
 export type RequestPermissionResponse = {
   readonly _meta?: { readonly [x: string]: unknown } | null;
+  // RU-FORK manual extension: Cli Code 0.15.5+ reads structured answers
+  // for the ask_user_question tool from this top-level field. Keyed by
+  // stringified question index ("0", "1", …); value is the user's answer
+  // text. Confirmed by source at cli-code/packages/cli/src/acp-integration/
+  // session/Session.ts:1513-1517 and verified via probe in
+  // scripts/probe-cli-acp.mjs. Optional so other ACP agents that don't
+  // know about this field still validate.
+  readonly answers?: { readonly [x: string]: string } | null;
   readonly outcome:
     | { readonly outcome: "cancelled" }
     | {
@@ -7771,6 +7779,18 @@ export const RequestPermissionResponse = Schema.Struct({
       Schema.Record(Schema.String, Schema.Unknown).annotate({
         description:
           "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+      }),
+      Schema.Null,
+    ]),
+  ),
+  // RU-FORK manual extension. See type definition above for context.
+  // If the protocol generator ever overwrites this file, re-add this field
+  // and the matching `answers?` member in the type alias.
+  answers: Schema.optionalKey(
+    Schema.Union([
+      Schema.Record(Schema.String, Schema.String).annotate({
+        description:
+          "Cli-specific extension consumed by the ask_user_question tool. Keys are stringified question indices.",
       }),
       Schema.Null,
     ]),

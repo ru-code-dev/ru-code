@@ -24,6 +24,10 @@ import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
 import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
+// ru-fork: spawn-policy helper. Caller-supplied maintenance command;
+// preserve the pre-existing default shell:false (behaviour-preserving),
+// bash-route on opt-in. See ru-fork/spawn/policy.ts.
+import { resolveSpawn } from "../ru-fork/spawn/policy.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
@@ -75,8 +79,16 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
       function* () {
+        // ru-fork: caller-supplied maintenance command. Preserve the
+        // pre-existing default shell:false (behaviour-preserving).
+        // Bash-route on opt-in.
+        const resolved = resolveSpawn(input.command, input.args, { shell: false });
         const child = yield* input.spawner
-          .spawn(ChildProcess.make(input.command, [...input.args]))
+          .spawn(
+            ChildProcess.make(resolved.command, [...resolved.args], {
+              shell: resolved.shell,
+            }),
+          )
           .pipe(
             Effect.mapError(
               (cause) =>

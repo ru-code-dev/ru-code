@@ -55,12 +55,12 @@ import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 
 const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string }> = [
-  { id: "play", label: "Play" },
-  { id: "test", label: "Test" },
+  { id: "play", label: "Запуск" },
+  { id: "test", label: "Тесты" },
   { id: "lint", label: "Lint" },
-  { id: "configure", label: "Configure" },
+  { id: "configure", label: "Настроить" },
   { id: "build", label: "Build" },
-  { id: "debug", label: "Debug" },
+  { id: "debug", label: "Отладка" },
 ];
 
 function ScriptIcon({
@@ -145,11 +145,11 @@ export default function ProjectScriptsControl({
     const trimmedName = name.trim();
     const trimmedCommand = command.trim();
     if (trimmedName.length === 0) {
-      setValidationError("Name is required.");
+      setValidationError("Укажите имя.");
       return;
     }
     if (trimmedCommand.length === 0) {
-      setValidationError("Command is required.");
+      setValidationError("Укажите команду.");
       return;
     }
 
@@ -283,16 +283,16 @@ export default function ProjectScriptsControl({
               })}
               <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
                 <PlusIcon className="size-4" />
-                Add action
+                Добавить действие
               </MenuItem>
             </MenuPopup>
           </Menu>
         </Group>
       ) : (
-        <Button size="xs" variant="outline" onClick={openAddDialog} title="Add action">
+        <Button size="xs" variant="outline" onClick={openAddDialog} title="Добавить действие">
           <PlusIcon className="size-3.5" />
           <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-            Add action
+            Добавить действие
           </span>
         </Button>
       )}
@@ -318,15 +318,16 @@ export default function ProjectScriptsControl({
       >
         <DialogPopup>
           <DialogHeader>
-            <DialogTitle>{isEditing ? "Edit Action" : "Add Action"}</DialogTitle>
+            <DialogTitle>{isEditing ? "Изменить действие" : "Добавить действие"}</DialogTitle>
             <DialogDescription>
-              Actions are project-scoped commands you can run from the top bar or keybindings.
+              Действия — это команды на уровне проекта, которые запускаются с верхней панели или по
+              горячей клавише.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <form id={addScriptFormId} className="space-y-4" onSubmit={submitAddScript}>
               <div className="space-y-1.5">
-                <Label htmlFor="script-name">Name</Label>
+                <Label htmlFor="script-name">Имя</Label>
                 <div className="flex items-center gap-2">
                   <Popover onOpenChange={setIconPickerOpen} open={iconPickerOpen}>
                     <PopoverTrigger
@@ -370,27 +371,27 @@ export default function ProjectScriptsControl({
                   <Input
                     id="script-name"
                     autoFocus
-                    placeholder="Test"
+                    placeholder="Тесты"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                   />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="script-keybinding">Keybinding</Label>
+                <Label htmlFor="script-keybinding">Горячая клавиша</Label>
                 <Input
                   id="script-keybinding"
-                  placeholder="Press shortcut"
+                  placeholder="Нажмите комбинацию"
                   value={keybinding}
                   readOnly
                   onKeyDown={captureKeybinding}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Press a shortcut. Use <code>Backspace</code> to clear.
+                  Нажмите комбинацию. <code>Backspace</code> — очистить.
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="script-command">Command</Label>
+                <Label htmlFor="script-command">Команда</Label>
                 <Textarea
                   id="script-command"
                   placeholder="bun test"
@@ -399,7 +400,7 @@ export default function ProjectScriptsControl({
                 />
               </div>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm">
-                <span>Run automatically on worktree creation</span>
+                <span>Запускать автоматически при создании worktree</span>
                 <Switch
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
@@ -416,7 +417,7 @@ export default function ProjectScriptsControl({
                 className="mr-auto"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
-                Delete
+                Удалить
               </Button>
             )}
             <Button
@@ -426,10 +427,10 @@ export default function ProjectScriptsControl({
                 setDialogOpen(false);
               }}
             >
-              Cancel
+              Отмена
             </Button>
             <Button form={addScriptFormId} type="submit">
-              {isEditing ? "Save changes" : "Save action"}
+              {isEditing ? "Сохранить изменения" : "Сохранить действие"}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -438,13 +439,13 @@ export default function ProjectScriptsControl({
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete action "{name}"?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Удалить действие "{name}"?</AlertDialogTitle>
+            <AlertDialogDescription>Это действие нельзя отменить.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>Отмена</AlertDialogClose>
             <Button variant="destructive" onClick={confirmDeleteScript}>
-              Delete action
+              Удалить действие
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

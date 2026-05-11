@@ -1,8 +1,18 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
-export type ComposerTriggerKind = "path" | "slash-command" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default";
+// ru-fork: "subagent" added — `#agent-name` picker, parallel to `$skill-name`.
+export type ComposerTriggerKind = "path" | "slash-command" | "skill" | "subagent";
+// ru-fork: "refresh-skills" added so the composer can manually trigger a
+// provider snapshot refresh — needed because Cli's skill list only reaches
+// `ServerProvider.skills` on the 5-min checkProvider tick.
+// "refresh-subagents" is the parallel for the subagent scanner.
+export type ComposerSlashCommand =
+  | "model"
+  | "plan"
+  | "default"
+  | "refresh-skills"
+  | "refresh-subagents";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -16,6 +26,8 @@ const isInlineTokenSegment = (
     | { type: "text"; text: string }
     | { type: "mention" }
     | { type: "skill" }
+    | { type: "subagent" } // ru-fork
+    | { type: "slash-command" } // ru-fork
     | { type: "terminal-context" },
 ): boolean => segment.type !== "text";
 
@@ -62,7 +74,12 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
       expandedCursor += expandedLength;
       continue;
     }
-    if (segment.type === "skill") {
+    // ru-fork: slash-command and subagent share skill's `<sigil>${name}` shape.
+    if (
+      segment.type === "skill" ||
+      segment.type === "slash-command" ||
+      segment.type === "subagent"
+    ) {
       const expandedLength = segment.name.length + 1;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
@@ -96,6 +113,8 @@ function collapsedSegmentLength(
     | { type: "text"; text: string }
     | { type: "mention" }
     | { type: "skill" }
+    | { type: "subagent" } // ru-fork
+    | { type: "slash-command" } // ru-fork
     | { type: "terminal-context" },
 ): number {
   if (segment.type === "text") {
@@ -109,6 +128,8 @@ function clampCollapsedComposerCursorForSegments(
     | { type: "text"; text: string }
     | { type: "mention" }
     | { type: "skill" }
+    | { type: "subagent" } // ru-fork
+    | { type: "slash-command" } // ru-fork
     | { type: "terminal-context" }
   >,
   cursorInput: number,
@@ -153,7 +174,12 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
       collapsedCursor += 1;
       continue;
     }
-    if (segment.type === "skill") {
+    // ru-fork: slash-command and subagent share skill's `<sigil>${name}` shape.
+    if (
+      segment.type === "skill" ||
+      segment.type === "slash-command" ||
+      segment.type === "subagent"
+    ) {
       const expandedLength = segment.name.length + 1;
       if (remaining === 0) {
         return collapsedCursor;
@@ -243,6 +269,17 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
       rangeEnd: cursor,
     };
   }
+  // ru-fork: `#agent-name` parallel to `$skill-name` — same parse,
+  // different sigil. Goes before `@` so a `#` in path mid-string can't
+  // be swallowed by the path branch.
+  if (token.startsWith("#")) {
+    return {
+      kind: "subagent",
+      query: token.slice(1),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
   if (!token.startsWith("@")) {
     return null;
   }
@@ -257,7 +294,8 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
 
 export function parseStandaloneComposerSlashCommand(
   text: string,
-): Exclude<ComposerSlashCommand, "model"> | null {
+  // ru-fork: refresh-* commands excluded — popup-only, never standalone mode-switches.
+): Exclude<ComposerSlashCommand, "model" | "refresh-skills" | "refresh-subagents"> | null {
   const match = /^\/(plan|default)\s*$/i.exec(text.trim());
   if (!match) {
     return null;

@@ -7,6 +7,7 @@
  * @module ProjectionThreadRepository
  */
 import {
+  ApprovalRequestId,
   IsoDateTime,
   ModelSelection,
   NonNegativeInt,
@@ -40,6 +41,8 @@ export const ProjectionThread = Schema.Struct({
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
+  hasPendingPlanApproval: NonNegativeInt,
+  pendingPlanApprovalRequestId: Schema.NullOr(ApprovalRequestId),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

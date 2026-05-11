@@ -35,7 +35,7 @@ export function buildLocalDraftThread(
     environmentId: draftThread.environmentId,
     codexThreadId: null,
     projectId: draftThread.projectId,
-    title: "New thread",
+    title: "Новый диалог",
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,

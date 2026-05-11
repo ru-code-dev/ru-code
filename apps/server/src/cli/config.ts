@@ -1,5 +1,4 @@
 import * as NetService from "@t3tools/shared/Net";
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
@@ -24,6 +23,13 @@ import {
   type StartupPresentation,
 } from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+// ru-fork: unified local-startup defaults.
+import {
+  DESKTOP_LOOPBACK_HOST,
+  DESKTOP_RUNTIME_MODE,
+} from "../ru-fork/local-startup/defaults.ts";
+// ru-fork: --base-url normalization (path or full-URL accepted).
+import { normalizeBasePath } from "../ru-fork/basePath/basePath.ts";
 
 export const modeFlag = Flag.choice("mode", RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -39,7 +45,7 @@ export const hostFlag = Flag.string("host").pipe(
   Flag.optional,
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
-  Flag.withDescription("Base directory path (equivalent to T3CODE_HOME)."),
+  Flag.withDescription("Base directory path (equivalent to RU_FORK_HOME)."),
   Flag.optional,
 );
 export const devUrlFlag = Flag.string("dev-url").pipe(
@@ -47,8 +53,47 @@ export const devUrlFlag = Flag.string("dev-url").pipe(
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
   Flag.optional,
 );
+// ru-fork: --base-url. Accepts a full URL or a bare path; only the
+// pathname survives normalization. Empty when absent. See
+// `ru-fork/basePath/basePath.ts` for the parser.
+export const baseUrlFlag = Flag.string("base-url").pipe(
+  Flag.withDescription(
+    "URL path prefix for reverse-proxy deployments (e.g. /services/u001/my-app, or full URL). Equivalent to RU_FORK_BASE_URL.",
+  ),
+  Flag.optional,
+);
 export const noBrowserFlag = Flag.boolean("no-browser").pipe(
   Flag.withDescription("Disable automatic browser opening."),
+  Flag.optional,
+);
+// ru-fork: skip the node/git/CLI preflight gate. The daemon
+// launcher passes this to the spawned child so the gate runs once in
+// the parent. End users can pass it for debugging. See
+// `ru-fork-instrumental/changes/deamon/startap-checks.md`.
+export const noPreflightCheckFlag = Flag.boolean("no-preflight-check").pipe(
+  Flag.withDescription(
+    "Skip the node/git/CLI dependency check (used internally by the daemon launcher).",
+  ),
+  Flag.optional,
+);
+// ru-fork: prepend extra dirs to PATH on all platforms. Comma-
+// separated. Solves "CLI lives under %USERPROFILE%\... and cmd.exe
+// doesn't see it" without hardcoding install locations in source.
+// Equivalent to RU_FORK_INJECT_EXTRA_PATHS. See
+// ru-fork-instrumental/changes/startap-environment.md.
+export const injectExtraPathsFlag = Flag.string("inject-extra-paths").pipe(
+  Flag.withDescription("Prepend directories to PATH (comma-separated, all platforms)."),
+  Flag.optional,
+);
+// ru-fork: route selected binaries through `bash -c` on Windows
+// instead of cmd.exe / shell:true. Use when cmd.exe path is blocked
+// by AppLocker / Constrained-Language PowerShell / EDR, or when only
+// a POSIX shim exists (no `.cmd`). Equivalent to
+// RU_FORK_WINDOWS_USE_BASH_FOR.
+export const windowsUseBashForFlag = Flag.string("windows-use-bash-for").pipe(
+  Flag.withDescription(
+    "Route the listed binaries through bash on Windows (comma-separated). Bypasses cmd.exe.",
+  ),
   Flag.optional,
 );
 export const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
@@ -64,75 +109,40 @@ export const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-proj
 );
 export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.withDescription(
-    "Emit server-side logs for outbound WebSocket push traffic (equivalent to T3CODE_LOG_WS_EVENTS).",
+    "Emit server-side logs for outbound WebSocket push traffic (equivalent to RU_FORK_LOG_WS_EVENTS).",
   ),
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
-export const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
-  Flag.withDescription(
-    "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
-  ),
-  Flag.optional,
-);
-export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
-  Flag.withSchema(PortSchema),
-  Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
-  Flag.optional,
-);
 
 const EnvServerConfig = Config.all({
-  logLevel: Config.logLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
-  traceMinLevel: Config.logLevel("T3CODE_TRACE_MIN_LEVEL").pipe(Config.withDefault("Info")),
-  traceTimingEnabled: Config.boolean("T3CODE_TRACE_TIMING_ENABLED").pipe(Config.withDefault(true)),
-  traceFile: Config.string("T3CODE_TRACE_FILE").pipe(
+  logLevel: Config.logLevel("RU_FORK_LOG_LEVEL").pipe(Config.withDefault("Info")),
+  mode: Config.schema(RuntimeMode, "RU_FORK_MODE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  traceMaxBytes: Config.int("T3CODE_TRACE_MAX_BYTES").pipe(Config.withDefault(10 * 1024 * 1024)),
-  traceMaxFiles: Config.int("T3CODE_TRACE_MAX_FILES").pipe(Config.withDefault(10)),
-  traceBatchWindowMs: Config.int("T3CODE_TRACE_BATCH_WINDOW_MS").pipe(Config.withDefault(200)),
-  otlpTracesUrl: Config.string("T3CODE_OTLP_TRACES_URL").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  otlpMetricsUrl: Config.string("T3CODE_OTLP_METRICS_URL").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
-    Config.withDefault(10_000),
-  ),
-  otlpServiceName: Config.string("T3CODE_OTLP_SERVICE_NAME").pipe(Config.withDefault("t3-server")),
-  mode: Config.schema(RuntimeMode, "T3CODE_MODE").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  port: Config.port("RU_FORK_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  host: Config.string("RU_FORK_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  t3Home: Config.string("RU_FORK_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
+  // ru-fork: env binding for --base-url. See baseUrlFlag.
+  baseUrl: Config.string("RU_FORK_BASE_URL").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  bootstrapFd: Config.int("T3CODE_BOOTSTRAP_FD").pipe(
+  noBrowser: Config.boolean("RU_FORK_NO_BROWSER").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  autoBootstrapProjectFromCwd: Config.boolean("T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD").pipe(
+  bootstrapFd: Config.int("RU_FORK_BOOTSTRAP_FD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  logWebSocketEvents: Config.boolean("T3CODE_LOG_WS_EVENTS").pipe(
+  autoBootstrapProjectFromCwd: Config.boolean("RU_FORK_AUTO_BOOTSTRAP_PROJECT_FROM_CWD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  tailscaleServeEnabled: Config.boolean("T3CODE_TAILSCALE_SERVE").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  tailscaleServePort: Config.port("T3CODE_TAILSCALE_SERVE_PORT").pipe(
+  logWebSocketEvents: Config.boolean("RU_FORK_LOG_WS_EVENTS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -145,17 +155,26 @@ export interface CliServerFlags {
   readonly baseDir: Option.Option<string>;
   readonly cwd: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
+  // ru-fork: see baseUrlFlag.
+  readonly baseUrl: Option.Option<string>;
   readonly noBrowser: Option.Option<boolean>;
+  // ru-fork: see noPreflightCheckFlag above.
+  readonly noPreflightCheck: Option.Option<boolean>;
   readonly bootstrapFd: Option.Option<number>;
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
-  readonly tailscaleServeEnabled: Option.Option<boolean>;
-  readonly tailscaleServePort: Option.Option<number>;
+  // ru-fork: see injectExtraPathsFlag.
+  readonly injectExtraPaths: Option.Option<string>;
+  // ru-fork: see windowsUseBashForFlag.
+  readonly windowsUseBashFor: Option.Option<string>;
 }
 
 export interface CliAuthLocationFlags {
   readonly baseDir: Option.Option<string>;
   readonly devUrl?: Option.Option<URL>;
+  // ru-fork: see baseUrlFlag. Auth subcommand doesn't take it, but
+  // the shape is shared so we accept an optional Option.
+  readonly baseUrl?: Option.Option<string>;
 }
 
 export const sharedServerLocationFlags = {
@@ -179,12 +198,17 @@ export const sharedServerCommandFlags = {
     Argument.optional,
   ),
   devUrl: devUrlFlag,
+  // ru-fork: see baseUrlFlag.
+  baseUrl: baseUrlFlag,
   noBrowser: noBrowserFlag,
+  // ru-fork: see noPreflightCheckFlag above.
+  noPreflightCheck: noPreflightCheckFlag,
   bootstrapFd: bootstrapFdFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
-  tailscaleServeEnabled: tailscaleServeFlag,
-  tailscaleServePort: tailscaleServePortFlag,
+  // ru-fork: see injectExtraPathsFlag / windowsUseBashForFlag.
+  injectExtraPaths: injectExtraPathsFlag,
+  windowsUseBashFor: windowsUseBashForFlag,
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;
@@ -192,17 +216,6 @@ export const authLocationFlags = sharedServerLocationFlags;
 const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
-
-const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
-  }
-
-  const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
-  return parsePersistedServerObservabilitySettings(raw);
-});
 
 export const resolveServerConfig = (
   flags: CliServerFlags,
@@ -224,12 +237,19 @@ export const resolveServerConfig = (
       baseDir: flags.baseDir ?? Option.none(),
       cwd: flags.cwd ?? Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
+      // ru-fork: see baseUrlFlag.
+      baseUrl: flags.baseUrl ?? Option.none(),
       noBrowser: flags.noBrowser ?? Option.none(),
+      // ru-fork: pass-through for the preflight skip flag.
+      noPreflightCheck: flags.noPreflightCheck ?? Option.none(),
       bootstrapFd: flags.bootstrapFd ?? Option.none(),
       autoBootstrapProjectFromCwd: flags.autoBootstrapProjectFromCwd ?? Option.none(),
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
-      tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
-      tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
+      // ru-fork: spawn-policy flags; consumed by initSpawnPolicy,
+      // not by resolveServerConfig (which is why they don't appear in
+      // ServerConfigShape).
+      injectExtraPaths: flags.injectExtraPaths ?? Option.none(),
+      windowsUseBashFor: flags.windowsUseBashFor ?? Option.none(),
     } satisfies CliServerFlags;
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
@@ -244,7 +264,9 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(env.mode),
         Option.fromUndefinedOr(bootstrap?.mode),
       ),
-      () => "web",
+      // ru-fork: desktop mode binds loopback only, auto-issues sessions
+      // for loopback source IPs, and pins the port — see local-startup/.
+      () => DESKTOP_RUNTIME_MODE,
     );
 
     const port = yield* Option.match(
@@ -256,7 +278,12 @@ export const resolveServerConfig = (
       {
         onSome: (value) => Effect.succeed(value),
         onNone: () => {
-          if (mode === "desktop") {
+          if (mode === DESKTOP_RUNTIME_MODE) {
+            // ru-fork: desktop mode pins to DEFAULT_PORT verbatim — no
+            // findAvailablePort fallback. The actual port-availability check
+            // (assertLocalPortAvailable) lives in cli/server.ts:runServerCommand
+            // so non-listening commands (auth, project) that still call
+            // resolveServerConfig don't trip it.
             return Effect.succeed(DEFAULT_PORT);
           }
           return findAvailablePort(DEFAULT_PORT);
@@ -266,6 +293,14 @@ export const resolveServerConfig = (
     const devUrl = Option.getOrElse(
       resolveOptionPrecedence(normalizedFlags.devUrl, Option.fromUndefinedOr(env.devUrl)),
       () => undefined,
+    );
+    // ru-fork: resolve --base-url / RU_FORK_BASE_URL into the
+    // normalized prefix that lives on ServerConfig (empty string when
+    // unconfigured so the no-prefix path stays a hot path).
+    const basePath = normalizeBasePath(
+      Option.getOrUndefined(
+        resolveOptionPrecedence(normalizedFlags.baseUrl, Option.fromUndefinedOr(env.baseUrl)),
+      ),
     );
     const baseDir = yield* resolveBaseDir(
       Option.getOrUndefined(
@@ -281,11 +316,6 @@ export const resolveServerConfig = (
     yield* fs.makeDirectory(cwd, { recursive: true });
     const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
     yield* ensureServerDirectories(derivedPaths);
-    const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
-      derivedPaths.settingsPath,
-    );
-    const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
-    yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
     const startupPresentation = options?.startupPresentation ?? "browser";
     const isHeadlessStartup = startupPresentation === "headless";
     const noBrowser = Option.getOrElse(
@@ -295,7 +325,13 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(env.noBrowser),
         Option.fromUndefinedOr(bootstrap?.noBrowser),
       ),
-      () => mode === "desktop",
+      // ru-fork: decoupled from mode. The precedence chain above already
+      // returns Option.some(true) when startupPresentation === "headless" or
+      // when --no-browser is set, so the default only fires for plain
+      // foreground `ru-fork start` — which should always open a browser.
+      // Daemon path passes --no-browser explicitly (daemonLauncher.ts) and
+      // is unaffected.
+      () => false,
     );
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
@@ -305,7 +341,13 @@ export const resolveServerConfig = (
         normalizedFlags.autoBootstrapProjectFromCwd,
         Option.fromUndefinedOr(env.autoBootstrapProjectFromCwd),
       ),
-      () => mode === "web",
+      // Only fabricate a default project when the user explicitly
+      // pointed the server at a workspace via the positional `cwd`
+      // arg. Without that signal, `process.cwd()` varies with the
+      // launcher (pnpm/turbo can leave it at the monorepo root or
+      // chdir into apps/server), which used to seed inconsistent
+      // "default" projects across machines.
+      () => mode === "web" && Option.isSome(normalizedFlags.cwd),
     );
     const logWebSocketEvents = Option.getOrElse(
       resolveOptionPrecedence(
@@ -314,22 +356,6 @@ export const resolveServerConfig = (
       ),
       () => Boolean(devUrl),
     );
-    const tailscaleServeEnabled = Option.getOrElse(
-      resolveOptionPrecedence(
-        normalizedFlags.tailscaleServeEnabled,
-        Option.fromUndefinedOr(env.tailscaleServeEnabled),
-        Option.fromUndefinedOr(bootstrap?.tailscaleServeEnabled),
-      ),
-      () => false,
-    );
-    const tailscaleServePort = Option.getOrElse(
-      resolveOptionPrecedence(
-        normalizedFlags.tailscaleServePort,
-        Option.fromUndefinedOr(env.tailscaleServePort),
-        Option.fromUndefinedOr(bootstrap?.tailscaleServePort),
-      ),
-      () => 443,
-    );
     const staticDir = devUrl ? undefined : yield* resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -337,33 +363,22 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(env.host),
         Option.fromUndefinedOr(bootstrap?.host),
       ),
-      () => (mode === "desktop" ? "127.0.0.1" : undefined),
+      // ru-fork: mode-aware default — desktop pins to literal IPv4
+      // loopback (DESKTOP_LOOPBACK_HOST). Avoids the Windows/Citrix
+      // dual-stack bind roulette that caused the WebSocket "stuck" symptom
+      // when the wildcard bind landed on IPv6-only. Web mode keeps Node's
+      // wildcard. Users who want LAN exposure pass --host 0.0.0.0.
+      () => (mode === DESKTOP_RUNTIME_MODE ? DESKTOP_LOOPBACK_HOST : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
     const config: ServerConfigShape = {
       logLevel,
-      traceMinLevel: env.traceMinLevel,
-      traceTimingEnabled: env.traceTimingEnabled,
-      traceBatchWindowMs: env.traceBatchWindowMs,
-      traceMaxBytes: env.traceMaxBytes,
-      traceMaxFiles: env.traceMaxFiles,
-      otlpTracesUrl:
-        env.otlpTracesUrl ??
-        bootstrap?.otlpTracesUrl ??
-        persistedObservabilitySettings.otlpTracesUrl,
-      otlpMetricsUrl:
-        env.otlpMetricsUrl ??
-        bootstrap?.otlpMetricsUrl ??
-        persistedObservabilitySettings.otlpMetricsUrl,
-      otlpExportIntervalMs: env.otlpExportIntervalMs,
-      otlpServiceName: env.otlpServiceName,
       mode,
       port,
       cwd,
       baseDir,
       ...derivedPaths,
-      serverTracePath,
       host,
       staticDir,
       devUrl,
@@ -372,8 +387,8 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
-      tailscaleServeEnabled,
-      tailscaleServePort,
+      // ru-fork: see baseUrlFlag.
+      basePath,
     };
 
     return config;
@@ -391,12 +406,18 @@ export const resolveCliAuthConfig = (
       baseDir: flags.baseDir,
       cwd: Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
+      // ru-fork: auth subcommand doesn't accept --base-url; pass none.
+      baseUrl: flags.baseUrl ?? Option.none(),
       noBrowser: Option.none(),
+      // ru-fork: auth-only path; preflight not exercised here.
+      noPreflightCheck: Option.none(),
       bootstrapFd: Option.none(),
       autoBootstrapProjectFromCwd: Option.none(),
       logWebSocketEvents: Option.none(),
-      tailscaleServeEnabled: Option.none(),
-      tailscaleServePort: Option.none(),
+      // ru-fork: auth subcommand doesn't spawn anything that
+      // needs the policy, but CliServerFlags requires the fields.
+      injectExtraPaths: Option.none(),
+      windowsUseBashFor: Option.none(),
     },
     cliLogLevel,
   );

@@ -206,7 +206,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       >
         {primaryOption?.Icon && <primaryOption.Icon aria-hidden="true" className="size-3.5" />}
         <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-          Open
+          Открыть
         </span>
       </Button>
       <GroupSeparator className="hidden @3xl/header-actions:block" />
@@ -215,7 +215,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           <ChevronDownIcon aria-hidden="true" className="size-4" />
         </MenuTrigger>
         <MenuPopup align="end">
-          {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+          {options.length === 0 && <MenuItem disabled>Установленные редакторы не найдены</MenuItem>}
           {options.map(({ label, Icon, value }) => (
             <MenuItem key={value} onClick={() => openInEditor(value)}>
               <Icon aria-hidden="true" className="text-muted-foreground" />

@@ -8,7 +8,6 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -27,32 +26,34 @@ export type ThreadTraversalDirection = "previous" | "next";
 
 export interface ThreadStatusPill {
   label:
-    | "Working"
-    | "Connecting"
-    | "Completed"
-    | "Pending Approval"
-    | "Awaiting Input"
-    | "Plan Ready";
+    | "Работает"
+    | "Подключение"
+    | "Завершено"
+    | "Ожидает подтверждения"
+    | "Ожидает ввода"
+    | "Согласуйте план"
+    | "План готов";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 5,
-  "Awaiting Input": 4,
-  Working: 3,
-  Connecting: 3,
-  "Plan Ready": 2,
-  Completed: 1,
+  "Согласуйте план": 6,
+  "Ожидает подтверждения": 5,
+  "Ожидает ввода": 4,
+  Работает: 3,
+  Подключение: 3,
+  "План готов": 2,
+  Завершено: 1,
 };
 
 type ThreadStatusInput = Pick<
   SidebarThreadSummary,
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
+  | "hasPendingPlanApproval"
   | "hasPendingUserInput"
-  | "interactionMode"
   | "latestTurn"
   | "session"
 > & {
@@ -331,9 +332,33 @@ export function resolveThreadStatusPill(input: {
 }): ThreadStatusPill | null {
   const { thread } = input;
 
-  if (thread.hasPendingApprovals) {
+  // Cli parks the exit_plan_mode permission RPC while waiting for the user's
+  // decision. Show «Согласуйте план» (pulsing) only when the plan is still
+  // actionable — i.e. the user hasn't already implemented it elsewhere. After
+  // implement-in-new-thread the source plan's `implementedAt` is set via the
+  // `sourceProposedPlan` projection, so `hasActionableProposedPlan` flips
+  // false even though the orphaned Deferred on the original thread keeps
+  // `hasPendingPlanApproval` true. Gating on both means the pill matches the
+  // composer banner rule (`interactionMode === "plan" && hasActionableProposedPlan`)
+  // and stops urging a decision the user has already made.
+  if (thread.hasPendingPlanApproval && thread.hasActionableProposedPlan) {
     return {
-      label: "Pending Approval",
+      label: "Согласуйте план",
+      colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: true,
+    };
+  }
+
+  // The pending-approval projection table includes plan_approval rows, so
+  // `hasPendingApprovals` stays true while a plan-approval Deferred is parked
+  // (even after the plan was implemented in a new thread, since the original
+  // Deferred can be leaked). Subtract the plan-approval case so this pill
+  // only fires for REAL approvals (file/shell/edit) — the plan one has its
+  // own pill above.
+  if (thread.hasPendingApprovals && !thread.hasPendingPlanApproval) {
+    return {
+      label: "Ожидает подтверждения",
       colorClass: "text-amber-600 dark:text-amber-300/90",
       dotClass: "bg-amber-500 dark:bg-amber-300/90",
       pulse: false,
@@ -342,7 +367,7 @@ export function resolveThreadStatusPill(input: {
 
   if (thread.hasPendingUserInput) {
     return {
-      label: "Awaiting Input",
+      label: "Ожидает ввода",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
       pulse: false,
@@ -351,39 +376,38 @@ export function resolveThreadStatusPill(input: {
 
   if (thread.session?.status === "running") {
     return {
-      label: "Working",
+      label: "Работает",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
     };
   }
 
-  if (thread.session?.status === "connecting") {
+  // Persistent plan indicator: a plan exists in this thread and hasn't been
+  // implemented yet. Shown when Cli isn't currently doing something more
+  // urgent (parked, asking for approval/input, streaming). The user can
+  // resume implementation via the "Реализовать" button in the input area.
+  if (thread.hasActionableProposedPlan) {
     return {
-      label: "Connecting",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
-    return {
-      label: "Plan Ready",
+      label: "План готов",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
     };
   }
 
+  if (thread.session?.status === "connecting") {
+    return {
+      label: "Подключение",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+    };
+  }
+
   if (hasUnseenCompletion(thread)) {
     return {
-      label: "Completed",
+      label: "Завершено",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
       pulse: false,

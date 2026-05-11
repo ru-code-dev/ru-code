@@ -1,15 +1,42 @@
+import { APP_NAME } from "@ru-fork/branding";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 type Theme = "light" | "dark" | "system";
+
+export const THEME_NAMES = [
+  "ru-fork",
+  "aurora",
+  "onyx",
+  "grayscale",
+  "pastel-dreams",
+  "vs-code",
+  "caffeine",
+] as const;
+export type ThemeName = (typeof THEME_NAMES)[number];
+export const DEFAULT_THEME_NAME: ThemeName = "pastel-dreams";
+
+export const THEME_NAME_LABELS: Record<ThemeName, string> = {
+  "ru-fork": APP_NAME,
+  aurora: "Aurora",
+  onyx: "Onyx",
+  grayscale: "Grayscale",
+  "pastel-dreams": "Pastel Dreams",
+  "vs-code": "VS Code",
+  caffeine: "Caffeine",
+};
+
 type ThemeSnapshot = {
   theme: Theme;
+  themeName: ThemeName;
   systemDark: boolean;
 };
 
 const STORAGE_KEY = "t3code:theme";
+const THEME_NAME_STORAGE_KEY = "t3code:themeName";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   theme: "system",
+  themeName: DEFAULT_THEME_NAME,
   systemDark: false,
 };
 const THEME_COLOR_META_NAME = "theme-color";
@@ -36,6 +63,13 @@ function getStored(): Theme {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw === "light" || raw === "dark" || raw === "system") return raw;
   return DEFAULT_THEME_SNAPSHOT.theme;
+}
+
+function getStoredThemeName(): ThemeName {
+  if (!hasThemeStorage()) return DEFAULT_THEME_NAME;
+  const raw = localStorage.getItem(THEME_NAME_STORAGE_KEY);
+  if (raw && (THEME_NAMES as readonly string[]).includes(raw)) return raw as ThemeName;
+  return DEFAULT_THEME_NAME;
 }
 
 function ensureThemeColorMetaTag(): HTMLMetaElement {
@@ -87,13 +121,14 @@ export function syncBrowserChromeTheme() {
   ensureThemeColorMetaTag().setAttribute("content", backgroundColor);
 }
 
-function applyTheme(theme: Theme, suppressTransitions = false) {
+function applyTheme(theme: Theme, themeName: ThemeName, suppressTransitions = false) {
   if (typeof document === "undefined" || typeof window === "undefined") return;
   if (suppressTransitions) {
     document.documentElement.classList.add("no-transitions");
   }
   const isDark = theme === "dark" || (theme === "system" && getSystemDark());
   document.documentElement.classList.toggle("dark", isDark);
+  document.documentElement.setAttribute("data-theme", themeName);
   syncBrowserChromeTheme();
   syncDesktopTheme(theme);
   if (suppressTransitions) {
@@ -123,19 +158,25 @@ function syncDesktopTheme(theme: Theme) {
 
 // Apply immediately on module load to prevent flash
 if (typeof document !== "undefined" && hasThemeStorage()) {
-  applyTheme(getStored());
+  applyTheme(getStored(), getStoredThemeName());
 }
 
 function getSnapshot(): ThemeSnapshot {
   if (!hasThemeStorage()) return DEFAULT_THEME_SNAPSHOT;
   const theme = getStored();
+  const themeName = getStoredThemeName();
   const systemDark = theme === "system" ? getSystemDark() : false;
 
-  if (lastSnapshot && lastSnapshot.theme === theme && lastSnapshot.systemDark === systemDark) {
+  if (
+    lastSnapshot &&
+    lastSnapshot.theme === theme &&
+    lastSnapshot.themeName === themeName &&
+    lastSnapshot.systemDark === systemDark
+  ) {
     return lastSnapshot;
   }
 
-  lastSnapshot = { theme, systemDark };
+  lastSnapshot = { theme, themeName, systemDark };
   return lastSnapshot;
 }
 
@@ -150,15 +191,15 @@ function subscribe(listener: () => void): () => void {
   // Listen for system preference changes
   const mq = window.matchMedia(MEDIA_QUERY);
   const handleChange = () => {
-    if (getStored() === "system") applyTheme("system", true);
+    if (getStored() === "system") applyTheme("system", getStoredThemeName(), true);
     emitChange();
   };
   mq.addEventListener("change", handleChange);
 
   // Listen for storage changes from other tabs
   const handleStorage = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY) {
-      applyTheme(getStored(), true);
+    if (e.key === STORAGE_KEY || e.key === THEME_NAME_STORAGE_KEY) {
+      applyTheme(getStored(), getStoredThemeName(), true);
       emitChange();
     }
   };
@@ -174,6 +215,7 @@ function subscribe(listener: () => void): () => void {
 export function useTheme() {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const theme = snapshot.theme;
+  const themeName = snapshot.themeName;
 
   const resolvedTheme: "light" | "dark" =
     theme === "system" ? (snapshot.systemDark ? "dark" : "light") : theme;
@@ -181,14 +223,21 @@ export function useTheme() {
   const setTheme = useCallback((next: Theme) => {
     if (!hasThemeStorage()) return;
     localStorage.setItem(STORAGE_KEY, next);
-    applyTheme(next, true);
+    applyTheme(next, getStoredThemeName(), true);
+    emitChange();
+  }, []);
+
+  const setThemeName = useCallback((next: ThemeName) => {
+    if (!hasThemeStorage()) return;
+    localStorage.setItem(THEME_NAME_STORAGE_KEY, next);
+    applyTheme(getStored(), next, true);
     emitChange();
   }, []);
 
   // Keep DOM in sync on mount/change
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+    applyTheme(theme, themeName);
+  }, [theme, themeName]);
 
-  return { theme, setTheme, resolvedTheme } as const;
+  return { theme, setTheme, themeName, setThemeName, resolvedTheme } as const;
 }

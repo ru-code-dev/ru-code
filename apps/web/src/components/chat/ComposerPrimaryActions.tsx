@@ -1,5 +1,6 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import type { ApprovalRequestId } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -16,17 +17,51 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  /**
+   * True when the active session is parked waiting on the user — held
+   * approval (file/edit/shell), held plan-approval, or held user-input
+   * question. In this state the channel is technically "running" from
+   * the orchestration's POV but the user has an action to take, not a
+   * stop to issue. Suppresses the red Stop button so the regular Send
+   * button renders; the server-side reactor auto-interrupts the held
+   * Deferred when the new turn is dispatched (see specs/done/
+   * stop-acp-session.md "Send-while-parked").
+   */
+  isParkedOnUser: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
   isConnecting: boolean;
-  isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
+  /**
+   * Ru-fork addition — submits the active pending user-input
+   * request with an empty answers payload (`{}`). Rendered as a
+   * destructive-outline Button next to the Submit button while a
+   * user-input request is parked. See
+   * `instrumental/changes/pending-requests-handling.md`.
+   */
+  onSkipPendingUserInput?: () => void;
   onInterrupt: () => void;
+  /**
+   * Live requestId for the server-held exit_plan_mode Deferred. Non-null
+   * means the server's `pendingApprovals` Map still has the Deferred and
+   * a `thread.approval.respond` dispatch will reach CLI. Null means the
+   * Deferred is gone (server restarted, ACP child died, follow-up
+   * already interrupted it) — the primary plan button must route to a
+   * new thread instead.
+   */
+  pendingPlanApprovalRequestId: ApprovalRequestId | null;
   onImplementPlanInNewThread: () => void;
+  /**
+   * Ru-fork addition — dispatches `thread.approval.respond` against
+   * the held plan_approval Deferred. Only valid when
+   * `pendingPlanApprovalRequestId !== null`. See
+   * `instrumental/changes/pending-requests-handling.md`.
+   */
+  onApproveInSameThread: () => void;
 }
 
 export const formatPendingPrimaryActionLabel = (input: {
@@ -36,15 +71,15 @@ export const formatPendingPrimaryActionLabel = (input: {
   questionIndex: number;
 }) => {
   if (input.isResponding) {
-    return "Submitting...";
+    return "Отправка…";
   }
   if (input.compact) {
-    return input.isLastQuestion ? "Submit" : "Next";
+    return input.isLastQuestion ? "Отправить" : "Далее";
   }
   if (!input.isLastQuestion) {
-    return "Next question";
+    return "Следующий вопрос";
   }
-  return input.questionIndex > 0 ? "Submit answers" : "Submit answer";
+  return input.questionIndex > 0 ? "Отправить ответы" : "Отправить ответ";
 };
 
 const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
@@ -55,17 +90,20 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  isParkedOnUser,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
   isConnecting,
-  isEnvironmentUnavailable,
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
+  pendingPlanApprovalRequestId,
   onPreviousPendingQuestion,
+  onSkipPendingUserInput,
   onInterrupt,
   onImplementPlanInNewThread,
+  onApproveInSameThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -96,9 +134,22 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
             >
-              Previous
+              Назад
             </Button>
           )
+        ) : null}
+        {onSkipPendingUserInput ? (
+          <Button
+            size="sm"
+            variant="destructive-outline"
+            className={cn("rounded-full", compact ? "px-3" : "px-4")}
+            {...pointerFocusProps}
+            onClick={onSkipPendingUserInput}
+            disabled={pendingAction.isResponding}
+            title="Отправить пустой ответ — модель сама решит, что делать дальше"
+          >
+            Не хочу отвечать
+          </Button>
         ) : null}
         <Button
           type="submit"
@@ -106,7 +157,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           className={cn("rounded-full", compact ? "px-3" : "px-4")}
           {...pointerFocusProps}
           disabled={
-            isEnvironmentUnavailable ||
             pendingAction.isResponding ||
             (pendingAction.isLastQuestion ? !pendingAction.isComplete : !pendingAction.canAdvance)
           }
@@ -122,7 +172,92 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
+  // Plan-implement button takes priority over the stop button: when a
+  // plan is ready, the turn is "running" only because the adapter is
+  // holding the exit_plan_mode permission RPC waiting for our response
+  // (see CliAdapter exit_plan_mode branch). Implement is the genuine
+  // action; submitting it interrupts the held permission and starts the
+  // implementation turn.
+  if (showPlanFollowUpPrompt) {
+    // Disable plan actions while CLI is genuinely streaming output —
+    // session.status is `running` but user is NOT parked on a held
+    // Deferred. While parked on plan_approval, `isParkedOnUser` is true
+    // (hasPendingPlanApproval feeds it) so the buttons stay enabled —
+    // clicking is how the user unblocks CLI. Once the Deferred resolves
+    // and CLI starts streaming the implementation, the flag flips and
+    // these disable until the turn settles.
+    const isPlanActionDisabled = isSendBusy || isConnecting || (isRunning && !isParkedOnUser);
+
+    if (promptHasText) {
+      return (
+        <Button
+          type="submit"
+          size="sm"
+          className={cn("rounded-full", compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8")}
+          {...pointerFocusProps}
+          disabled={isPlanActionDisabled}
+        >
+          {isConnecting || isSendBusy ? "Отправка…" : "Уточнить"}
+        </Button>
+      );
+    }
+
+    // Two actions, two labels — same strings in both states, just swap
+    // which is primary based on whether the server still holds the
+    // exit_plan_mode Deferred. User can always pick either from the
+    // dropdown (selecting «Реализовать» without a live id is allowed;
+    // it'll fail with a stale-detail error if the Deferred is gone).
+    const isPlanApprovalLive = pendingPlanApprovalRequestId !== null;
+    const primaryLabel = isPlanApprovalLive ? "Реализовать" : "Реализовать в новом диалоге";
+    const handlePrimaryClick = isPlanApprovalLive
+      ? onApproveInSameThread
+      : onImplementPlanInNewThread;
+
+    return (
+      <div data-chat-composer-implement-actions="true" className="flex items-center justify-end">
+        <Button
+          type="button"
+          size="sm"
+          className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
+          {...pointerFocusProps}
+          disabled={isPlanActionDisabled}
+          onClick={() => handlePrimaryClick()}
+        >
+          {isConnecting || isSendBusy ? "Отправка…" : primaryLabel}
+        </Button>
+        <Menu disabled={isPlanActionDisabled}>
+          <MenuTrigger
+            render={
+              <Button
+                size="sm"
+                variant="default"
+                className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
+                aria-label="Implementation actions"
+                {...pointerFocusProps}
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" side="top">
+            {isPlanApprovalLive ? (
+              <MenuItem onClick={() => void onImplementPlanInNewThread()}>
+                Реализовать в новом диалоге
+              </MenuItem>
+            ) : (
+              <MenuItem onClick={() => void onApproveInSameThread()}>Реализовать</MenuItem>
+            )}
+          </MenuPopup>
+        </Menu>
+      </div>
+    );
+  }
+
+  // Parked-on-user takes precedence over isRunning so the user gets a
+  // Send button (not the red Stop) when CLI is holding a permission /
+  // plan / user-input Deferred. Server-side reactor will auto-interrupt
+  // before dispatching the new turn.
+  if (isRunning && !isParkedOnUser) {
     return (
       <button
         type="button"
@@ -138,76 +273,20 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (showPlanFollowUpPrompt) {
-    if (promptHasText) {
-      return (
-        <Button
-          type="submit"
-          size="sm"
-          className={cn("rounded-full", compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8")}
-          {...pointerFocusProps}
-          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
-        >
-          {isConnecting || isSendBusy ? "Sending..." : "Refine"}
-        </Button>
-      );
-    }
-
-    return (
-      <div data-chat-composer-implement-actions="true" className="flex items-center justify-end">
-        <Button
-          type="submit"
-          size="sm"
-          className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
-          {...pointerFocusProps}
-          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
-        >
-          {isConnecting || isSendBusy ? "Sending..." : "Implement"}
-        </Button>
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button
-                size="sm"
-                variant="default"
-                className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
-                aria-label="Implementation actions"
-                {...pointerFocusProps}
-                disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
-              />
-            }
-          >
-            <ChevronDownIcon className="size-3.5" />
-          </MenuTrigger>
-          <MenuPopup align="end" side="top">
-            <MenuItem
-              disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
-              onClick={() => void onImplementPlanInNewThread()}
-            >
-              Implement in a new thread
-            </MenuItem>
-          </MenuPopup>
-        </Menu>
-      </div>
-    );
-  }
-
   return (
     <button
       type="submit"
       className="flex h-9 w-9 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:pointer-events-none disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
       {...pointerFocusProps}
-      disabled={isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent}
+      disabled={isSendBusy || isConnecting || !hasSendableContent}
       aria-label={
-        isEnvironmentUnavailable
-          ? "Environment disconnected"
-          : isConnecting
-            ? "Connecting"
-            : isPreparingWorktree
-              ? "Preparing worktree"
-              : isSendBusy
-                ? "Sending"
-                : "Send message"
+        isConnecting
+          ? "Connecting"
+          : isPreparingWorktree
+            ? "Preparing worktree"
+            : isSendBusy
+              ? "Sending"
+              : "Send message"
       }
     >
       {isConnecting || isSendBusy ? (

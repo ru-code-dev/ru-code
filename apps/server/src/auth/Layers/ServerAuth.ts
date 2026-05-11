@@ -21,13 +21,18 @@ import {
   ServerAuth,
   type AuthenticatedSession,
   AuthError,
+  type SessionStateResolution,
   type ServerAuthShape,
 } from "../Services/ServerAuth.ts";
 import {
   SessionCredentialError,
   SessionCredentialService,
+  type IssuedSession,
 } from "../Services/SessionCredentialService.ts";
 import { AuthControlPlaneLive, AuthCoreLive } from "./AuthControlPlane.ts";
+import { isLoopbackHostname } from "../../http.ts";
+import { ServerConfig } from "../../config.ts";
+import { deriveAuthClientMetadata, readRemoteAddressFromSource } from "../utils.ts";
 
 type BootstrapExchangeResult = {
   readonly response: AuthBootstrapResult;
@@ -62,17 +67,45 @@ function parseBearerToken(request: HttpServerRequest.HttpServerRequest): string 
   return token.length > 0 ? token : null;
 }
 
+// ru-fork: pure mapper for the loopback-bypass path (added in 752a7104).
+// Hoisted to module scope because it captures no parent closures, matching
+// the `parseBearerToken` idiom above.
+const issuedToAuthenticatedSession = (issued: IssuedSession): AuthenticatedSession => ({
+  sessionId: issued.sessionId,
+  subject: "loopback-trusted",
+  method: issued.method,
+  role: issued.role,
+  expiresAt: issued.expiresAt,
+});
+
 export const makeServerAuth = Effect.gen(function* () {
   const policy = yield* ServerAuthPolicy;
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
+  const config = yield* ServerConfig;
   const descriptor = yield* policy.getDescriptor();
+
+  // Loopback bypass: in desktop mode the OS user is the trust boundary, so
+  // any request whose kernel-reported source IP is loopback is by definition
+  // trusted. We auto-issue a session for those requests — the user never
+  // sees the pair screen (and the app survives cookie-wipe-on-close). The decision depends only on `mode` (deployment
+  // intent) and the request's source IP — NOT on the bind address. The bind
+  // address is a separate listener-layer concern; coupling them produces
+  // platform-dependent edge cases (e.g. macOS forbids non-root binds to
+  // 127.0.0.1:80 but permits the equivalent wildcard bind).
+  const loopbackBypassEnabled = config.mode === "desktop";
+
+  const isLoopbackRequest = (request: HttpServerRequest.HttpServerRequest): boolean => {
+    const remoteAddress = readRemoteAddressFromSource(request.source);
+    return Boolean(remoteAddress && isLoopbackHostname(remoteAddress));
+  };
 
   const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
     sessions.verify(token).pipe(
       Effect.tapError((cause: SessionCredentialError) =>
-        Effect.logWarning("Rejected authenticated session credential.").pipe(
+        // ru-fork: demoted from warn — credential rejection on every unauthed request is normal pairing-flow noise.
+        Effect.logDebug("Rejected authenticated session credential.").pipe(
           Effect.annotateLogs({
             reason: cause.message,
           }),
@@ -95,40 +128,106 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const issueLoopbackSession = (
+    request: HttpServerRequest.HttpServerRequest,
+  ): Effect.Effect<IssuedSession, AuthError> =>
+    sessions
+      .issue({
+        method: "browser-session-cookie",
+        subject: "loopback-trusted",
+        role: "owner",
+        client: deriveAuthClientMetadata({ request, label: "loopback-trusted" }),
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new AuthError({
+              message: "Failed to issue loopback session.",
+              cause,
+            }),
+        ),
+      );
+
   const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
     const credential = cookieToken ?? bearerToken;
+    const tryBypass = (): Effect.Effect<AuthenticatedSession, AuthError> =>
+      loopbackBypassEnabled && isLoopbackRequest(request)
+        ? issueLoopbackSession(request).pipe(Effect.map(issuedToAuthenticatedSession))
+        : Effect.fail(
+            new AuthError({
+              message: "Authentication required.",
+              status: 401,
+            }),
+          );
     if (!credential) {
-      return Effect.fail(
-        new AuthError({
-          message: "Authentication required.",
-          status: 401,
-        }),
-      );
+      return tryBypass();
     }
-    return authenticateToken(credential);
+    return authenticateToken(credential).pipe(
+      Effect.catchTag("AuthError", (error) =>
+        loopbackBypassEnabled && isLoopbackRequest(request)
+          ? issueLoopbackSession(request).pipe(Effect.map(issuedToAuthenticatedSession))
+          : Effect.fail(error),
+      ),
+    );
   };
 
   const getSessionState: ServerAuthShape["getSessionState"] = (request) =>
-    authenticateRequest(request).pipe(
-      Effect.map(
-        (session) =>
-          ({
-            authenticated: true,
-            auth: descriptor,
-            role: session.role,
-            sessionMethod: session.method,
-            ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
-          }) satisfies AuthSessionState,
-      ),
-      Effect.catchTag("AuthError", () =>
-        Effect.succeed({
+    Effect.gen(function* () {
+      // Fast path: existing valid cookie/bearer.
+      const cookieToken = request.cookies[sessions.cookieName];
+      const bearerToken = parseBearerToken(request);
+      const credential = cookieToken ?? bearerToken;
+      if (credential) {
+        const verified = yield* authenticateToken(credential).pipe(
+          Effect.map((session): Option.Option<AuthenticatedSession> => Option.some(session)),
+          Effect.catch(() => Effect.succeed(Option.none<AuthenticatedSession>())),
+        );
+        if (Option.isSome(verified)) {
+          const session = verified.value;
+          return {
+            state: {
+              authenticated: true,
+              auth: descriptor,
+              role: session.role,
+              sessionMethod: session.method,
+              ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
+            } satisfies AuthSessionState,
+          } satisfies SessionStateResolution;
+        }
+      }
+      // Loopback bypass: mint a fresh session and return its token so the
+      // route can attach it as a Set-Cookie header.
+      if (loopbackBypassEnabled && isLoopbackRequest(request)) {
+        const issued = yield* issueLoopbackSession(request).pipe(
+          Effect.map((session): Option.Option<IssuedSession> => Option.some(session)),
+          Effect.catch(() => Effect.succeed(Option.none<IssuedSession>())),
+        );
+        if (Option.isSome(issued)) {
+          const session = issued.value;
+          return {
+            state: {
+              authenticated: true,
+              auth: descriptor,
+              role: session.role,
+              sessionMethod: session.method,
+              expiresAt: DateTime.toUtc(session.expiresAt),
+            } satisfies AuthSessionState,
+            mintedSession: {
+              token: session.token,
+              expiresAt: session.expiresAt,
+            },
+          } satisfies SessionStateResolution;
+        }
+      }
+      return {
+        state: {
           authenticated: false,
           auth: descriptor,
-        } satisfies AuthSessionState),
-      ),
-    );
+        } satisfies AuthSessionState,
+      } satisfies SessionStateResolution;
+    });
 
   const exchangeBootstrapCredential: ServerAuthShape["exchangeBootstrapCredential"] = (
     credential,
@@ -319,7 +418,10 @@ export const makeServerAuth = Effect.gen(function* () {
     issuePairingCredential({ role: "owner" }).pipe(
       Effect.map((issued) => {
         const url = new URL(baseUrl);
-        url.pathname = "/pair";
+        // ru-fork: preserve any --base-url prefix already in
+        // baseUrl.pathname (the caller passes `${bindUrl}${basePath}`).
+        const existing = url.pathname.replace(/\/+$/, "");
+        url.pathname = existing.length > 0 ? `${existing}/pair` : "/pair";
         url.searchParams.delete("token");
         url.hash = new URLSearchParams([["token", issued.credential]]).toString();
         return url.toString();

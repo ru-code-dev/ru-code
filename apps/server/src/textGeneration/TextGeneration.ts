@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -10,7 +11,7 @@ import {
 } from "../provider/Services/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 
-export type TextGenerationProvider = "codex" | "claudeAgent" | "cursor" | "opencode";
+export type TextGenerationProvider = typeof CLI_NAME;
 
 export interface CommitMessageGenerationInput {
   cwd: string;

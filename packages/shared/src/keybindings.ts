@@ -4,7 +4,8 @@ import {
   type KeybindingWhenNode,
   MAX_KEYBINDINGS_COUNT,
   MAX_WHEN_EXPRESSION_DEPTH,
-  MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
+  // ru-fork: import retained because the mapper below is commented out, not deleted; remove if re-sync drops the dead block too.
+  // MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
   type ResolvedKeybindingRule,
   type ResolvedKeybindingsConfig,
   THREAD_JUMP_KEYBINDING_COMMANDS,
@@ -28,7 +29,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },
-  { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  // ru-fork: model-picker UI is removed (single-provider build), so its
+  // keybindings are dropped from the defaults to keep the settings panel
+  // free of unreachable commands. Re-enable if a model picker is restored.
+  // { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   { key: "mod+o", command: "editor.openFavorite" },
   { key: "mod+shift+[", command: "thread.previous" },
   { key: "mod+shift+]", command: "thread.next" },
@@ -36,11 +40,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     key: `mod+${index + 1}`,
     command,
   })),
-  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
-    key: `mod+${index + 1}`,
-    command,
-    when: "modelPickerOpen",
-  })),
+  // ru-fork: see note above — modelPicker.jump.1..9 disabled along with modelPicker.toggle.
+  // ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
+  //   key: `mod+${index + 1}`,
+  //   command,
+  //   when: "modelPickerOpen",
+  // })),
 ];
 
 function normalizeKeyToken(token: string): string {

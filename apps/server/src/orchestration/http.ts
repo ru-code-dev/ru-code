@@ -5,9 +5,11 @@ import {
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
+// ru-fork: mount orchestration routes under --base-url.
+import { prefixedRouteLayer } from "../ru-fork/basePath/basePath.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
@@ -39,7 +41,7 @@ const authenticateOwnerSession = Effect.gen(function* () {
   return session;
 });
 
-export const orchestrationSnapshotRouteLayer = HttpRouter.add(
+export const orchestrationSnapshotRouteLayer = prefixedRouteLayer(
   "GET",
   "/api/orchestration/snapshot",
   Effect.gen(function* () {
@@ -63,7 +65,7 @@ export const orchestrationSnapshotRouteLayer = HttpRouter.add(
   ),
 );
 
-export const orchestrationDispatchRouteLayer = HttpRouter.add(
+export const orchestrationDispatchRouteLayer = prefixedRouteLayer(
   "POST",
   "/api/orchestration/dispatch",
   Effect.gen(function* () {

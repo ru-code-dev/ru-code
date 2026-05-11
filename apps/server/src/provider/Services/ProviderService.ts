@@ -80,11 +80,30 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Force-kill every active provider session across all adapters
+   * (SIGKILL via the adapter's `end-force` path). Called from
+   * `/shutdown` and the SIGINT/SIGTERM fast path so the daemon can exit
+   * without waiting on Effect Layer finalizers. Best-effort: errors
+   * during teardown are swallowed by the caller.
+   */
+  readonly stopAll: () => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * List active provider sessions.
    *
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /**
+   * Whether the active session for `threadId` is parked waiting on a
+   * user-side response (held permission/approval Deferred or held
+   * user-input Deferred). Returns `false` if no session exists.
+   *
+   * Used by the reactor to auto-interrupt before dispatching a new turn
+   * — see specs/done/stop-acp-session.md "Send-while-parked".
+   */
+  readonly hasParkedRequests: (threadId: ThreadId) => Effect.Effect<boolean, ProviderServiceError>;
 
   /**
    * Read capabilities for the adapter bound to a configured provider instance.

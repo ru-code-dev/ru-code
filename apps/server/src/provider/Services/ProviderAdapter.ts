@@ -16,6 +16,7 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  RuntimeMode,
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
@@ -70,11 +71,17 @@ export interface ProviderAdapterShape<TError> {
 
   /**
    * Respond to an interactive approval request.
+   *
+   * ru-fork: `runtimeMode` carries the live dropdown value at the moment
+   * the user submits the response. CliAdapter uses it to pick proceed_always
+   * vs proceed_once for `exit_plan_mode` and to refresh its internal mirror so
+   * the parked requestPermission callback resumes with the current value.
    */
   readonly respondToRequest: (
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
+    runtimeMode: RuntimeMode,
   ) => Effect.Effect<void, TError>;
 
   /**
@@ -100,6 +107,18 @@ export interface ProviderAdapterShape<TError> {
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
+   * Whether the active session (if any) is currently parked waiting on a
+   * user-side response — held permission/approval Deferred or held
+   * user-input Deferred. Used by the reactor to auto-interrupt a parked
+   * session before dispatching a new turn so the held RPC settles
+   * before the new prompt fires (otherwise both sides deadlock — see
+   * specs/done/stop-acp-session.md "Send-while-parked").
+   *
+   * Returns `false` for non-existent / stopped sessions.
+   */
+  readonly hasParkedRequests: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
    * Read a provider thread snapshot.

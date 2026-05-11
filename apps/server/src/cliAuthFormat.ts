@@ -34,7 +34,12 @@ export function formatIssuedPairingCredential(
   const pairUrl =
     options?.baseUrl != null && options.baseUrl.length > 0
       ? (() => {
-          const url = new URL("/pair", options.baseUrl);
+          // ru-fork: preserve any --base-url prefix encoded in
+          // options.baseUrl.pathname; append /pair to it instead of
+          // overwriting.
+          const url = new URL(options.baseUrl);
+          const existing = url.pathname.replace(/\/+$/, "");
+          url.pathname = existing.length > 0 ? `${existing}/pair` : "/pair";
           url.searchParams.delete("token");
           url.hash = new URLSearchParams([["token", credential.credential]]).toString();
           return url.toString();

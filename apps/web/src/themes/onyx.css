@@ -1,0 +1,105 @@
+/* Onyx — premium / VIP palette.
+ * Light: warm cream paper + bronze primary + oxblood accent.
+ * Dark:  rich obsidian + champagne gold primary + wine accent.
+ *
+ * Restrained palette, tight 0.5rem radius for a refined fintech /
+ * luxury-app feel. Shadows are dense and warm-tinted on light, deep
+ * black on dark. No color glow — depth, not energy.
+ */
+@layer base {
+  [data-theme="onyx"] {
+    --background: oklch(0.97 0.012 88);
+    --foreground: oklch(0.2 0.008 65);
+    --card: oklch(0.99 0.006 90);
+    --card-foreground: oklch(0.2 0.008 65);
+    --popover: oklch(0.99 0.006 90);
+    --popover-foreground: oklch(0.2 0.008 65);
+    --primary: oklch(0.52 0.115 65);
+    --primary-foreground: oklch(0.97 0.012 88);
+    --secondary: oklch(0.93 0.015 80);
+    --secondary-foreground: oklch(0.28 0.01 65);
+    --muted: oklch(0.93 0.015 80);
+    --muted-foreground: oklch(0.48 0.012 70);
+    --accent: oklch(0.92 0.04 25);
+    --accent-foreground: oklch(0.4 0.13 18);
+    --destructive: oklch(0.52 0.18 25);
+    --border: oklch(0.88 0.012 75);
+    --input: oklch(0.88 0.012 75);
+    --ring: oklch(0.52 0.115 65);
+
+    --chart-1: oklch(0.55 0.12 65);
+    --chart-2: oklch(0.4 0.13 18);
+    --chart-3: oklch(0.45 0.05 65);
+    --chart-4: oklch(0.65 0.06 75);
+    --chart-5: oklch(0.3 0.015 70);
+
+    --sidebar: oklch(0.95 0.018 85);
+    --sidebar-foreground: oklch(0.2 0.008 65);
+    --sidebar-primary: oklch(0.52 0.115 65);
+    --sidebar-primary-foreground: oklch(0.97 0.012 88);
+    --sidebar-accent: oklch(0.91 0.025 80);
+    --sidebar-accent-foreground: oklch(0.28 0.01 65);
+    --sidebar-border: oklch(0.88 0.012 75);
+    --sidebar-ring: oklch(0.52 0.115 65);
+
+    --radius: 0.5rem;
+
+    /* Warm-toned, dense shadows */
+    --shadow-2xs: 0 1px 2px 0 oklch(0.2 0.04 60 / 0.08);
+    --shadow-xs: 0 1px 3px 0 oklch(0.2 0.04 60 / 0.1);
+    --shadow-sm: 0 1px 2px 0 oklch(0.2 0.04 60 / 0.12), 0 1px 1px 0 oklch(0.2 0.04 60 / 0.08);
+    --shadow: 0 2px 4px -1px oklch(0.2 0.04 60 / 0.14), 0 1px 2px -1px oklch(0.2 0.04 60 / 0.08);
+    --shadow-md: 0 4px 8px -2px oklch(0.2 0.04 60 / 0.14), 0 2px 4px -2px oklch(0.2 0.04 60 / 0.1);
+    --shadow-lg:
+      0 12px 20px -4px oklch(0.2 0.04 60 / 0.16), 0 6px 10px -4px oklch(0.2 0.04 60 / 0.1);
+    --shadow-xl:
+      0 24px 32px -8px oklch(0.2 0.04 60 / 0.2), 0 10px 14px -6px oklch(0.2 0.04 60 / 0.12);
+    --shadow-2xl: 0 32px 48px -12px oklch(0.2 0.04 60 / 0.32);
+  }
+
+  .dark[data-theme="onyx"] {
+    --background: oklch(0.14 0.008 65);
+    --foreground: oklch(0.95 0.012 90);
+    --card: oklch(0.18 0.01 65);
+    --card-foreground: oklch(0.95 0.012 90);
+    --popover: oklch(0.18 0.01 65);
+    --popover-foreground: oklch(0.95 0.012 90);
+    --primary: oklch(0.79 0.11 82);
+    --primary-foreground: oklch(0.14 0.008 65);
+    --secondary: oklch(0.22 0.012 70);
+    --secondary-foreground: oklch(0.95 0.012 90);
+    --muted: oklch(0.22 0.012 70);
+    --muted-foreground: oklch(0.72 0.012 80);
+    --accent: oklch(0.32 0.08 22);
+    --accent-foreground: oklch(0.86 0.06 32);
+    --destructive: oklch(0.65 0.18 25);
+    --border: oklch(0.25 0.012 70);
+    --input: oklch(0.27 0.012 70);
+    --ring: oklch(0.79 0.11 82);
+
+    --chart-1: oklch(0.79 0.11 82);
+    --chart-2: oklch(0.55 0.16 22);
+    --chart-3: oklch(0.6 0.08 75);
+    --chart-4: oklch(0.85 0.06 88);
+    --chart-5: oklch(0.45 0.012 75);
+
+    --sidebar: oklch(0.12 0.008 65);
+    --sidebar-foreground: oklch(0.92 0.012 90);
+    --sidebar-primary: oklch(0.79 0.11 82);
+    --sidebar-primary-foreground: oklch(0.14 0.008 65);
+    --sidebar-accent: oklch(0.2 0.012 70);
+    --sidebar-accent-foreground: oklch(0.92 0.012 90);
+    --sidebar-border: oklch(0.2 0.012 70);
+    --sidebar-ring: oklch(0.79 0.11 82);
+
+    /* Pure deep black shadows — crisp, no tint, no glow */
+    --shadow-2xs: 0 1px 2px 0 oklch(0 0 0 / 0.5);
+    --shadow-xs: 0 1px 3px 0 oklch(0 0 0 / 0.6);
+    --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.7), 0 1px 2px -1px oklch(0 0 0 / 0.5);
+    --shadow: 0 2px 4px -1px oklch(0 0 0 / 0.7), 0 1px 2px -1px oklch(0 0 0 / 0.5);
+    --shadow-md: 0 6px 10px -2px oklch(0 0 0 / 0.7), 0 3px 5px -2px oklch(0 0 0 / 0.5);
+    --shadow-lg: 0 14px 22px -4px oklch(0 0 0 / 0.75), 0 6px 10px -4px oklch(0 0 0 / 0.55);
+    --shadow-xl: 0 28px 38px -8px oklch(0 0 0 / 0.85), 0 12px 18px -6px oklch(0 0 0 / 0.6);
+    --shadow-2xl: 0 36px 54px -12px oklch(0 0 0 / 0.95);
+  }
+}

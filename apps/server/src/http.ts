@@ -1,20 +1,11 @@
 import Mime from "@effect/platform-node/Mime";
-import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import { cast } from "effect/Function";
-import {
-  HttpBody,
-  HttpClient,
-  HttpClientResponse,
-  HttpRouter,
-  HttpServerResponse,
-  HttpServerRequest,
-} from "effect/unstable/http";
-import { OtlpTracer } from "effect/unstable/observability";
+import { HttpRouter, HttpServerResponse, HttpServerRequest } from "effect/unstable/http";
 
 import {
   ATTACHMENTS_ROUTE_PREFIX,
@@ -23,20 +14,29 @@ import {
 } from "./attachmentPaths.ts";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { resolveStaticDir, ServerConfig } from "./config.ts";
-import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
+// ru-fork: route registration through `prefixedRouteLayer` so every
+// HTTP route is mounted under the configured `--base-url` prefix at
+// layer-build time. With an empty prefix this is a no-op.
+import { prefixedRouteLayer } from "./ru-fork/basePath/basePath.ts";
+import {
+  rewriteIndexHtmlForBasePath,
+  rewriteWebmanifestForBasePath,
+} from "./ru-fork/basePath/htmlRewrite.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { readRemoteAddressFromSource } from "./auth/utils.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { runFastShutdownCleanup } from "./fastShutdown.ts";
 import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   browserApiCorsHeaders,
 } from "./httpCors.ts";
+import { resolveStartupBrowserTarget } from "./startupAccess.ts";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
-const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export const browserApiCorsLayer = HttpRouter.cors({
@@ -67,7 +67,20 @@ const requireAuthenticatedRequest = Effect.gen(function* () {
   yield* serverAuth.authenticateHttpRequest(request);
 });
 
-export const serverEnvironmentRouteLayer = HttpRouter.add(
+class LoopbackOnlyError extends Data.TaggedError("LoopbackOnlyError")<{}> {}
+
+const requireLoopbackRequest = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const remoteAddress = readRemoteAddressFromSource(request.source);
+  if (!remoteAddress || !isLoopbackHostname(remoteAddress)) {
+    return yield* new LoopbackOnlyError();
+  }
+});
+
+const respondToLoopbackOnlyError = (_error: LoopbackOnlyError) =>
+  Effect.succeed(HttpServerResponse.text("Forbidden", { status: 403 }));
+
+export const serverEnvironmentRouteLayer = prefixedRouteLayer(
   "GET",
   "/.well-known/t3/environment",
   Effect.gen(function* () {
@@ -81,61 +94,78 @@ export const serverEnvironmentRouteLayer = HttpRouter.add(
   }),
 );
 
-class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
-  readonly cause: unknown;
-  readonly bodyJson: OtlpTracer.TraceData;
-}> {}
-
-export const otlpTracesProxyRouteLayer = HttpRouter.add(
-  "POST",
-  OTLP_TRACES_PROXY_PATH,
-  Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const config = yield* ServerConfig;
-    const otlpTracesUrl = config.otlpTracesUrl;
-    const browserTraceCollector = yield* BrowserTraceCollector;
-    const httpClient = yield* HttpClient.HttpClient;
-    const bodyJson = cast<unknown, OtlpTracer.TraceData>(yield* request.json);
-
-    yield* Effect.try({
-      try: () => decodeOtlpTraceRecords(bodyJson),
-      catch: (cause) => new DecodeOtlpTraceRecordsError({ cause, bodyJson }),
-    }).pipe(
-      Effect.flatMap((records) => browserTraceCollector.record(records)),
-      Effect.catch((cause) =>
-        Effect.logWarning("Failed to decode browser OTLP traces", {
-          cause,
-          bodyJson,
-        }),
-      ),
-    );
-
-    if (otlpTracesUrl === undefined) {
-      return HttpServerResponse.empty({ status: 204 });
-    }
-
-    return yield* httpClient
-      .post(otlpTracesUrl, {
-        body: HttpBody.jsonUnsafe(bodyJson),
-      })
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.as(HttpServerResponse.empty({ status: 204 })),
-        Effect.tapError((cause) =>
-          Effect.logWarning("Failed to export browser OTLP traces", {
-            cause,
-            otlpTracesUrl,
-          }),
-        ),
-        Effect.catch(() =>
-          Effect.succeed(HttpServerResponse.text("Trace export failed.", { status: 502 })),
-        ),
-      );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+export const healthRouteLayer = prefixedRouteLayer(
+  "GET",
+  "/health",
+  Effect.succeed(HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 })),
 );
 
-export const attachmentsRouteLayer = HttpRouter.add(
+// Small grace delay so the 200 response flushes to the wire before the
+// HttpServer/route layer is torn down by the shutdown chain. Without it the
+// route handler can return, the runtime sees the signal, interrupts the
+// launch fiber, and closes the socket before the response reaches the client.
+const SHUTDOWN_RESPONSE_FLUSH_DELAY = Duration.millis(50);
+
+class PairingStartupError extends Data.TaggedError("PairingStartupError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+// Loopback-only endpoint so the daemon launcher can fetch the same browser
+// target the foreground startup would auto-open: in desktop mode a bare URL,
+// in web mode the pairing URL with a one-time token. Mirrors the /shutdown
+// pattern (loopback gate, no bearer auth required).
+export const pairingStartupRouteLayer = prefixedRouteLayer(
+  "POST",
+  "/pair/startup",
+  Effect.gen(function* () {
+    yield* requireLoopbackRequest;
+    const url = yield* resolveStartupBrowserTarget.pipe(
+      Effect.mapError(
+        (cause) =>
+          new PairingStartupError({
+            message: "Failed to issue startup pairing URL.",
+            cause,
+          }),
+      ),
+    );
+    return HttpServerResponse.jsonUnsafe({ url }, { status: 200 });
+  }).pipe(
+    Effect.catchTag("LoopbackOnlyError", respondToLoopbackOnlyError),
+    Effect.catchTag("PairingStartupError", (error) =>
+      Effect.succeed(HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 500 })),
+    ),
+  ),
+);
+
+export const shutdownRouteLayer = prefixedRouteLayer(
+  "POST",
+  "/shutdown",
+  Effect.gen(function* () {
+    yield* requireLoopbackRequest;
+    // Fast-exit. We deliberately skip the Effect Layer finalizer chain
+    // (NodeHttpServer graceful close 20s default + sqlite + reactors +
+    // adapters) — empirically that chain held the node process for ~2
+    // minutes even after CLI children were SIGKILLed. The shared
+    // cleanup in `fastShutdown.ts` does the hot work (kill children,
+    // clear state file); SQLite WAL is engineered to survive process
+    // exit, so we lose only uncommitted in-flight transactions.
+    yield* runFastShutdownCleanup;
+    yield* Effect.logInfo("shutdown requested via /shutdown — exiting");
+    // `forkDetach` so the 200 response flushes before we exit.
+    // `Effect.fork` would tie this to the request fiber and get
+    // interrupted before the delay elapses.
+    yield* Effect.forkDetach(
+      Effect.delay(
+        Effect.sync(() => process.exit(0)),
+        SHUTDOWN_RESPONSE_FLUSH_DELAY,
+      ),
+    );
+    return HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 });
+  }).pipe(Effect.catchTag("LoopbackOnlyError", respondToLoopbackOnlyError)),
+);
+
+export const attachmentsRouteLayer = prefixedRouteLayer(
   "GET",
   `${ATTACHMENTS_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
@@ -147,7 +177,14 @@ export const attachmentsRouteLayer = HttpRouter.add(
     }
 
     const config = yield* ServerConfig;
-    const rawRelativePath = url.value.pathname.slice(ATTACHMENTS_ROUTE_PREFIX.length);
+    // ru-fork: when a --base-url prefix is configured the route is
+    // registered under it; strip the prefix before slicing the attachments
+    // route prefix off so the relative path matches the on-disk layout.
+    const pathnameInsideBase =
+      config.basePath.length > 0 && url.value.pathname.startsWith(config.basePath)
+        ? url.value.pathname.slice(config.basePath.length)
+        : url.value.pathname;
+    const rawRelativePath = pathnameInsideBase.slice(ATTACHMENTS_ROUTE_PREFIX.length);
     const normalizedRelativePath = normalizeAttachmentRelativePath(rawRelativePath);
     if (!normalizedRelativePath) {
       return HttpServerResponse.text("Invalid attachment path", { status: 400 });
@@ -191,7 +228,7 @@ export const attachmentsRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );
 
-export const projectFaviconRouteLayer = HttpRouter.add(
+export const projectFaviconRouteLayer = prefixedRouteLayer(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
@@ -250,6 +287,21 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       });
     }
 
+    // ru-fork: the catch-all stays registered at "*" (no prefixing on
+    // the pattern itself — that would miss "/<basePath>" without a
+    // trailing slash). Inside the handler we gate on basePath manually
+    // and slice it off before resolving the static file.
+    let effectivePathname = url.value.pathname;
+    if (config.basePath.length > 0) {
+      if (effectivePathname === config.basePath || effectivePathname === `${config.basePath}/`) {
+        effectivePathname = "/";
+      } else if (effectivePathname.startsWith(`${config.basePath}/`)) {
+        effectivePathname = effectivePathname.slice(config.basePath.length);
+      } else {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
+    }
+
     const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
     if (!staticDir) {
       return HttpServerResponse.text("No static directory configured and no dev URL set.", {
@@ -260,7 +312,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const staticRoot = path.resolve(staticDir);
-    const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
+    const staticRequestPath = effectivePathname === "/" ? "/index.html" : effectivePathname;
     const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
     const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
     const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
@@ -302,10 +354,15 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       if (!indexData) {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
-      return HttpServerResponse.uint8Array(indexData, {
-        status: 200,
-        contentType: "text/html; charset=utf-8",
-      });
+      // ru-fork: SPA fallback — inject runtime config + (when a
+      // base-path is configured) prepend it to every absolute asset URL.
+      return HttpServerResponse.uint8Array(
+        rewriteIndexHtmlForBasePath(indexData, config.basePath),
+        {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+        },
+      );
     }
 
     const contentType = Mime.getType(filePath) ?? "application/octet-stream";
@@ -314,6 +371,21 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!data) {
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
+    }
+
+    // ru-fork: the explicit /index.html request and PWA webmanifests
+    // need the same rewriting as the SPA fallback above.
+    if (filePath.endsWith(`${path.sep}index.html`) || filePath.endsWith("/index.html")) {
+      return HttpServerResponse.uint8Array(rewriteIndexHtmlForBasePath(data, config.basePath), {
+        status: 200,
+        contentType,
+      });
+    }
+    if (filePath.endsWith(".webmanifest")) {
+      return HttpServerResponse.uint8Array(rewriteWebmanifestForBasePath(data, config.basePath), {
+        status: 200,
+        contentType,
+      });
     }
 
     return HttpServerResponse.uint8Array(data, {

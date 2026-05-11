@@ -44,18 +44,6 @@ interface ChatHeaderProps {
   onToggleDiff: () => void;
 }
 
-export function shouldShowOpenInPicker(input: {
-  readonly activeProjectName: string | undefined;
-  readonly activeThreadEnvironmentId: EnvironmentId;
-  readonly primaryEnvironmentId: EnvironmentId | null;
-}): boolean {
-  return (
-    Boolean(input.activeProjectName) &&
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
-  );
-}
-
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
@@ -82,11 +70,8 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleDiff,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const showOpenInPicker = shouldShowOpenInPicker({
-    activeProjectName,
-    activeThreadEnvironmentId,
-    primaryEnvironmentId,
-  });
+  const isRemoteEnvironment =
+    primaryEnvironmentId !== null && activeThreadEnvironmentId !== primaryEnvironmentId;
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2">
@@ -105,7 +90,7 @@ export const ChatHeader = memo(function ChatHeader({
         )}
         {activeProjectName && !isGitRepo && (
           <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
-            No Git
+            Нет Git
           </Badge>
         )}
       </div>
@@ -121,7 +106,7 @@ export const ChatHeader = memo(function ChatHeader({
             onDeleteScript={onDeleteProjectScript}
           />
         )}
-        {showOpenInPicker && (
+        {activeProjectName && !isRemoteEnvironment && (
           <OpenInPicker
             keybindings={keybindings}
             availableEditors={availableEditors}
@@ -153,10 +138,10 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="bottom">
             {!terminalAvailable
-              ? "Terminal is unavailable until this thread has an active project."
+              ? "Терминал недоступен, пока у диалога нет активного проекта."
               : terminalToggleShortcutLabel
-                ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
-                : "Toggle terminal drawer"}
+                ? `Показать/скрыть терминал (${terminalToggleShortcutLabel})`
+                : "Показать/скрыть терминал"}
           </TooltipPopup>
         </Tooltip>
         <Tooltip>
@@ -177,10 +162,10 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="bottom">
             {!isGitRepo && !diffOpen
-              ? "Diff panel is unavailable because this project is not a git repository."
+              ? "Панель diff недоступна: этот проект не является git-репозиторием."
               : diffToggleShortcutLabel
-                ? `Toggle diff panel (${diffToggleShortcutLabel})`
-                : "Toggle diff panel"}
+                ? `Показать/скрыть панель diff (${diffToggleShortcutLabel})`
+                : "Показать/скрыть панель diff"}
           </TooltipPopup>
         </Tooltip>
       </div>

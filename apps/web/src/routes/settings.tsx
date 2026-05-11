@@ -25,7 +25,7 @@ function RestoreDefaultsButton({ onRestored }: { onRestored: () => void }) {
       onClick={() => void restoreDefaults()}
     >
       <RotateCcwIcon className="size-3.5" />
-      Restore defaults
+      Сбросить настройки
     </Button>
   );
 }
@@ -67,7 +67,7 @@ function SettingsContentLayout() {
           <header className="border-b border-border px-3 py-2 sm:px-5">
             <div className="flex min-h-7 items-center gap-2 sm:min-h-6">
               <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-              <span className="text-sm font-medium text-foreground">Settings</span>
+              <span className="text-sm font-medium text-foreground">Настройки</span>
               {showRestoreDefaults ? (
                 <div className="ms-auto flex items-center gap-2">
                   <RestoreDefaultsButton onRestored={handleRestored} />
@@ -80,7 +80,7 @@ function SettingsContentLayout() {
         {isElectron && (
           <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5 wco:h-[env(titlebar-area-height)] wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]">
             <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
-              Settings
+              Настройки
             </span>
             {showRestoreDefaults ? (
               <div className="ms-auto flex items-center gap-2">
@@ -104,10 +104,7 @@ function SettingsRouteLayout() {
 
 export const Route = createFileRoute("/settings")({
   beforeLoad: async ({ context, location }) => {
-    if (
-      context.authGateState.status !== "authenticated" &&
-      context.authGateState.status !== "hosted-static"
-    ) {
+    if (context.authGateState.status !== "authenticated") {
       throw redirect({ to: "/pair", replace: true });
     }
 

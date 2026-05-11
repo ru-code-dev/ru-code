@@ -47,6 +47,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
+          has_pending_plan_approval,
+          pending_plan_approval_request_id,
           deleted_at
         )
         VALUES (
@@ -66,6 +68,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
+          ${row.hasPendingPlanApproval},
+          ${row.pendingPlanApprovalRequestId},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -85,6 +89,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
+          has_pending_plan_approval = excluded.has_pending_plan_approval,
+          pending_plan_approval_request_id = excluded.pending_plan_approval_request_id,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -111,6 +117,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          has_pending_plan_approval AS "hasPendingPlanApproval",
+          pending_plan_approval_request_id AS "pendingPlanApprovalRequestId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -139,6 +147,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          has_pending_plan_approval AS "hasPendingPlanApproval",
+          pending_plan_approval_request_id AS "pendingPlanApprovalRequestId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

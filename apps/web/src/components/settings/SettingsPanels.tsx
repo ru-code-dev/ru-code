@@ -1,10 +1,9 @@
+import { APP_NAME } from "@ru-fork/branding";
 import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
-  type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
@@ -16,7 +15,8 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
-import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import { APP_VERSION } from "../../branding";
+import { HIDE_EXTRA_FEATURES } from "../../ru-fork/config";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -27,8 +27,7 @@ import {
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
-import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
-import { useTheme } from "../../hooks/useTheme";
+import { DEFAULT_THEME_NAME, THEME_NAMES, THEME_NAME_LABELS, useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import {
@@ -64,10 +63,7 @@ import {
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
-import {
-  buildProviderInstanceUpdatePatch,
-  formatDiagnosticsDescription,
-} from "./SettingsPanels.logic";
+import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -76,27 +72,27 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { useServerObservability, useServerProviders } from "../../rpc/serverState";
+import { useServerProviders } from "../../rpc/serverState";
 
 const THEME_OPTIONS = [
   {
     value: "system",
-    label: "System",
+    label: "Системная",
   },
   {
     value: "light",
-    label: "Light",
+    label: "Светлая",
   },
   {
     value: "dark",
-    label: "Dark",
+    label: "Тёмная",
   },
 ] as const;
 
 const TIMESTAMP_FORMAT_LABELS = {
-  locale: "System default",
-  "12-hour": "12-hour",
-  "24-hour": "24-hour",
+  locale: "Системный",
+  "12-hour": "12-часовой",
+  "24-hour": "24-часовой",
 } as const;
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -155,45 +151,7 @@ function AboutVersionTitle() {
 function AboutVersionSection() {
   const queryClient = useQueryClient();
   const updateStateQuery = useDesktopUpdateState();
-  const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
-
   const updateState = updateStateQuery.data ?? null;
-  const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
-  const selectedUpdateChannel = updateState?.channel ?? "latest";
-  const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
-
-  const handleUpdateChannelChange = useCallback(
-    (channel: DesktopUpdateChannel) => {
-      const bridge = window.desktopBridge;
-      if (
-        !bridge ||
-        typeof bridge.setUpdateChannel !== "function" ||
-        channel === selectedUpdateChannel
-      ) {
-        return;
-      }
-
-      setIsChangingUpdateChannel(true);
-      void bridge
-        .setUpdateChannel(channel)
-        .then((state) => {
-          setDesktopUpdateStateQueryData(queryClient, state);
-        })
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not change update track",
-              description: error instanceof Error ? error.message : "Update track change failed.",
-            }),
-          );
-        })
-        .finally(() => {
-          setIsChangingUpdateChannel(false);
-        });
-    },
-    [queryClient, selectedUpdateChannel],
-  );
 
   const handleButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -313,72 +271,14 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
-      {hasDesktopBridge ? (
-        <SettingsRow
-          title="Update track"
-          description="Stable follows full releases. Nightly follows the nightly desktop channel and can switch back to stable immediately."
-          control={
-            <Select
-              value={selectedUpdateChannel}
-              onValueChange={(value) => {
-                handleUpdateChannelChange(value as DesktopUpdateChannel);
-              }}
-            >
-              <SelectTrigger
-                className="w-full sm:w-40"
-                aria-label="Update track"
-                disabled={isChangingUpdateChannel}
-              >
-                <SelectValue>
-                  {selectedUpdateChannel === "nightly" ? "Nightly" : "Stable"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="latest">
-                  Stable
-                </SelectItem>
-                <SelectItem hideIndicator value="nightly">
-                  Nightly
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : selectedHostedAppChannel ? (
-        <SettingsRow
-          title="Update track"
-          description="Switches the hosted app release channel."
-          control={
-            <Select
-              value={selectedHostedAppChannel}
-              onValueChange={(value) => {
-                if (value === selectedHostedAppChannel) return;
-                window.location.assign(
-                  buildHostedChannelSelectionUrl({ channel: value as HostedAppChannel }),
-                );
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Update track">
-                <SelectValue>{HOSTED_APP_CHANNEL_LABEL}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="latest">
-                  Latest
-                </SelectItem>
-                <SelectItem hideIndicator value="nightly">
-                  Nightly
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : null}
+      {/* This fork drops desktop and hosted update-track UI; it ships
+          self-managed (no auto-update channel switcher). */}
     </>
   );
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, themeName } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
 
@@ -389,42 +289,43 @@ export function useSettingsRestore(onRestored?: () => void) {
 
   const changedSettingLabels = useMemo(
     () => [
-      ...(theme !== "system" ? ["Theme"] : []),
+      ...(theme !== "system" ? ["Тема"] : []),
+      ...(themeName !== DEFAULT_THEME_NAME ? ["Цветовая палитра"] : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
-        ? ["Time format"]
+        ? ["Формат времени"]
         : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
-        ? ["Visible threads"]
+        ? ["Видимые диалоги"]
         : []),
       ...(settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap
-        ? ["Diff line wrapping"]
+        ? ["Перенос строк в diff"]
         : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
-        ? ["Diff whitespace changes"]
+        ? ["Игнорирование пробелов в diff"]
         : []),
       ...(settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar
-        ? ["Auto-open task panel"]
+        ? ["Автооткрытие панели задач"]
         : []),
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
-        ? ["Assistant output"]
+        ? ["Вывод ассистента"]
         : []),
       ...(Duration.toMillis(settings.automaticGitFetchInterval) !==
       Duration.toMillis(DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval)
         ? ["Automatic Git fetch interval"]
         : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
-        ? ["New thread mode"]
+        ? ["Режим новых диалогов"]
         : []),
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
-        ? ["Add project base directory"]
+        ? ["Каталог добавления проектов"]
         : []),
       ...(settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive
-        ? ["Archive confirmation"]
+        ? ["Подтверждение архивации"]
         : []),
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
-        ? ["Delete confirmation"]
+        ? ["Подтверждение удаления"]
         : []),
-      ...(isGitWritingModelDirty ? ["Git writing model"] : []),
+      ...(isGitWritingModelDirty ? ["Модель генерации текста для git"] : []),
     ],
     [
       isGitWritingModelDirty,
@@ -440,6 +341,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       theme,
+      themeName,
     ],
   );
 
@@ -447,9 +349,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (changedSettingLabels.length === 0) return;
     const api = readLocalApi();
     const confirmed = await (api ?? ensureLocalApi()).dialogs.confirm(
-      ["Restore default settings?", `This will reset: ${changedSettingLabels.join(", ")}.`].join(
-        "\n",
-      ),
+      [
+        "Сбросить настройки по умолчанию?",
+        `Будут сброшены: ${changedSettingLabels.join(", ")}.`,
+      ].join("\n"),
     );
     if (!confirmed) return;
 
@@ -478,18 +381,10 @@ export function useSettingsRestore(onRestored?: () => void) {
 }
 
 export function GeneralSettingsPanel() {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, themeName, setThemeName } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
-  const observability = useServerObservability();
   const serverProviders = useServerProviders();
-  const diagnosticsDescription = formatDiagnosticsDescription({
-    localTracingEnabled: observability?.localTracingEnabled ?? false,
-    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
-    otlpTracesUrl: observability?.otlpTracesUrl,
-    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
-    otlpMetricsUrl: observability?.otlpMetricsUrl,
-  });
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
@@ -516,10 +411,10 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="General">
+      <SettingsSection title="Общие">
         <SettingsRow
-          title="Theme"
-          description="Choose how T3 Code looks across the app."
+          title="Тема"
+          description={`Выберите, как ${APP_NAME} будет выглядеть в приложении.`}
           resetAction={
             theme !== "system" ? (
               <SettingResetButton label="theme" onClick={() => setTheme("system")} />
@@ -536,7 +431,7 @@ export function GeneralSettingsPanel() {
             >
               <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
                 <SelectValue>
-                  {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
+                  {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "Системная"}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -551,8 +446,42 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Time format"
-          description="System default follows your browser or OS clock preference."
+          title="Цветовая палитра"
+          description="Выберите палитру. Светлый/тёмный режим по-прежнему задаётся настройкой Тема выше."
+          resetAction={
+            themeName !== DEFAULT_THEME_NAME ? (
+              <SettingResetButton
+                label="color theme"
+                onClick={() => setThemeName(DEFAULT_THEME_NAME)}
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={themeName}
+              onValueChange={(value) => {
+                if (value !== null && (THEME_NAMES as readonly string[]).includes(value)) {
+                  setThemeName(value as (typeof THEME_NAMES)[number]);
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Color theme">
+                <SelectValue>{THEME_NAME_LABELS[themeName] ?? APP_NAME}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {THEME_NAMES.map((name) => (
+                  <SelectItem hideIndicator key={name} value={name}>
+                    {THEME_NAME_LABELS[name]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Формат времени"
+          description="Системный использует настройки часов браузера или ОС."
           resetAction={
             settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat ? (
               <SettingResetButton
@@ -593,8 +522,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Diff line wrapping"
-          description="Set the default wrap state when the diff panel opens."
+          title="Перенос строк в diff"
+          description="Состояние переноса по умолчанию при открытии панели diff."
           resetAction={
             settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap ? (
               <SettingResetButton
@@ -617,8 +546,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Hide whitespace changes"
-          description="Set whether the diff panel ignores whitespace-only edits by default."
+          title="Игнорирование пробелов в diff"
+          description="Состояние игнорирования пробелов по умолчанию при открытии панели diff."
           resetAction={
             settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
               <SettingResetButton
@@ -643,8 +572,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Assistant output"
-          description="Show token-by-token output while a response is in progress."
+          title="Вывод ассистента"
+          description="Показывать вывод по токенам во время ответа."
           resetAction={
             settings.enableAssistantStreaming !==
             DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming ? (
@@ -670,8 +599,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Auto-open task panel"
-          description="Open the right-side plan and task panel automatically when steps appear."
+          title="Автооткрытие панели задач"
+          description="Автоматически открывать правую панель плана и задач при появлении шагов."
           resetAction={
             settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar ? (
               <SettingResetButton
@@ -696,8 +625,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
+          title="Новые диалоги"
+          description="Режим рабочей области по умолчанию для новых черновых диалогов."
           resetAction={
             settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
               <SettingResetButton
@@ -721,15 +650,17 @@ export function GeneralSettingsPanel() {
             >
               <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
                 <SelectValue>
-                  {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+                  {settings.defaultThreadEnvMode === "worktree"
+                    ? "Новый worktree"
+                    : "В репозитории"}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="local">
-                  Local
+                  В репозитории
                 </SelectItem>
                 <SelectItem hideIndicator value="worktree">
-                  New worktree
+                  Новый worktree
                 </SelectItem>
               </SelectPopup>
             </Select>
@@ -737,8 +668,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Add project starts in"
-          description='Leave empty to use "~/" when the Add Project browser opens.'
+          title="Добавление проекта начинается с"
+          description='Оставьте пустым, чтобы использовать "~/" при открытии браузера проектов.'
           resetAction={
             settings.addProjectBaseDirectory !==
             DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
@@ -765,8 +696,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Archive confirmation"
-          description="Require a second click on the inline archive action before a thread is archived."
+          title="Подтверждение архивации"
+          description="Требовать второй клик на встроенной кнопке архивации перед архивацией диалога."
           resetAction={
             settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
               <SettingResetButton
@@ -791,8 +722,8 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Delete confirmation"
-          description="Ask before deleting a thread and its chat history."
+          title="Подтверждение удаления"
+          description="Спрашивать перед удалением диалога и истории чата."
           resetAction={
             settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete ? (
               <SettingResetButton
@@ -816,99 +747,89 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        <SettingsRow
-          title="Text generation model"
-          description="Configure the model used for generated commit messages, PR titles, and similar Git text."
-          resetAction={
-            isGitWritingModelDirty ? (
-              <SettingResetButton
-                label="text generation model"
-                onClick={() =>
-                  updateSettings({
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <ProviderModelPicker
-                activeInstanceId={textGenInstanceId}
-                model={textGenModel}
-                lockedProvider={null}
-                instanceEntries={gitModelInstanceEntries}
-                modelOptionsByInstance={gitModelOptionsByInstance}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onInstanceModelChange={(instanceId, model) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: createModelSelection(instanceId, model),
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-              <TraitsPicker
-                provider={textGenProvider}
-                models={
-                  // Use the exact instance's models (rather than the
-                  // first-kind-match) so a custom text-gen instance like
-                  // `codex_personal` gets its own model list, not the
-                  // default Codex one.
-                  textGenInstanceEntry?.models ?? []
-                }
-                model={textGenModel}
-                prompt=""
-                onPromptChange={() => {}}
-                modelOptions={textGenModelOptions}
-                allowPromptInjectedEffort={false}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onModelOptionsChange={(nextOptions) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: createModelSelection(
-                          textGenInstanceId,
-                          textGenModel,
-                          nextOptions,
-                        ),
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-            </div>
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection title="About">
-        {isElectron || HOSTED_APP_CHANNEL ? (
-          <AboutVersionSection />
-        ) : (
+        {!HIDE_EXTRA_FEATURES && (
           <SettingsRow
-            title={<AboutVersionTitle />}
-            description="Current version of the application."
+            title="Text generation model"
+            description="Configure the model used for generated commit messages, PR titles, and similar Git text."
+            resetAction={
+              isGitWritingModelDirty ? (
+                <SettingResetButton
+                  label="text generation model"
+                  onClick={() =>
+                    updateSettings({
+                      textGenerationModelSelection:
+                        DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                <ProviderModelPicker
+                  activeInstanceId={textGenInstanceId}
+                  model={textGenModel}
+                  lockedProvider={null}
+                  instanceEntries={gitModelInstanceEntries}
+                  modelOptionsByInstance={gitModelOptionsByInstance}
+                  triggerVariant="outline"
+                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  onInstanceModelChange={(instanceId, model) => {
+                    updateSettings({
+                      textGenerationModelSelection: resolveAppModelSelectionState(
+                        {
+                          ...settings,
+                          textGenerationModelSelection: createModelSelection(instanceId, model),
+                        },
+                        serverProviders,
+                      ),
+                    });
+                  }}
+                />
+                <TraitsPicker
+                  provider={textGenProvider}
+                  models={
+                    // Use the exact instance's models (rather than the
+                    // first-kind-match) so a custom text-gen instance like
+                    // `codex_personal` gets its own model list, not the
+                    // default Codex one.
+                    textGenInstanceEntry?.models ?? []
+                  }
+                  model={textGenModel}
+                  prompt=""
+                  onPromptChange={() => {}}
+                  modelOptions={textGenModelOptions}
+                  allowPromptInjectedEffort={false}
+                  triggerVariant="outline"
+                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  onModelOptionsChange={(nextOptions) => {
+                    updateSettings({
+                      textGenerationModelSelection: resolveAppModelSelectionState(
+                        {
+                          ...settings,
+                          textGenerationModelSelection: createModelSelection(
+                            textGenInstanceId,
+                            textGenModel,
+                            nextOptions,
+                          ),
+                        },
+                        serverProviders,
+                      ),
+                    });
+                  }}
+                />
+              </div>
+            }
           />
         )}
-        <SettingsRow
-          title="Diagnostics"
-          description={diagnosticsDescription}
-          control={
-            <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
-              View diagnostics
-            </Button>
-          }
-        />
+      </SettingsSection>
+
+      <SettingsSection title="О программе">
+        {isElectron ? (
+          <AboutVersionSection />
+        ) : (
+          <SettingsRow title={<AboutVersionTitle />} description="Текущая версия приложения." />
+        )}
       </SettingsSection>
     </SettingsPageContainer>
   );
@@ -1392,8 +1313,8 @@ export function ArchivedThreadsPanel() {
       if (!api) return;
       const clicked = await api.contextMenu.show(
         [
-          { id: "unarchive", label: "Unarchive" },
-          { id: "delete", label: "Delete", destructive: true },
+          { id: "unarchive", label: "Восстановить из архива" },
+          { id: "delete", label: "Удалить", destructive: true },
         ],
         position,
       );
@@ -1406,8 +1327,8 @@ export function ArchivedThreadsPanel() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to unarchive thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
+              title: "Не удалось восстановить диалог",
+              description: error instanceof Error ? error.message : "Произошла ошибка.",
             }),
           );
         }
@@ -1425,7 +1346,7 @@ export function ArchivedThreadsPanel() {
   return (
     <SettingsPageContainer>
       {archivedGroups.length === 0 ? (
-        <SettingsSection title="Archived threads">
+        <SettingsSection title="Архивные диалоги">
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
@@ -1435,16 +1356,16 @@ export function ArchivedThreadsPanel() {
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
                 {isLoadingArchive
-                  ? "Loading archived threads"
+                  ? "Загружаю архивные диалоги"
                   : archiveError
-                    ? "Could not load archived threads"
-                    : "No archived threads"}
+                    ? "Не удалось загрузить архивные диалоги"
+                    : "Нет архивных диалогов"}
               </span>
             }
             description={
               isLoadingArchive
-                ? "Checking connected environments."
-                : (archiveError ?? "Archived threads will appear here.")
+                ? "Проверяю подключение к серверу."
+                : (archiveError ?? "Архивные диалоги появятся здесь.")
             }
           />
         </SettingsSection>
@@ -1471,8 +1392,8 @@ export function ArchivedThreadsPanel() {
                 title={thread.title}
                 description={
                   <>
-                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                    {" \u00b7 Created "}
+                    Архивирован {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+                    {" · Создан "}
                     {formatRelativeTimeLabel(thread.createdAt)}
                   </>
                 }
@@ -1489,16 +1410,16 @@ export function ArchivedThreadsPanel() {
                           toastManager.add(
                             stackedThreadToast({
                               type: "error",
-                              title: "Failed to unarchive thread",
+                              title: "Не удалось восстановить диалог",
                               description:
-                                error instanceof Error ? error.message : "An error occurred.",
+                                error instanceof Error ? error.message : "Произошла ошибка.",
                             }),
                           );
                         })
                     }
                   >
                     <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
+                    <span>Восстановить</span>
                   </Button>
                 }
               />

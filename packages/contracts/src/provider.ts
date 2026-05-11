@@ -74,6 +74,11 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  // ru-fork: live runtimeMode plumbed per turn so the adapter can drive
+  // CLI's ApprovalMode (setMode) and resolve plan-approval optionId without
+  // a session restart. Replaces the previous restart-on-runtimeMode-change
+  // path in ProviderCommandReactor.
+  runtimeMode: RuntimeMode,
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
@@ -99,6 +104,11 @@ export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
   decision: ProviderApprovalDecision,
+  // ru-fork: live runtimeMode at the moment user clicks Реализовать /
+  // cancels. CliAdapter uses it to pick proceed_always vs proceed_once for
+  // exit_plan_mode, and to refresh ctx.currentRuntimeMode so the parked
+  // requestPermission callback resumes with the current dropdown value.
+  runtimeMode: RuntimeMode,
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
 

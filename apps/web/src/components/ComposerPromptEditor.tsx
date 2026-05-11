@@ -5,7 +5,7 @@ import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import { type ServerProviderSkill } from "@t3tools/contracts";
+import { type ServerProviderSkill, type ServerProviderSubagent } from "@t3tools/contracts";
 import {
   $applyNodeReplacement,
   $createRangeSelection,
@@ -77,6 +77,20 @@ import {
 import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTerminalContexts";
 import { formatProviderSkillDisplayName } from "~/providerSkillPresentation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+// ru-fork: leading `/<name>` chip in the editor.
+import {
+  ComposerSlashCommandNode,
+  $createComposerSlashCommandNode,
+} from "~/ru-fork/custom-commands/SlashCommandNode";
+import { findRuForkBuiltInCommand } from "~/ru-fork/custom-commands/commands";
+// ru-fork: `#agent-name` chip.
+import { ComposerSubagentNode } from "~/ru-fork/subagents/SubagentNode";
+import {
+  subagentMetadataByName,
+  subagentSignature,
+  type ComposerSubagentMetadata,
+} from "~/ru-fork/subagents/subagentMetadata";
+import { $appendSubagentSegment } from "~/ru-fork/subagents/composerEditor";
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
 const SURROUND_SYMBOLS: [string, string][] = [
@@ -431,12 +445,16 @@ function $createComposerTerminalContextNode(
 type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
+  | ComposerSlashCommandNode // ru-fork
+  | ComposerSubagentNode // ru-fork
   | ComposerTerminalContextNode;
 
 function isComposerInlineTokenNode(candidate: unknown): candidate is ComposerInlineTokenNode {
   return (
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
+    candidate instanceof ComposerSlashCommandNode || // ru-fork
+    candidate instanceof ComposerSubagentNode || // ru-fork
     candidate instanceof ComposerTerminalContextNode
   );
 }
@@ -825,6 +843,8 @@ function $setComposerEditorPrompt(
   prompt: string,
   terminalContexts: ReadonlyArray<TerminalContextDraft>,
   skillMetadata: ReadonlyMap<string, ComposerSkillMetadata>,
+  // ru-fork: subagent chip metadata, parallel to skillMetadata.
+  subagentMetadata: ReadonlyMap<string, ComposerSubagentMetadata>,
 ): void {
   const root = $getRoot();
   root.clear();
@@ -844,6 +864,23 @@ function $setComposerEditorPrompt(
           segment.name,
           metadata?.label ?? formatProviderSkillDisplayName({ name: segment.name }),
           metadata?.description ?? null,
+        ),
+      );
+      continue;
+    }
+    // ru-fork: subagent segment append delegated to ru-fork helper.
+    if (segment.type === "subagent") {
+      $appendSubagentSegment(paragraph, segment, subagentMetadata);
+      continue;
+    }
+    // ru-fork: render `/<name>` as a chip via ComposerSlashCommandNode.
+    if (segment.type === "slash-command") {
+      const command = findRuForkBuiltInCommand(segment.name);
+      paragraph.append(
+        $createComposerSlashCommandNode(
+          segment.name,
+          `/${segment.name}`,
+          command?.description ?? null,
         ),
       );
       continue;
@@ -885,6 +922,8 @@ interface ComposerPromptEditorProps {
   cursor: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   skills: ReadonlyArray<ServerProviderSkill>;
+  // ru-fork: subagent list driving the `#agent` chip metadata.
+  subagents: ReadonlyArray<ServerProviderSubagent>;
   disabled: boolean;
   placeholder: string;
   className?: string;
@@ -1127,10 +1166,14 @@ function ComposerInlineTokenBackspacePlugin() {
 function ComposerSurroundSelectionPlugin(props: {
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   skills: ReadonlyArray<ServerProviderSkill>;
+  // ru-fork: subagent list mirrors the skills prop.
+  subagents: ReadonlyArray<ServerProviderSubagent>;
 }) {
   const [editor] = useLexicalComposerContext();
   const terminalContextsRef = useRef(props.terminalContexts);
   const skillMetadataRef = useRef(skillMetadataByName(props.skills));
+  // ru-fork: refs mirror the skill counterparts.
+  const subagentMetadataRef = useRef(subagentMetadataByName(props.subagents));
   const pendingSurroundSelectionRef = useRef<{
     value: string;
     expandedStart: number;
@@ -1149,6 +1192,11 @@ function ComposerSurroundSelectionPlugin(props: {
   useEffect(() => {
     skillMetadataRef.current = skillMetadataByName(props.skills);
   }, [props.skills]);
+
+  // ru-fork: keep subagent metadata in sync.
+  useEffect(() => {
+    subagentMetadataRef.current = subagentMetadataByName(props.subagents);
+  }, [props.subagents]);
 
   const applySurroundInsertion = useCallback(
     (inputData: string): boolean => {
@@ -1195,7 +1243,13 @@ function ComposerSurroundSelectionPlugin(props: {
           selectionSnapshot.expandedEnd,
         );
         const nextValue = `${selectionSnapshot.value.slice(0, selectionSnapshot.expandedStart)}${inputData}${selectedText}${surroundCloseSymbol}${selectionSnapshot.value.slice(selectionSnapshot.expandedEnd)}`;
-        $setComposerEditorPrompt(nextValue, terminalContextsRef.current, skillMetadataRef.current);
+        $setComposerEditorPrompt(
+          nextValue,
+          terminalContextsRef.current,
+          skillMetadataRef.current,
+          // ru-fork: subagent metadata parallel to skills.
+          subagentMetadataRef.current,
+        );
         const selectionStart = collapseExpandedComposerCursor(
           nextValue,
           selectionSnapshot.expandedStart,
@@ -1398,6 +1452,7 @@ function ComposerPromptEditorInner({
   cursor,
   terminalContexts,
   skills,
+  subagents, // ru-fork
   disabled,
   placeholder,
   className,
@@ -1415,6 +1470,10 @@ function ComposerPromptEditorInner({
   const skillsSignature = skillSignature(skills);
   const skillsSignatureRef = useRef(skillsSignature);
   const skillMetadataRef = useRef(skillMetadataByName(skills));
+  // ru-fork: subagent counterparts of the skill refs/signature above.
+  const subagentsSignature = subagentSignature(subagents);
+  const subagentsSignatureRef = useRef(subagentsSignature);
+  const subagentMetadataRef = useRef(subagentMetadataByName(subagents));
   const snapshotRef = useRef({
     value,
     cursor: initialCursor,
@@ -1435,6 +1494,11 @@ function ComposerPromptEditorInner({
     skillMetadataRef.current = skillMetadataByName(skills);
   }, [skills]);
 
+  // ru-fork: subagent metadata mirrors the skill effect above.
+  useLayoutEffect(() => {
+    subagentMetadataRef.current = subagentMetadataByName(subagents);
+  }, [subagents]);
+
   useEffect(() => {
     editor.setEditable(!disabled);
   }, [disabled, editor]);
@@ -1444,11 +1508,14 @@ function ComposerPromptEditorInner({
     const previousSnapshot = snapshotRef.current;
     const contextsChanged = terminalContextsSignatureRef.current !== terminalContextsSignature;
     const skillsChanged = skillsSignatureRef.current !== skillsSignature;
+    // ru-fork: subagents bust the editor state the same way skills do.
+    const subagentsChanged = subagentsSignatureRef.current !== subagentsSignature;
     if (
       previousSnapshot.value === value &&
       previousSnapshot.cursor === normalizedCursor &&
       !contextsChanged &&
-      !skillsChanged
+      !skillsChanged &&
+      !subagentsChanged
     ) {
       return;
     }
@@ -1461,19 +1528,32 @@ function ComposerPromptEditorInner({
     };
     terminalContextsSignatureRef.current = terminalContextsSignature;
     skillsSignatureRef.current = skillsSignature;
+    // ru-fork
+    subagentsSignatureRef.current = subagentsSignature;
 
     const rootElement = editor.getRootElement();
     const isFocused = Boolean(rootElement && document.activeElement === rootElement);
-    if (previousSnapshot.value === value && !contextsChanged && !skillsChanged && !isFocused) {
+    if (
+      previousSnapshot.value === value &&
+      !contextsChanged &&
+      !skillsChanged &&
+      !subagentsChanged &&
+      !isFocused
+    ) {
       return;
     }
 
     isApplyingControlledUpdateRef.current = true;
     editor.update(() => {
       const shouldRewriteEditorState =
-        previousSnapshot.value !== value || contextsChanged || skillsChanged;
+        previousSnapshot.value !== value || contextsChanged || skillsChanged || subagentsChanged;
       if (shouldRewriteEditorState) {
-        $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
+        $setComposerEditorPrompt(
+          value,
+          terminalContexts,
+          skillMetadataRef.current,
+          subagentMetadataRef.current, // ru-fork
+        );
       }
       if (shouldRewriteEditorState || isFocused) {
         $setSelectionAtComposerOffset(normalizedCursor);
@@ -1482,7 +1562,15 @@ function ComposerPromptEditorInner({
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
-  }, [cursor, editor, skillsSignature, terminalContexts, terminalContextsSignature, value]);
+  }, [
+    cursor,
+    editor,
+    skillsSignature,
+    subagentsSignature, // ru-fork
+    terminalContexts,
+    terminalContextsSignature,
+    value,
+  ]);
 
   const focusAt = useCallback(
     (nextCursor: number) => {
@@ -1640,7 +1728,11 @@ function ComposerPromptEditorInner({
         />
         <OnChangePlugin onChange={handleEditorChange} />
         <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
-        <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
+        <ComposerSurroundSelectionPlugin
+          terminalContexts={terminalContexts}
+          skills={skills}
+          subagents={subagents /* ru-fork: subagent metadata mirror */}
+        />
         <ComposerInlineTokenArrowPlugin />
         <ComposerInlineTokenSelectionNormalizePlugin />
         <ComposerInlineTokenBackspacePlugin />
@@ -1659,6 +1751,7 @@ export const ComposerPromptEditor = forwardRef<
     cursor,
     terminalContexts,
     skills,
+    subagents, // ru-fork
     disabled,
     placeholder,
     className,
@@ -1672,16 +1765,26 @@ export const ComposerPromptEditor = forwardRef<
   const initialValueRef = useRef(value);
   const initialTerminalContextsRef = useRef(terminalContexts);
   const initialSkillMetadataRef = useRef(skillMetadataByName(skills));
+  // ru-fork: initial subagent metadata mirrors initial skill metadata.
+  const initialSubagentMetadataRef = useRef(subagentMetadataByName(subagents));
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
+      nodes: [
+        ComposerMentionNode,
+        ComposerSkillNode,
+        ComposerSlashCommandNode, // ru-fork
+        ComposerSubagentNode, // ru-fork
+        ComposerTerminalContextNode,
+      ],
       editorState: () => {
         $setComposerEditorPrompt(
           initialValueRef.current,
           initialTerminalContextsRef.current,
           initialSkillMetadataRef.current,
+          // ru-fork
+          initialSubagentMetadataRef.current,
         );
       },
       onError: (error) => {
@@ -1698,6 +1801,7 @@ export const ComposerPromptEditor = forwardRef<
         cursor={cursor}
         terminalContexts={terminalContexts}
         skills={skills}
+        subagents={subagents /* ru-fork */}
         disabled={disabled}
         placeholder={placeholder}
         onRemoveTerminalContext={onRemoveTerminalContext}

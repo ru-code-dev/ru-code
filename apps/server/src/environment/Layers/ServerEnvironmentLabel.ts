@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-fork/branding";
 import * as OS from "node:os";
 
 import * as Effect from "effect/Effect";
@@ -103,5 +104,5 @@ export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironment
     return hostname;
   }
 
-  return normalizeLabel(input.cwdBaseName) ?? "T3 environment";
+  return normalizeLabel(input.cwdBaseName) ?? `${APP_NAME} окружение`;
 });

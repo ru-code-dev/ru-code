@@ -43,7 +43,7 @@ function updateThread(
   threadId: ThreadId,
   patch: ThreadPatch,
 ): OrchestrationThread[] {
-  return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+  return threads.map((thread) => (thread.id !== threadId ? thread : { ...thread, ...patch }));
 }
 
 function decodeForEvent<A>(
@@ -461,7 +461,13 @@ export function projectEvent(
                         ? thread.latestTurn.assistantMessageId
                         : null,
                   }
-                : thread.latestTurn,
+                : thread.latestTurn?.state === "running"
+                  ? {
+                      ...thread.latestTurn,
+                      state: session.status === "error" ? "error" : "completed",
+                      completedAt: thread.latestTurn.completedAt ?? session.updatedAt,
+                    }
+                  : thread.latestTurn,
             updatedAt: event.occurredAt,
           }),
         };

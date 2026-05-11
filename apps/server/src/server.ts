@@ -1,38 +1,42 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePTY from "./terminal/Layers/NodePTY.ts";
 
 import { ServerConfig } from "./config.ts";
+import { runFastShutdownCleanup } from "./fastShutdown.ts";
 import {
   attachmentsRouteLayer,
-  otlpTracesProxyRouteLayer,
+  healthRouteLayer,
+  pairingStartupRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentRouteLayer,
+  shutdownRouteLayer,
   staticAndDevRouteLayer,
   browserApiCorsLayer,
 } from "./http.ts";
+import { ShutdownSignal } from "./shutdownSignal.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import { OpenLive } from "./open.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents.ts";
-import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import { ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
+import { ProviderService } from "./provider/Services/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
-import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime.ts";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery.ts";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore.ts";
-import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
-import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
-import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
+import { TerminalManager } from "./terminal/Services/Manager.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
 import { ServerRuntimeStartup, ServerRuntimeStartupLive } from "./serverRuntimeStartup.ts";
@@ -43,6 +47,11 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+// ru-fork: filesystem skill scanner Layer (apps/server/src/ru-fork/skills).
+import { SkillScannerLive } from "./ru-fork/skills/index.ts";
+// ru-fork: filesystem subagent scanner — surfaces cli-code 0.13.1
+// built-in agents + ~/<cli-dir>/agents/ + <cwd>/<cli-dir>/agents/ to the composer.
+import { SubagentScannerLive } from "./ru-fork/subagents/index.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
@@ -59,7 +68,6 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner.ts";
-import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment.ts";
 import {
   authBearerBootstrapRouteLayer,
@@ -75,8 +83,6 @@ import {
 } from "./auth/http.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
-import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -88,55 +94,24 @@ import {
   orchestrationSnapshotRouteLayer,
 } from "./orchestration/http.ts";
 import * as NetService from "@t3tools/shared/Net";
-import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 
-const PtyAdapterLive = Layer.unwrap(
-  Effect.gen(function* () {
-    if (typeof Bun !== "undefined") {
-      const BunPTY = yield* Effect.promise(() => import("./terminal/Layers/BunPTY.ts"));
-      return BunPTY.layer;
-    } else {
-      const NodePTY = yield* Effect.promise(() => import("./terminal/Layers/NodePTY.ts"));
-      return NodePTY.layer;
-    }
-  }),
-);
+const PtyAdapterLive = NodePTY.layer;
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
-    if (typeof Bun !== "undefined") {
-      const BunHttpServer = yield* Effect.promise(
-        () => import("@effect/platform-bun/BunHttpServer"),
-      );
-      return BunHttpServer.layer({
-        port: config.port,
-        ...(config.host ? { hostname: config.host } : {}),
-      });
-    } else {
-      const [NodeHttpServer, NodeHttp] = yield* Effect.all([
-        Effect.promise(() => import("@effect/platform-node/NodeHttpServer")),
-        Effect.promise(() => import("node:http")),
-      ]);
-      return NodeHttpServer.layer(NodeHttp.createServer, {
-        host: config.host,
-        port: config.port,
-      });
-    }
+    const [NodeHttpServer, NodeHttp] = yield* Effect.all([
+      Effect.promise(() => import("@effect/platform-node/NodeHttpServer")),
+      Effect.promise(() => import("node:http")),
+    ]);
+    return NodeHttpServer.layer(NodeHttp.createServer, {
+      host: config.host,
+      port: config.port,
+    });
   }),
 );
 
-const PlatformServicesLive = Layer.unwrap(
-  Effect.gen(function* () {
-    if (typeof Bun !== "undefined") {
-      const { layer } = yield* Effect.promise(() => import("@effect/platform-bun/BunServices"));
-      return layer;
-    } else {
-      const { layer } = yield* Effect.promise(() => import("@effect/platform-node/NodeServices"));
-      return layer;
-    }
-  }),
-);
+const PlatformServicesLive = NodeServices.layer;
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
@@ -169,9 +144,7 @@ const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
 );
 
 const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(AzureDevOpsCli.layer, BitbucketApi.layer, GitHubCli.layer, GitLabCli.layer),
-  ),
+  Layer.provide(GitHubCli.layer),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
@@ -243,7 +216,6 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
-  Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
@@ -251,6 +223,10 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(ProviderRegistryLive),
+  // ru-fork: filesystem skill scanner
+  Layer.provideMerge(SkillScannerLive),
+  // ru-fork: filesystem subagent scanner
+  Layer.provideMerge(SubagentScannerLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
@@ -263,12 +239,6 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
   Layer.provideMerge(ProviderEventLoggersLive),
-  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
-  // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
-  // the rewritten registry reads snapshots off the instance registry and
-  // no longer transitively provides it. Exposing it at the runtime level
-  // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(OpenCodeRuntimeLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLive),
@@ -279,9 +249,6 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
-  Layer.provideMerge(ProcessDiagnostics.layer),
-  Layer.provideMerge(TraceDiagnostics.layer),
-  Layer.provideMerge(AnalyticsServiceLayerLive),
   Layer.provideMerge(OpenLive),
   Layer.provideMerge(ServerLifecycleEventsLive),
   Layer.provide(NetService.layer),
@@ -303,11 +270,13 @@ export const makeRoutesLayer = Layer.mergeAll(
   authSessionRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  healthRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
-  otlpTracesProxyRouteLayer,
+  pairingStartupRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentRouteLayer,
+  shutdownRouteLayer,
   staticAndDevRouteLayer,
   websocketRpcRouteLayer,
 ).pipe(Layer.provide(browserApiCorsLayer));
@@ -346,71 +315,71 @@ export const makeServerLayer = Layer.unwrap(
         () => clearPersistedServerRuntimeState(config.serverRuntimeStatePath),
       ),
     );
-    const tailscaleServeLayer = config.tailscaleServeEnabled
-      ? Layer.effectDiscard(
-          Effect.acquireRelease(
-            Effect.gen(function* () {
-              const server = yield* HttpServer.HttpServer;
-              const address = server.address;
-              if (typeof address === "string" || !("port" in address)) {
-                return null;
-              }
 
-              const localPort = address.port;
-              return yield* ensureTailscaleServe({
-                localPort,
-                servePort: config.tailscaleServePort,
-                localHost: "127.0.0.1",
-              }).pipe(
-                Effect.as({ localPort, servePort: config.tailscaleServePort }),
-                Effect.tap(() =>
-                  Effect.logInfo("Tailscale Serve configured", {
-                    localPort,
-                    servePort: config.tailscaleServePort,
-                  }),
-                ),
-                Effect.catch((cause) =>
-                  Effect.logWarning("Failed to configure Tailscale Serve", {
-                    cause,
-                    localPort,
-                    servePort: config.tailscaleServePort,
-                  }).pipe(Effect.as(null)),
-                ),
-              );
+    // SIGINT/SIGTERM fast path. `NodeRuntime.runMain` installs its own
+    // SIGINT/SIGTERM listeners (platform-node-shared/NodeRuntime.js:24-25)
+    // that call `fiber.interruptUnsafe`, which triggers the slow Layer
+    // finalizer chain that the `/shutdown` route is designed to skip.
+    // We install OUR listener too — Node delivers every registered
+    // listener — so `process.exit(0)` here preempts the slow path.
+    //
+    // Captures the same Effect runtime the rest of the server uses, so
+    // the synchronous Node callback can run `runFastShutdownCleanup`
+    // via `Effect.runSync`. Same shared cleanup as `/shutdown`.
+    const fastExitLayer = Layer.effectDiscard(
+      Effect.gen(function* () {
+        // Capture the current Effect Context (services already wired:
+        // ProviderService, TerminalManager, ServerConfig) so the
+        // synchronous signal callback can run `runFastShutdownCleanup`
+        // via `Effect.runSyncWith` without rebuilding a runtime.
+        const cleanupCtx = yield* Effect.context<
+          ProviderService | TerminalManager | ServerConfig
+        >();
+        const runCleanupSync = Effect.runSyncWith(cleanupCtx);
+
+        const fastExit = (signal: NodeJS.Signals) => {
+          try {
+            runCleanupSync(runFastShutdownCleanup);
+          } catch {
+            // Signal handler must never throw — always reach process.exit.
+          } finally {
+            process.stderr.write(`\nru-fork received ${signal} — exiting\n`);
+            process.exit(0);
+          }
+        };
+
+        const onSigint = () => fastExit("SIGINT");
+        const onSigterm = () => fastExit("SIGTERM");
+
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            process.on("SIGINT", onSigint);
+            process.on("SIGTERM", onSigterm);
+          }),
+          () =>
+            Effect.sync(() => {
+              process.removeListener("SIGINT", onSigint);
+              process.removeListener("SIGTERM", onSigterm);
             }),
-            (configured) =>
-              configured
-                ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
-                    Effect.tap(() =>
-                      Effect.logInfo("Tailscale Serve disabled", {
-                        servePort: configured.servePort,
-                      }),
-                    ),
-                    Effect.catch((cause) =>
-                      Effect.logWarning("Failed to disable Tailscale Serve", {
-                        cause,
-                        servePort: configured.servePort,
-                      }),
-                    ),
-                  )
-                : Effect.void,
-          ),
-        )
-      : Layer.empty;
+        );
+      }),
+    );
 
     const serverApplicationLayer = Layer.mergeAll(
+      // ru-fork: disableListenLog suppresses effect's "Listening on …"
+      // startup line; pairing URL log below carries the actionable info.
       HttpRouter.serve(makeRoutesLayer, {
         disableLogger: !config.logWebSocketEvents,
+        disableListenLog: true,
       }),
       httpListeningLayer,
       runtimeStateLayer,
-      tailscaleServeLayer,
+      fastExitLayer,
     );
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
       Layer.provideMerge(HttpServerLive),
-      Layer.provide(ObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(PlatformServicesLive),
@@ -419,4 +388,24 @@ export const makeServerLayer = Layer.unwrap(
 );
 
 // Important: Only `ServerConfig` should be provided by the CLI layer!!! Don't let other requirements leak into the launch layer.
-export const runServer = Layer.launch(makeServerLayer);
+export const runServer = Effect.gen(function* () {
+  // Single Deferred shared between the /shutdown route (via the Layer provided
+  // into `makeServerLayer`) and the outer race. We can't use a module-level
+  // `Layer.effect(ShutdownSignal, …)` here because each materialization would
+  // allocate its own Deferred, and the route's `request` would never wake the
+  // outer awaiter.
+  const deferred = yield* Deferred.make<void>();
+  const sharedShutdownSignal = Layer.succeed(ShutdownSignal, {
+    request: Deferred.succeed(deferred, undefined).pipe(Effect.asVoid),
+    await: Deferred.await(deferred),
+  });
+  const launchEffect = Layer.launch(makeServerLayer.pipe(Layer.provide(sharedShutdownSignal)));
+  const shutdownEffect = Deferred.await(deferred).pipe(
+    Effect.tap(() => Effect.logInfo("shutdown requested via /shutdown — releasing server runtime")),
+  );
+  // raceFirst: whichever settles first wins, the loser is interrupted (which
+  // runs the layer's `acquireRelease` finalizers — including the runtime-state
+  // file cleanup). If the launch effect fails (port in use, etc.) the failure
+  // propagates instead of hanging on `Deferred.await`.
+  yield* Effect.raceFirst(launchEffect, shutdownEffect);
+}) satisfies Effect.Effect<void, any, ServerConfig>;

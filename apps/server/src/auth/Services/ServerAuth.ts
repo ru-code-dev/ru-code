@@ -19,6 +19,16 @@ import type * as Effect from "effect/Effect";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import type { SessionRole } from "./SessionCredentialService.ts";
 
+export interface SessionStateResolution {
+  readonly state: AuthSessionState;
+  // Set when the loopback bypass minted a fresh session for this request;
+  // the route attaches Set-Cookie so subsequent requests carry the cookie.
+  readonly mintedSession?: {
+    readonly token: string;
+    readonly expiresAt: DateTime.DateTime;
+  };
+}
+
 export interface AuthenticatedSession {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
@@ -37,7 +47,7 @@ export interface ServerAuthShape {
   readonly getDescriptor: () => Effect.Effect<ServerAuthDescriptor>;
   readonly getSessionState: (
     request: HttpServerRequest.HttpServerRequest,
-  ) => Effect.Effect<AuthSessionState, never>;
+  ) => Effect.Effect<SessionStateResolution, never>;
   readonly exchangeBootstrapCredential: (
     credential: string,
     requestMetadata: AuthClientMetadata,

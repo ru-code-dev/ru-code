@@ -149,10 +149,10 @@ export function useThreadActions() {
         localApi &&
         (await localApi.dialogs.confirm(
           [
-            "This thread is the only one linked to this worktree:",
+            "Этот диалог — единственный, связанный с этим worktree:",
             displayWorktreePath ?? orphanedWorktreePath,
             "",
-            "Delete the worktree too?",
+            "Удалить worktree тоже?",
           ].join("\n"),
         ));
 
@@ -269,11 +269,11 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
 
       if (confirmThreadDelete && localApi) {
-        const title = resolved?.thread.title ?? "this thread";
+        const title = resolved?.thread.title ?? "этот диалог";
         const confirmed = await localApi.dialogs.confirm(
           [
-            `Delete thread "${title}"?`,
-            "This permanently clears conversation history for this thread.",
+            `Удалить диалог "${title}"?`,
+            "История переписки этого диалога будет удалена безвозвратно.",
           ].join("\n"),
         );
         if (!confirmed) {

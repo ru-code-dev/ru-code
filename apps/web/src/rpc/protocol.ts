@@ -17,45 +17,15 @@ import {
   recordWsConnectionClosed,
   recordWsConnectionErrored,
   recordWsConnectionOpened,
-  type WsConnectionMetadata,
   WS_RECONNECT_MAX_RETRIES,
 } from "./wsConnectionState";
 
-export interface WsProtocolCloseContext {
-  readonly intentional: boolean;
-}
-
 export interface WsProtocolLifecycleHandlers {
-  readonly getConnectionLabel?: () => string | null;
-  readonly getVersionMismatchHint?: () => string | null;
-  readonly isCloseIntentional?: () => boolean;
   readonly isActive?: () => boolean;
   readonly onAttempt?: (socketUrl: string) => void;
   readonly onOpen?: () => void;
-  readonly onHeartbeatPing?: () => void;
-  readonly onHeartbeatPong?: () => void;
-  readonly onHeartbeatTimeout?: () => void;
-  readonly onRequestStart?: (info: {
-    readonly id: string;
-    readonly tag: string;
-    readonly stream: boolean;
-  }) => void;
-  readonly onRequestChunk?: (info: {
-    readonly id: string;
-    readonly tag: string;
-    readonly chunkCount: number;
-  }) => void;
-  readonly onRequestExit?: (info: {
-    readonly id: string;
-    readonly tag: string;
-    readonly stream: boolean;
-  }) => void;
-  readonly onRequestInterrupt?: (info: { readonly id: string; readonly tag?: string }) => void;
   readonly onError?: (message: string) => void;
-  readonly onClose?: (
-    details: { readonly code: number; readonly reason: string },
-    context: WsProtocolCloseContext,
-  ) => void;
+  readonly onClose?: (details: { readonly code: number; readonly reason: string }) => void;
 }
 
 export const makeWsRpcProtocolClient = RpcClient.make(WsRpcGroup);
@@ -77,51 +47,36 @@ function resolveWsRpcSocketUrl(rawUrl: string): string {
     throw new Error(`Unsupported websocket transport URL protocol: ${resolved.protocol}`);
   }
 
-  resolved.pathname = "/ws";
+  // ru-fork: append /ws to whatever pathname the base URL carries
+  // (the pathname holds the configured --base-url prefix). Overwriting
+  // would drop the prefix and the upgrade would land on a bare /ws —
+  // 404 under a sub-path deployment.
+  const trimmed = resolved.pathname.replace(/\/+$/, "");
+  resolved.pathname = `${trimmed}/ws`;
   return resolved.toString();
 }
 
-function resolveConnectionMetadata(handlers?: WsProtocolLifecycleHandlers): WsConnectionMetadata {
-  return {
-    connectionLabel: handlers?.getConnectionLabel?.() ?? null,
-    versionMismatchHint: handlers?.getVersionMismatchHint?.() ?? null,
-  };
-}
-
-type ComposedWsProtocolLifecycleHandlers = Required<
-  Pick<WsProtocolLifecycleHandlers, "isActive" | "onAttempt" | "onOpen" | "onError" | "onClose">
->;
-
-function defaultLifecycleHandlers(
-  handlers?: WsProtocolLifecycleHandlers,
-): ComposedWsProtocolLifecycleHandlers {
+function defaultLifecycleHandlers(): Required<WsProtocolLifecycleHandlers> {
   return {
     isActive: () => true,
-    onAttempt: (socketUrl) => {
-      recordWsConnectionAttempt(socketUrl, resolveConnectionMetadata(handlers));
-    },
-    onOpen: () => {
-      recordWsConnectionOpened(resolveConnectionMetadata(handlers));
-    },
+    onAttempt: recordWsConnectionAttempt,
+    onOpen: recordWsConnectionOpened,
     onError: (message) => {
       clearAllTrackedRpcRequests();
-      recordWsConnectionErrored(message, resolveConnectionMetadata(handlers));
+      recordWsConnectionErrored(message);
     },
-    onClose: (details, context) => {
+    onClose: (details) => {
       clearAllTrackedRpcRequests();
-      if (context.intentional) {
-        return;
-      }
-      recordWsConnectionClosed(details, resolveConnectionMetadata(handlers));
+      recordWsConnectionClosed(details);
     },
   };
 }
 
 function composeLifecycleHandlers(
   handlers?: WsProtocolLifecycleHandlers,
-): ComposedWsProtocolLifecycleHandlers {
-  const defaults = defaultLifecycleHandlers(handlers);
-  const isActive = handlers?.isActive ?? defaults.isActive;
+): Required<WsProtocolLifecycleHandlers> {
+  const defaults = defaultLifecycleHandlers();
+  const isActive = handlers?.isActive ?? (() => true);
 
   return {
     isActive,
@@ -146,12 +101,12 @@ function composeLifecycleHandlers(
       defaults.onError(message);
       handlers?.onError?.(message);
     },
-    onClose: (details, context) => {
+    onClose: (details) => {
       if (!isActive()) {
         return;
       }
-      defaults.onClose(details, context);
-      handlers?.onClose?.(details, context);
+      defaults.onClose(details);
+      handlers?.onClose?.(details);
     },
   };
 }
@@ -197,15 +152,10 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "close",
         (event) => {
-          lifecycle.onClose(
-            {
-              code: event.code,
-              reason: event.reason,
-            },
-            {
-              intentional: handlers?.isCloseIntentional?.() ?? false,
-            },
-          );
+          lifecycle.onClose({
+            code: event.code,
+            reason: event.reason,
+          });
         },
         { once: true },
       );
@@ -230,99 +180,22 @@ export function createWsRpcProtocolLayer(
         ...protocol,
         run: (clientId, writeResponse) =>
           protocol.run(clientId, (response) => {
-            if (response._tag === "ClientProtocolError" || response._tag === "Defect") {
+            if (response._tag === "Chunk" || response._tag === "Exit") {
+              acknowledgeRpcRequest(response.requestId);
+            } else if (response._tag === "ClientProtocolError" || response._tag === "Defect") {
               clearAllTrackedRpcRequests();
             }
             return writeResponse(response);
           }),
+        send: (clientId, request, transferables) => {
+          if (request._tag === "Request") {
+            trackRpcRequestSent(request.id, request.tag);
+          }
+          return protocol.send(clientId, request, transferables);
+        },
       }),
     ),
-  );
-  const requestHooksLayer = Layer.succeed(
-    RpcClient.RequestHooks,
-    RpcClient.RequestHooks.of({
-      onRequestStart: (info) =>
-        Effect.sync(() => {
-          if (!lifecycle.isActive()) {
-            return;
-          }
-          handlers?.onRequestStart?.({
-            id: String(info.id),
-            tag: info.tag,
-            stream: info.stream,
-          });
-          trackRpcRequestSent(String(info.id), info.tag);
-        }),
-      onRequestChunk: (info) =>
-        Effect.sync(() => {
-          if (!lifecycle.isActive()) {
-            return;
-          }
-          handlers?.onRequestChunk?.({
-            id: String(info.id),
-            tag: info.tag,
-            chunkCount: info.chunkCount,
-          });
-          acknowledgeRpcRequest(String(info.id));
-        }),
-      onRequestExit: (info) =>
-        Effect.sync(() => {
-          if (!lifecycle.isActive()) {
-            return;
-          }
-          handlers?.onRequestExit?.({
-            id: String(info.id),
-            tag: info.tag,
-            stream: info.stream,
-          });
-          acknowledgeRpcRequest(String(info.id));
-        }),
-      onRequestInterrupt: (info) =>
-        Effect.sync(() => {
-          if (!lifecycle.isActive()) {
-            return;
-          }
-          handlers?.onRequestInterrupt?.({
-            id: String(info.id),
-            ...(info.tag === undefined ? {} : { tag: info.tag }),
-          });
-          acknowledgeRpcRequest(String(info.id));
-        }),
-    }),
-  );
-  const connectionHooksLayer = Layer.succeed(
-    RpcClient.ConnectionHooks,
-    RpcClient.ConnectionHooks.of({
-      onConnect: Effect.void,
-      onDisconnect: Effect.void,
-      onPing: Effect.sync(() => {
-        if (lifecycle.isActive()) {
-          handlers?.onHeartbeatPing?.();
-        }
-      }),
-      onPong: Effect.sync(() => {
-        if (lifecycle.isActive()) {
-          handlers?.onHeartbeatPong?.();
-        }
-      }),
-      onPingTimeout: Effect.sync(() => {
-        if (lifecycle.isActive()) {
-          clearAllTrackedRpcRequests();
-          recordWsConnectionErrored(
-            "WebSocket heartbeat timed out.",
-            resolveConnectionMetadata(handlers),
-          );
-          handlers?.onHeartbeatTimeout?.();
-        }
-      }),
-    }),
   );
 
-  return Layer.mergeAll(
-    protocolLayer.pipe(
-      Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson, connectionHooksLayer)),
-    ),
-    requestHooksLayer,
-    connectionHooksLayer,
-  );
+  return protocolLayer.pipe(Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)));
 }

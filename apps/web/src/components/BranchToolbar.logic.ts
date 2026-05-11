@@ -36,22 +36,22 @@ export function resolveEnvironmentOptionLabel(input: {
       if (!label) return false;
       return !GENERIC_LOCAL_ENVIRONMENT_LABELS.has(label.toLowerCase());
     });
-    return preferredLocalLabel ?? "This device";
+    return preferredLocalLabel ?? "Это устройство";
   }
 
   return runtimeLabel ?? savedLabel ?? input.environmentId;
 }
 
 export function resolveEnvModeLabel(mode: EnvMode): string {
-  return mode === "worktree" ? "New worktree" : "Current checkout";
+  return mode === "worktree" ? "Новый worktree" : "Текущий checkout";
 }
 
 export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null): string {
-  return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
+  return activeWorktreePath ? "Текущий worktree" : resolveEnvModeLabel("local");
 }
 
 export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {
-  return activeWorktreePath ? "Worktree" : "Local checkout";
+  return activeWorktreePath ? "Worktree" : "Локальный checkout";
 }
 
 export function resolveEffectiveEnvMode(input: {

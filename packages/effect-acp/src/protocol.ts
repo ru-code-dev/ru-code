@@ -312,7 +312,10 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     Ref.get(extPending).pipe(
       Effect.flatMap((pending) => {
         if (!pending.has(message.requestId)) {
-          return Queue.offer(clientQueue, message).pipe(Effect.asVoid);
+          // ru-fork: route qwen's plain JSON-RPC error responses into the
+          // typed-error channel instead of letting them collapse to opaque
+          // defects. See coerceProtocolErrorDefects for the full rationale.
+          return Queue.offer(clientQueue, coerceProtocolErrorDefects(message)).pipe(Effect.asVoid);
         }
         if (message.exit._tag === "Success") {
           return completeExtPendingSuccess(message.requestId, message.exit.value);
@@ -404,6 +407,21 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         Effect.flatMap((messages) =>
           Effect.forEach(messages, routeDecodedMessage, {
             discard: true,
+          }),
+        ),
+        // ru-fork: on ANY parse failure — malformed wire JSON OR a per-message
+        // schema mismatch (e.g. a session/update payload with an unexpected /
+        // missing property) — log the ENTIRE raw frame plus which decode failed
+        // and the offending property. Ungated + failure-only (parse failures are
+        // rare), so the full body is always visible without enabling wire
+        // tracing. Placed AFTER routeDecodedMessage so it also catches schema
+        // failures raised inside it, which the gated `decode_failed` breadcrumb
+        // above (wire-decode only) misses.
+        Effect.tapErrorTag("AcpProtocolParseError", (error) =>
+          Effect.logError("[cli-acp.parse-failed]", {
+            detail: error.detail,
+            raw: typeof data === "string" ? data : new TextDecoder().decode(data),
+            cause: error.cause instanceof Error ? error.cause.message : error.cause,
           }),
         ),
       ),
@@ -525,6 +543,37 @@ function isProtocolError(
 function normalizeToRequestError(error: AcpError.AcpError): AcpError.AcpRequestError {
   return isAcpRequestError(error) ? error : AcpError.AcpRequestError.internalError(error.message);
 }
+
+// ru-fork: qwen is a plain JSON-RPC agent, so its error responses to core RPC
+// methods (session/prompt, session/new, …) arrive here as a `Die` whose
+// `defect` is the raw `{code,message,data}` protocol error. Effect's RpcClient
+// then decodes that Die
+// through Schema.Defect into a bare `Error(message)` — dropping `code` and
+// `data` — so the failure reaches handleTurnStartFailure as an opaque defect
+// and the recognizer registry can only bucket it as E_DEFECT (generic
+// "unexpected server error"), even though every A-bucket recognizer (A2 rate
+// limit, A3 generic -32603, A5 auth, …) is keyed on exactly that lost data.
+//
+// Rewriting the protocol-error `Die` into a `Fail` entry makes the RpcClient
+// decode it via the method's declared `error: AcpSchema.Error` schema instead;
+// callRpc (shared.ts) then maps it to AcpRequestError.fromProtocolError,
+// preserving code + data.details, and the classifier surfaces qwen's real
+// message. Only protocol-shaped defects (numeric `code` + string `message`)
+// are touched — genuine JS/Node defects and interrupts pass through untouched.
+const coerceProtocolErrorDefects = (
+  message: RpcMessage.ResponseExitEncoded,
+): RpcMessage.ResponseExitEncoded => {
+  if (message.exit._tag !== "Failure") return message;
+  let rewrote = false;
+  const cause = message.exit.cause.map((entry) => {
+    if (entry._tag === "Die" && isProtocolError(entry.defect)) {
+      rewrote = true;
+      return { _tag: "Fail" as const, error: entry.defect };
+    }
+    return entry;
+  });
+  return rewrote ? { ...message, exit: { _tag: "Failure" as const, cause } } : message;
+};
 
 function toRpcClientError(error: AcpError.AcpError): RpcClientError.RpcClientError {
   return new RpcClientError.RpcClientError({

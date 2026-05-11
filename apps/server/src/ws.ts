@@ -34,23 +34,47 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { ServerConfig } from "./config.ts";
+// ru-fork: mount the WebSocket upgrade route under --base-url.
+import { prefixedRouteLayer } from "./ru-fork/basePath/basePath.ts";
 import { Keybindings } from "./keybindings.ts";
 import { Open, resolveAvailableEditors } from "./open.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
-import {
-  observeRpcEffect,
-  observeRpcStream,
-  observeRpcStreamEffect,
-} from "./observability/RpcInstrumentation.ts";
+// Telemetry/observability removed: keep the call shape but pass through.
+// `observeRpcStreamEffect` MUST `Stream.unwrap` the effect — the RPC
+// handler signature for streaming methods expects a `Stream`, not an
+// `Effect<Stream>`. Returning the Effect raw breaks every stream
+// subscription (subscribeServerConfig, orchestration shell, etc.).
+const observeRpcEffect = <A, E, R>(
+  _method: string,
+  effect: Effect.Effect<A, E, R>,
+  _attributes?: Readonly<Record<string, unknown>>,
+): Effect.Effect<A, E, R> => effect;
+const observeRpcStream = <A, E, R>(
+  _method: string,
+  stream: Stream.Stream<A, E, R>,
+  _attributes?: Readonly<Record<string, unknown>>,
+): Stream.Stream<A, E, R> => stream;
+const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
+  _method: string,
+  effect: Effect.Effect<Stream.Stream<A, StreamError, StreamContext>, EffectError, EffectContext>,
+  _attributes?: Readonly<Record<string, unknown>>,
+): Stream.Stream<A, StreamError | EffectError, StreamContext | EffectContext> =>
+  Stream.unwrap(effect);
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+// ru-fork: filesystem skill scanner — owned RPCs (server.listSkillsForCwd,
+// server.refreshSkillsForCwd) feed the composer $ popup directly from disk.
+import { SkillScanner } from "./ru-fork/skills/index.ts";
+// ru-fork: filesystem subagent scanner — surfaces CLI built-in agents
+// + ~/<cli-dir>/agents/ + <cwd>/<cli-dir>/agents/ to the `#` picker.
+import { SubagentScanner } from "./ru-fork/subagents/index.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
@@ -65,14 +89,9 @@ import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptR
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
-import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscoveryLayer from "./sourceControl/SourceControlDiscovery.ts";
 import { SourceControlRepositoryService } from "./sourceControl/SourceControlRepositoryService.ts";
-import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
-import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
-import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
@@ -170,6 +189,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const terminalManager = yield* TerminalManager;
       const providerRegistry = yield* ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+      // ru-fork: filesystem skill scanner (apps/server/src/ru-fork/skills).
+      const skillScanner = yield* SkillScanner;
+      // ru-fork: filesystem subagent scanner — `#` picker source.
+      const subagentScanner = yield* SubagentScanner;
       const config = yield* ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const serverSettings = yield* ServerSettingsService;
@@ -192,7 +215,6 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const sourceControlRepositories = yield* SourceControlRepositoryService;
       const bootstrapCredentials = yield* BootstrapCredentialService;
       const sessions = yield* SessionCredentialService;
-      const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const serverCommandId = (tag: string) =>
         CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -586,13 +608,6 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           availableEditors: resolveAvailableEditors(),
           observability: {
             logsDirectoryPath: config.logsDir,
-            localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
-            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-            ...(config.otlpMetricsUrl !== undefined
-              ? { otlpMetricsUrl: config.otlpMetricsUrl }
-              : {}),
-            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
         };
@@ -844,6 +859,35 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
           ),
+        // ru-fork: filesystem skill scanner — composer calls this on mount
+        // + on `$` open. Source: apps/server/src/ru-fork/skills.
+        [WS_METHODS.serverListSkillsForCwd]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListSkillsForCwd,
+            skillScanner.getSkillsForCwd(input.cwd),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverRefreshSkillsForCwd]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverRefreshSkillsForCwd,
+            skillScanner.refreshSkillsForCwd(input.cwd),
+            { "rpc.aggregate": "server" },
+          ),
+        // ru-fork: filesystem subagent scanner — composer calls these
+        // on mount + on `$` open and on /refresh-subagents. Source:
+        // apps/server/src/ru-fork/subagents.
+        [WS_METHODS.serverListSubagentsForCwd]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListSubagentsForCwd,
+            subagentScanner.getSubagentsForCwd(input.cwd),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverRefreshSubagentsForCwd]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverRefreshSubagentsForCwd,
+            subagentScanner.refreshSubagentsForCwd(input.cwd),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,
@@ -894,25 +938,6 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.serverGetTraceDiagnostics,
-            TraceDiagnostics.readTraceDiagnostics({
-              traceFilePath: config.serverTracePath,
-              maxFiles: config.traceMaxFiles,
-            }),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
-        [WS_METHODS.serverGetProcessDiagnostics]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetProcessDiagnostics, processDiagnostics.read, {
-            "rpc.aggregate": "server",
-          }),
-        [WS_METHODS.serverSignalProcess]: (input) =>
-          observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
-            "rpc.aggregate": "server",
-          }),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
@@ -1229,53 +1254,42 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
     }),
   );
 
-export const websocketRpcRouteLayer = Layer.unwrap(
-  Effect.succeed(
-    HttpRouter.add(
-      "GET",
-      "/ws",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* ServerAuth;
-        const sessions = yield* SessionCredentialService;
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request);
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
-          disableTracing: true,
-        }).pipe(
-          Effect.provide(
-            makeWsRpcLayer(session.sessionId).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(ProviderMaintenanceRunner.layer),
+export const websocketRpcRouteLayer = prefixedRouteLayer(
+  "GET",
+  "/ws",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const sessions = yield* SessionCredentialService;
+    const session = yield* serverAuth.authenticateWebSocketUpgrade(request);
+    const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
+      disableTracing: true,
+    }).pipe(
+      Effect.provide(
+        makeWsRpcLayer(session.sessionId).pipe(
+          Layer.provideMerge(RpcSerialization.layerJson),
+          Layer.provide(ProviderMaintenanceRunner.layer),
+          Layer.provide(
+            SourceControlDiscoveryLayer.layer.pipe(
               Layer.provide(
-                SourceControlDiscoveryLayer.layer.pipe(
+                SourceControlProviderRegistry.layer.pipe(
+                  Layer.provide(GitHubCli.layer),
+                  Layer.provideMerge(GitVcsDriver.layer),
                   Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
-                        ),
-                      ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
-                      ),
-                    ),
+                    VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
                   ),
-                  Layer.provide(VcsProcess.layer),
                 ),
               ),
+              Layer.provide(VcsProcess.layer),
             ),
           ),
-        );
-        return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
-          () => rpcWebSocketHttpEffect,
-          () => sessions.markDisconnected(session.sessionId),
-        );
-      }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
-    ),
-  ),
+        ),
+      ),
+    );
+    return yield* Effect.acquireUseRelease(
+      sessions.markConnected(session.sessionId),
+      () => rpcWebSocketHttpEffect,
+      () => sessions.markDisconnected(session.sessionId),
+    );
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );

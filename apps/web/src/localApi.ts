@@ -13,7 +13,6 @@ import {
   getPrimaryEnvironmentConnection,
   resetEnvironmentServiceForTests,
 } from "./environments/runtime";
-import { getPrimaryKnownEnvironment } from "./environments/primary";
 import { type WsRpcClient } from "./rpc/wsRpcClient";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import {
@@ -32,7 +31,7 @@ function unavailableLocalBackendError(): Error {
   return new Error("Local backend API is unavailable before a backend is paired.");
 }
 
-function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
+export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
   return {
     dialogs: {
       pickFolder: async (options) => {
@@ -47,10 +46,7 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
       },
     },
     shell: {
-      openInEditor: (cwd, editor) =>
-        rpcClient
-          ? rpcClient.shell.openInEditor({ cwd, editor })
-          : Promise.reject(unavailableLocalBackendError()),
+      openInEditor: (cwd, editor) => rpcClient.shell.openInEditor({ cwd, editor }),
       openExternal: async (url) => {
         if (window.desktopBridge) {
           const opened = await window.desktopBridge.openExternal(url);
@@ -147,24 +143,26 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.discoverSourceControl()
           : Promise.reject(unavailableLocalBackendError()),
-      getTraceDiagnostics: () =>
+      // ru-fork: filesystem skill scanner.
+      listSkillsForCwd: (input) =>
         rpcClient
-          ? rpcClient.server.getTraceDiagnostics()
+          ? rpcClient.server.listSkillsForCwd(input)
           : Promise.reject(unavailableLocalBackendError()),
-      getProcessDiagnostics: () =>
+      refreshSkillsForCwd: (input) =>
         rpcClient
-          ? rpcClient.server.getProcessDiagnostics()
+          ? rpcClient.server.refreshSkillsForCwd(input)
           : Promise.reject(unavailableLocalBackendError()),
-      signalProcess: (input) =>
+      // ru-fork: filesystem subagent scanner.
+      listSubagentsForCwd: (input) =>
         rpcClient
-          ? rpcClient.server.signalProcess(input)
+          ? rpcClient.server.listSubagentsForCwd(input)
+          : Promise.reject(unavailableLocalBackendError()),
+      refreshSubagentsForCwd: (input) =>
+        rpcClient
+          ? rpcClient.server.refreshSubagentsForCwd(input)
           : Promise.reject(unavailableLocalBackendError()),
     },
   };
-}
-
-export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
-  return createBrowserLocalApi(rpcClient);
 }
 
 export function readLocalApi(): LocalApi | undefined {
@@ -176,10 +174,7 @@ export function readLocalApi(): LocalApi | undefined {
     return cachedApi;
   }
 
-  const primaryEnvironment = getPrimaryKnownEnvironment();
-  cachedApi = primaryEnvironment
-    ? createLocalApi(getPrimaryEnvironmentConnection().client)
-    : createBrowserLocalApi();
+  cachedApi = createLocalApi(getPrimaryEnvironmentConnection().client);
   return cachedApi;
 }
 

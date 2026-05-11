@@ -4,12 +4,16 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { extname, join } from "node:path";
 
-const PATH_CAPTURE_START = "__T3CODE_PATH_START__";
-const PATH_CAPTURE_END = "__T3CODE_PATH_END__";
+const PATH_CAPTURE_START = "__RU_FORK_PATH_START__";
+const PATH_CAPTURE_END = "__RU_FORK_PATH_END__";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 const WINDOWS_PATH_DELIMITER = ";";
 const POSIX_PATH_DELIMITER = ":";
-const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
+// ru-fork: Windows shell candidates kept around (commented) for
+// the disabled PowerShell-based env probe. Re-enable together with
+// the `readEnvironmentFromWindowsShell` block below if Windows
+// non-git-bash launches are ever supported again.
+// const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
 
 type ExecFileSyncLike = (
   file: string,
@@ -22,9 +26,11 @@ export interface CommandAvailabilityOptions {
   readonly env?: NodeJS.ProcessEnv;
 }
 
-export interface WindowsEnvironmentProbeOptions {
-  readonly loadProfile?: boolean;
-}
+// ru-fork: Windows env-probe option type. Disabled together with
+// the PowerShell-based functions below.
+// export interface WindowsEnvironmentProbeOptions {
+//   readonly loadProfile?: boolean;
+// }
 
 function trimNonEmpty(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -119,11 +125,11 @@ export function mergePathEntries(
 }
 
 function envCaptureStart(name: string): string {
-  return `__T3CODE_ENV_${name}_START__`;
+  return `__RU_FORK_ENV_${name}_START__`;
 }
 
 function envCaptureEnd(name: string): string {
-  return `__T3CODE_ENV_${name}_END__`;
+  return `__RU_FORK_ENV_${name}_END__`;
 }
 
 function buildEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
@@ -142,23 +148,28 @@ function buildEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
     .join("; ");
 }
 
-function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    ...names.flatMap((name) => {
-      if (!SHELL_ENV_NAME_PATTERN.test(name)) {
-        throw new Error(`Unsupported environment variable name: ${name}`);
-      }
-
-      return [
-        `Write-Output '${envCaptureStart(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
-        "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
-        `Write-Output '${envCaptureEnd(name)}'`,
-      ];
-    }),
-  ].join("; ");
-}
+// ru-fork: PowerShell-based env-capture command builder. The
+// git-bash-only policy means we no longer need to read User PATH from
+// the Windows registry at runtime — git-bash already inherits a
+// correct PATH. Preserved (commented) so the code path can be revived
+// if non-git-bash launches return.
+// function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
+//   return [
+//     "$ErrorActionPreference = 'Stop'",
+//     ...names.flatMap((name) => {
+//       if (!SHELL_ENV_NAME_PATTERN.test(name)) {
+//         throw new Error(`Unsupported environment variable name: ${name}`);
+//       }
+//
+//       return [
+//         `Write-Output '${envCaptureStart(name)}'`,
+//         `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+//         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
+//         `Write-Output '${envCaptureEnd(name)}'`,
+//       ];
+//     }),
+//   ].join("; ");
+// }
 
 function extractEnvironmentValue(output: string, name: string): string | undefined {
   const startMarker = envCaptureStart(name);
@@ -209,64 +220,68 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
   return environment;
 };
 
-export type WindowsShellEnvironmentReader = (
-  names: ReadonlyArray<string>,
-  options?: WindowsEnvironmentProbeOptions,
-) => Partial<Record<string, string>>;
-
-export function readEnvironmentFromWindowsShell(
-  names: ReadonlyArray<string>,
-  execFile?: ExecFileSyncLike,
-): Partial<Record<string, string>>;
-export function readEnvironmentFromWindowsShell(
-  names: ReadonlyArray<string>,
-  options?: WindowsEnvironmentProbeOptions,
-  execFile?: ExecFileSyncLike,
-): Partial<Record<string, string>>;
-export function readEnvironmentFromWindowsShell(
-  names: ReadonlyArray<string>,
-  optionsOrExecFile?: WindowsEnvironmentProbeOptions | ExecFileSyncLike,
-  maybeExecFile?: ExecFileSyncLike,
-): Partial<Record<string, string>> {
-  if (names.length === 0) {
-    return {};
-  }
-
-  const options =
-    typeof optionsOrExecFile === "function"
-      ? ({} satisfies WindowsEnvironmentProbeOptions)
-      : (optionsOrExecFile ?? {});
-  const execFile: ExecFileSyncLike =
-    typeof optionsOrExecFile === "function"
-      ? optionsOrExecFile
-      : (maybeExecFile ?? (execFileSync as ExecFileSyncLike));
-  const command = buildWindowsEnvironmentCaptureCommand(names);
-  const args = [
-    "-NoLogo",
-    ...(options.loadProfile ? ([] as const) : (["-NoProfile"] as const)),
-    "-NonInteractive",
-    "-Command",
-    command,
-  ];
-  for (const shell of WINDOWS_SHELL_CANDIDATES) {
-    try {
-      const output = execFile(shell, args, { encoding: "utf8", timeout: 5000 });
-
-      const environment: Partial<Record<string, string>> = {};
-      for (const name of names) {
-        const value = extractEnvironmentValue(output, name);
-        if (value !== undefined) {
-          environment[name] = value;
-        }
-      }
-      return environment;
-    } catch {
-      continue;
-    }
-  }
-
-  return {};
-}
+// ru-fork: Windows-side env reader (PowerShell-driven). Disabled
+// with the git-bash-only policy. Re-enable together with the
+// `buildWindowsEnvironmentCaptureCommand` block above and the
+// `resolveWindowsEnvironment` function below.
+// export type WindowsShellEnvironmentReader = (
+//   names: ReadonlyArray<string>,
+//   options?: WindowsEnvironmentProbeOptions,
+// ) => Partial<Record<string, string>>;
+//
+// export function readEnvironmentFromWindowsShell(
+//   names: ReadonlyArray<string>,
+//   execFile?: ExecFileSyncLike,
+// ): Partial<Record<string, string>>;
+// export function readEnvironmentFromWindowsShell(
+//   names: ReadonlyArray<string>,
+//   options?: WindowsEnvironmentProbeOptions,
+//   execFile?: ExecFileSyncLike,
+// ): Partial<Record<string, string>>;
+// export function readEnvironmentFromWindowsShell(
+//   names: ReadonlyArray<string>,
+//   optionsOrExecFile?: WindowsEnvironmentProbeOptions | ExecFileSyncLike,
+//   maybeExecFile?: ExecFileSyncLike,
+// ): Partial<Record<string, string>> {
+//   if (names.length === 0) {
+//     return {};
+//   }
+//
+//   const options =
+//     typeof optionsOrExecFile === "function"
+//       ? ({} satisfies WindowsEnvironmentProbeOptions)
+//       : (optionsOrExecFile ?? {});
+//   const execFile: ExecFileSyncLike =
+//     typeof optionsOrExecFile === "function"
+//       ? optionsOrExecFile
+//       : (maybeExecFile ?? (execFileSync as ExecFileSyncLike));
+//   const command = buildWindowsEnvironmentCaptureCommand(names);
+//   const args = [
+//     "-NoLogo",
+//     ...(options.loadProfile ? ([] as const) : (["-NoProfile"] as const)),
+//     "-NonInteractive",
+//     "-Command",
+//     command,
+//   ];
+//   for (const shell of WINDOWS_SHELL_CANDIDATES) {
+//     try {
+//       const output = execFile(shell, args, { encoding: "utf8", timeout: 5000 });
+//
+//       const environment: Partial<Record<string, string>> = {};
+//       for (const name of names) {
+//         const value = extractEnvironmentValue(output, name);
+//         if (value !== undefined) {
+//           environment[name] = value;
+//         }
+//       }
+//       return environment;
+//     } catch {
+//       continue;
+//     }
+//   }
+//
+//   return {};
+// }
 
 function stripWrappingQuotes(value: string): string {
   return value.replace(/^"+|"+$/g, "");
@@ -433,70 +448,76 @@ export function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArra
   ];
 }
 
-export interface WindowsEnvironmentResolverOptions {
-  readonly readEnvironment?: WindowsShellEnvironmentReader;
-  readonly commandAvailable?: typeof isCommandAvailable;
-}
-
-function readWindowsEnvironmentSafely(
-  readEnvironment: WindowsShellEnvironmentReader,
-  names: ReadonlyArray<string>,
-  options?: WindowsEnvironmentProbeOptions,
-): Partial<Record<string, string>> {
-  try {
-    return readEnvironment(names, options);
-  } catch {
-    return {};
-  }
-}
-
-function mergeWindowsEnv(
-  currentEnv: NodeJS.ProcessEnv,
-  patch: Partial<Record<string, string>>,
-): NodeJS.ProcessEnv {
-  const nextEnv: NodeJS.ProcessEnv = { ...currentEnv };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined) {
-      nextEnv[key] = value;
-    }
-  }
-  return nextEnv;
-}
-
-export function resolveWindowsEnvironment(
-  env: NodeJS.ProcessEnv,
-  options: WindowsEnvironmentResolverOptions = {},
-): Partial<NodeJS.ProcessEnv> {
-  const readEnvironment = options.readEnvironment ?? readEnvironmentFromWindowsShell;
-  const commandAvailable = options.commandAvailable ?? isCommandAvailable;
-  const inheritedPath = readEnvPath(env);
-  const shellPath = readWindowsEnvironmentSafely(readEnvironment, ["PATH"], {
-    loadProfile: false,
-  }).PATH;
-  const mergedPath = mergePathValues(shellPath, inheritedPath, "win32");
-  const knownCliPath = resolveKnownWindowsCliDirs(env).join(WINDOWS_PATH_DELIMITER);
-  const baselinePath = mergePathValues(knownCliPath, mergedPath, "win32");
-  const baselinePatch: Partial<NodeJS.ProcessEnv> = baselinePath ? { PATH: baselinePath } : {};
-  const baselineEnv = mergeWindowsEnv(env, baselinePatch);
-
-  if (commandAvailable("node", { platform: "win32", env: baselineEnv })) {
-    return baselinePatch;
-  }
-
-  const profiledEnvironment = readWindowsEnvironmentSafely(
-    readEnvironment,
-    ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"],
-    { loadProfile: true },
-  );
-  const profiledPath = mergePathValues(profiledEnvironment.PATH, baselinePath, "win32");
-  const profiledPatch: Partial<NodeJS.ProcessEnv> = {
-    ...(profiledPath ? { PATH: profiledPath } : {}),
-    ...(profiledEnvironment.FNM_DIR ? { FNM_DIR: profiledEnvironment.FNM_DIR } : {}),
-    ...(profiledEnvironment.FNM_MULTISHELL_PATH
-      ? { FNM_MULTISHELL_PATH: profiledEnvironment.FNM_MULTISHELL_PATH }
-      : {}),
-  };
-  return Object.keys(profiledPatch).length > 0
-    ? { ...baselinePatch, ...profiledPatch }
-    : baselinePatch;
-}
+// ru-fork: Windows PATH-hydration orchestrator. Disabled with the
+// git-bash-only policy — git-bash already inherits a usable PATH from
+// Windows, so we don't need to shell out to PowerShell to widen it.
+// `resolveKnownWindowsCliDirs` (above, still exported) and
+// `mergePathValues` are left active for any future caller; only the
+// PowerShell-driven orchestration here is disabled.
+// export interface WindowsEnvironmentResolverOptions {
+//   readonly readEnvironment?: WindowsShellEnvironmentReader;
+//   readonly commandAvailable?: typeof isCommandAvailable;
+// }
+//
+// function readWindowsEnvironmentSafely(
+//   readEnvironment: WindowsShellEnvironmentReader,
+//   names: ReadonlyArray<string>,
+//   options?: WindowsEnvironmentProbeOptions,
+// ): Partial<Record<string, string>> {
+//   try {
+//     return readEnvironment(names, options);
+//   } catch {
+//     return {};
+//   }
+// }
+//
+// function mergeWindowsEnv(
+//   currentEnv: NodeJS.ProcessEnv,
+//   patch: Partial<Record<string, string>>,
+// ): NodeJS.ProcessEnv {
+//   const nextEnv: NodeJS.ProcessEnv = { ...currentEnv };
+//   for (const [key, value] of Object.entries(patch)) {
+//     if (value !== undefined) {
+//       nextEnv[key] = value;
+//     }
+//   }
+//   return nextEnv;
+// }
+//
+// export function resolveWindowsEnvironment(
+//   env: NodeJS.ProcessEnv,
+//   options: WindowsEnvironmentResolverOptions = {},
+// ): Partial<NodeJS.ProcessEnv> {
+//   const readEnvironment = options.readEnvironment ?? readEnvironmentFromWindowsShell;
+//   const commandAvailable = options.commandAvailable ?? isCommandAvailable;
+//   const inheritedPath = readEnvPath(env);
+//   const shellPath = readWindowsEnvironmentSafely(readEnvironment, ["PATH"], {
+//     loadProfile: false,
+//   }).PATH;
+//   const mergedPath = mergePathValues(shellPath, inheritedPath, "win32");
+//   const knownCliPath = resolveKnownWindowsCliDirs(env).join(WINDOWS_PATH_DELIMITER);
+//   const baselinePath = mergePathValues(knownCliPath, mergedPath, "win32");
+//   const baselinePatch: Partial<NodeJS.ProcessEnv> = baselinePath ? { PATH: baselinePath } : {};
+//   const baselineEnv = mergeWindowsEnv(env, baselinePatch);
+//
+//   if (commandAvailable("node", { platform: "win32", env: baselineEnv })) {
+//     return baselinePatch;
+//   }
+//
+//   const profiledEnvironment = readWindowsEnvironmentSafely(
+//     readEnvironment,
+//     ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"],
+//     { loadProfile: true },
+//   );
+//   const profiledPath = mergePathValues(profiledEnvironment.PATH, baselinePath, "win32");
+//   const profiledPatch: Partial<NodeJS.ProcessEnv> = {
+//     ...(profiledPath ? { PATH: profiledPath } : {}),
+//     ...(profiledEnvironment.FNM_DIR ? { FNM_DIR: profiledEnvironment.FNM_DIR } : {}),
+//     ...(profiledEnvironment.FNM_MULTISHELL_PATH
+//       ? { FNM_MULTISHELL_PATH: profiledEnvironment.FNM_MULTISHELL_PATH }
+//       : {}),
+//   };
+//   return Object.keys(profiledPatch).length > 0
+//     ? { ...baselinePatch, ...profiledPatch }
+//     : baselinePatch;
+// }

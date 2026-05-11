@@ -170,20 +170,20 @@ export function PullRequestThreadDialog({
   const validationMessage = !referenceDirty
     ? null
     : reference.trim().length === 0
-      ? `Paste a ${terminology.singular} URL, checkout command, or enter 123 / #123.`
+      ? `Вставьте URL ${terminology.singular}, команду checkout или номер 123 / #123.`
       : parsedReference === null
-        ? `Use a ${terminology.singular} URL, checkout command, 123, or #123.`
+        ? `Используйте URL ${terminology.singular}, команду checkout, 123 или #123.`
         : null;
   const errorMessage =
     validationMessage ??
     (resolvedPullRequest === null && resolvePullRequestQuery.isError
       ? resolvePullRequestQuery.error instanceof Error
         ? resolvePullRequestQuery.error.message
-        : `Failed to resolve ${terminology.singular}.`
+        : `Не удалось получить ${terminology.singular}.`
       : preparePullRequestThreadMutation.error instanceof Error
         ? preparePullRequestThreadMutation.error.message
         : preparePullRequestThreadMutation.error
-          ? `Failed to prepare ${terminology.singular} thread.`
+          ? `Не удалось подготовить диалог для ${terminology.singular}.`
           : null);
 
   return (
@@ -199,11 +199,11 @@ export function PullRequestThreadDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <SourceControlIcon className="size-4" />
-            Checkout {terminology.singular}
+            Загрузить {terminology.singular}
           </DialogTitle>
           <DialogDescription>
-            Resolve a {sourceControlPresentation.providerName} {terminology.singular}, then create
-            the draft thread in the main repo or in a dedicated worktree.
+            Найти {terminology.singular} в {sourceControlPresentation.providerName} и создать
+            черновой диалог в основном репозитории или в отдельном worktree.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
@@ -213,7 +213,7 @@ export function PullRequestThreadDialog({
             </span>
             <Input
               ref={referenceInputRef}
-              placeholder={`${terminology.shortLabel} URL, checkout command, or #42`}
+              placeholder={`${terminology.shortLabel} URL, команда checkout или #42`}
               value={reference}
               onChange={(event) => {
                 setReferenceDirty(true);
@@ -251,7 +251,7 @@ export function PullRequestThreadDialog({
           {isResolving ? (
             <div className="flex items-center gap-2 text-muted-foreground text-xs">
               <Spinner className="size-3.5" />
-              Resolving {terminology.singular}...
+              Загрузка {terminology.singular}…
             </div>
           ) : null}
 
@@ -265,7 +265,7 @@ export function PullRequestThreadDialog({
             onClick={() => onOpenChange(false)}
             disabled={preparePullRequestThreadMutation.isPending}
           >
-            Cancel
+            Отмена
           </Button>
           <Button
             type="button"
@@ -281,7 +281,7 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "local" ? "Preparing local..." : "Local"}
+            {preparingMode === "local" ? "Подготовка…" : "В репозитории"}
           </Button>
           <Button
             type="button"
@@ -296,7 +296,7 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+            {preparingMode === "worktree" ? "Подготовка worktree…" : "Worktree"}
           </Button>
         </DialogFooter>
       </DialogPopup>

@@ -20,9 +20,14 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
         ? "remote-reachable"
         : "loopback-browser";
 
+  // desktop-managed-local: server is loopback-bound in desktop mode, so the
+  // OS user is the trust boundary. Auth gate auto-issues a session for any
+  // loopback request (see ServerAuth.ts), so no bootstrap surface is needed.
+  // An empty list signals to the client that the pair screen should not
+  // render at all.
   const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
     policy === "desktop-managed-local"
-      ? ["desktop-bootstrap"]
+      ? []
       : config.mode === "desktop" && policy === "remote-reachable"
         ? ["desktop-bootstrap", "one-time-token"]
         : ["one-time-token"];

@@ -9,6 +9,7 @@
  *
  * @module CheckpointStoreLive
  */
+import { APP_NAME } from "@ru-fork/branding";
 import { randomUUID } from "node:crypto";
 
 import * as Effect from "effect/Effect";
@@ -17,6 +18,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { CheckpointInvariantError } from "../Errors.ts";
+// ru-fork: shared Windows reserved-name pathspec excludes. See
+// ru-fork-instrumental/changes/git-issues.md.
+import { WINDOWS_RESERVED_EXCLUDES } from "../../ru-fork/vcs/reservedNames.ts";
 import { VcsProcessExitError } from "@t3tools/contracts";
 import { VcsDriverRegistry } from "../../vcs/VcsDriverRegistry.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
@@ -116,10 +120,10 @@ const makeCheckpointStore = Effect.gen(function* () {
         const commitEnv: NodeJS.ProcessEnv = {
           ...process.env,
           GIT_INDEX_FILE: tempIndexPath,
-          GIT_AUTHOR_NAME: "T3 Code",
-          GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
-          GIT_COMMITTER_NAME: "T3 Code",
-          GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+          GIT_AUTHOR_NAME: APP_NAME,
+          GIT_AUTHOR_EMAIL: "ru-fork@users.noreply.github.com",
+          GIT_COMMITTER_NAME: APP_NAME,
+          GIT_COMMITTER_EMAIL: "ru-fork@users.noreply.github.com",
         };
 
         const headExists = yield* hasHeadCommit(input.cwd);
@@ -135,7 +139,9 @@ const makeCheckpointStore = Effect.gen(function* () {
         yield* vcs.execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          // ru-fork: exclude Windows reserved-name junk so it can't abort
+          // the snapshot. See ru-fork/vcs/reservedNames.ts.
+          args: ["add", "-A", "--", ".", ...WINDOWS_RESERVED_EXCLUDES],
           env: commitEnv,
         });
 

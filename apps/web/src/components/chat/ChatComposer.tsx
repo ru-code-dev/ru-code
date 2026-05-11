@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import type {
   ApprovalRequestId,
   EnvironmentId,
@@ -30,9 +31,26 @@ import {
   useRef,
   useState,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
+// ru-fork: filesystem skill scanner — replaces the old
+// `provider.skills` snapshot read for the `$` popup.
+import { useSkillsForCwd } from "../../ru-fork/skills/useSkillsForCwd";
+import { refreshSkillsForCwd } from "../../ru-fork/skills/refreshSkillsForCwd";
+// ru-fork: filesystem subagent scanner (#-picker).
+import { useSubagentsForCwd } from "../../ru-fork/subagents/useSubagentsForCwd";
+import { refreshSubagentsForCwd } from "../../ru-fork/subagents/refreshSubagentsForCwd";
+import {
+  buildSubagentMenuItems,
+  flattenSubagentBuckets,
+  subagentInsertReplacement,
+} from "../../ru-fork/subagents/composerIntegration";
+import { DISABLE_AUTO_APPROVE, SHOW_MODEL_SELECTOR } from "../../ru-fork/config";
+// ru-fork: locally-defined slash commands injected into the `/` picker.
+import { buildRuForkSlashCommandItems } from "~/ru-fork/custom-commands/pickerItems";
+// ru-fork: rewrite stubs (/agents, /skills, /mcp) — picker entries; submit-side helper rewrites to natural language. See unsupported-slash-commands/stripUnknownLeadingSlashCommand.ts.
+import { buildSlashCommandRewritePickerItems } from "~/ru-fork/unsupported-slash-commands/pickerItems";
 import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
@@ -120,18 +138,18 @@ const runtimeModeConfig: Record<
   { label: string; description: string; icon: LucideIcon }
 > = {
   "approval-required": {
-    label: "Supervised",
-    description: "Ask before commands and file changes.",
+    label: "Ручное одобрение",
+    description: "Спрашивать перед командами и изменениями файлов.",
     icon: LockIcon,
   },
   "auto-accept-edits": {
-    label: "Auto-accept edits",
-    description: "Auto-approve edits, ask before other actions.",
+    label: "Авто одобрение",
+    description: "Автоподтверждение правок, спрашивать перед другими действиями.",
     icon: PenLineIcon,
   },
   "full-access": {
-    label: "Full access",
-    description: "Allow commands and edits without prompts.",
+    label: "Без ограничений",
+    description: "Разрешить команды и правки без подтверждений.",
     icon: LockOpenIcon,
   },
 };
@@ -186,17 +204,37 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   showPlanToggle: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
+  /**
+   * Locks the mode controls (interaction-mode toggle + runtime-mode
+   * select) while CLI is actively streaming. The change handlers only
+   * write to the composer draft store and apply on the next send, so
+   * leaving them live during streaming wouldn't break correctness — but
+   * the buttons would visually accept clicks that do nothing useful
+   * until the user actually sends. Locking matches the locked send
+   * action and gives the surface a coherent "in flight, hands off"
+   * feel.
+   */
+  isStreamingActive: boolean;
+  /**
+   * Also lock while CLI is parked on a user-input / approval / plan-
+   * approval request. Flipping a mode mid-park is meaningless — the
+   * current turn is suspended and a mode change only takes effect on
+   * the next send. Ru-fork addition (see
+   * `instrumental/changes/pending-requests-handling.md`); upstream T3
+   * intentionally left these unlocked during parking.
+   */
+  isParkedOnUser: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onTogglePlanSidebar: () => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
+  const lockedTitle = props.isParkedOnUser ? "Завершите текущий запрос" : undefined;
+  const isModeChangeLocked = props.isStreamingActive || props.isParkedOnUser;
 
   return (
     <>
-      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-
       {props.showInteractionModeToggle ? (
         <>
           <Button
@@ -204,16 +242,18 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
             size="sm"
             type="button"
+            disabled={isModeChangeLocked}
             onClick={props.onToggleInteractionMode}
             title={
-              props.interactionMode === "plan"
-                ? "Plan mode — click to return to normal build mode"
-                : "Default mode — click to enter plan mode"
+              lockedTitle ??
+              (props.interactionMode === "plan"
+                ? "Режим Планирование — нажмите, чтобы вернуться в режим Разработка"
+                : "Режим Разработка — нажмите, чтобы перейти в режим Планирование")
             }
           >
             <BotIcon />
             <span className="sr-only sm:not-sr-only">
-              {props.interactionMode === "plan" ? "Plan" : "Build"}
+              {props.interactionMode === "plan" ? "Планирование" : "Разработка"}
             </span>
           </Button>
 
@@ -223,6 +263,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
       <Select
         value={props.runtimeMode}
+        disabled={isModeChangeLocked}
         onValueChange={(value) => props.onRuntimeModeChange(value!)}
       >
         <SelectTrigger
@@ -230,7 +271,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           size="sm"
           className="font-medium"
           aria-label="Runtime mode"
-          title={runtimeModeOption.description}
+          title={lockedTitle ?? runtimeModeOption.description}
         >
           <RuntimeModeIcon className="size-4" />
           <SelectValue>{runtimeModeOption.label}</SelectValue>
@@ -239,8 +280,19 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           {runtimeModeOptions.map((mode) => {
             const option = runtimeModeConfig[mode];
             const OptionIcon = option.icon;
-            return (
-              <SelectItem key={mode} value={mode} className="min-w-64 py-2">
+            const isDisabled = DISABLE_AUTO_APPROVE && mode === "full-access";
+            const item = (
+              <SelectItem
+                key={mode}
+                value={mode}
+                disabled={isDisabled}
+                className="min-w-64 py-2"
+                style={
+                  isDisabled
+                    ? ({ pointerEvents: "auto", cursor: "not-allowed" } as const)
+                    : undefined
+                }
+              >
                 <div className="grid min-w-0 gap-0.5">
                   <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
                     <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -251,6 +303,13 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                   </span>
                 </div>
               </SelectItem>
+            );
+            if (!isDisabled) return item;
+            return (
+              <Tooltip key={mode}>
+                <TooltipTrigger render={item} />
+                <TooltipPopup>Заблокировано из соображений безопасности</TooltipPopup>
+              </Tooltip>
             );
           })}
         </SelectPopup>
@@ -297,16 +356,19 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  isParkedOnUser: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
   isConnecting: boolean;
-  isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
+  pendingPlanApprovalRequestId: ApprovalRequestId | null;
   onPreviousPendingQuestion: () => void;
+  onSkipPendingUserInput: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  onApproveInSameThread: () => void;
 }) {
   return (
     <>
@@ -318,17 +380,20 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        isParkedOnUser={props.isParkedOnUser}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
         isConnecting={props.isConnecting}
-        isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
+        pendingPlanApprovalRequestId={props.pendingPlanApprovalRequestId}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
+        onSkipPendingUserInput={props.onSkipPendingUserInput}
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
+        onApproveInSameThread={props.onApproveInSameThread}
       />
     </>
   );
@@ -395,15 +460,18 @@ export interface ChatComposerProps {
   isConnecting: boolean;
   isSendBusy: boolean;
   isPreparingWorktree: boolean;
-  environmentUnavailable: {
-    readonly label: string;
-    readonly connectionState: "connecting" | "disconnected" | "error";
-  } | null;
 
   // Pending approvals / inputs
   activePendingApproval: PendingApproval | null;
   pendingApprovals: PendingApproval[];
   pendingUserInputs: PendingUserInput[];
+  // Plan-approval is held in CLI's adapter via the same permission
+  // channel as generic approvals, but the web projection routes it
+  // through a separate boolean on the thread shell — `pendingApprovals`
+  // only contains command/file kinds (see derivePendingApprovals'
+  // requestKindFromRequestType filter). Need both sources for
+  // `isParkedOnUser` to cover plan_approval too.
+  hasPendingPlanApproval: boolean;
   activePendingProgress: {
     questionIndex: number;
     isLastQuestion: boolean;
@@ -458,12 +526,20 @@ export interface ChatComposerProps {
   onSend: (e?: { preventDefault: () => void }) => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  onApproveInSameThread: () => void;
+  pendingPlanApprovalRequestId: ApprovalRequestId | null;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<void>;
   onSelectActivePendingUserInputOption: (questionId: string, optionLabel: string) => void;
   onAdvanceActivePendingUserInput: () => void;
+  /**
+   * Ru-fork addition — submits the active pending user-input
+   * request with an empty answers payload (`{}`). See
+   * `instrumental/changes/pending-requests-handling.md`.
+   */
+  onSkipActivePendingUserInput: () => void;
   onPreviousActivePendingUserInputQuestion: () => void;
   onChangeActivePendingUserInputCustomAnswer: (
     questionId: string,
@@ -476,7 +552,6 @@ export interface ChatComposerProps {
   onProviderModelSelect: (instanceId: ProviderInstanceId, model: string) => void;
   toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
-  handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
   togglePlanSidebar: () => void;
 
   focusComposer: () => void;
@@ -506,10 +581,10 @@ export const ChatComposer = memo(
       isConnecting,
       isSendBusy,
       isPreparingWorktree,
-      environmentUnavailable,
       activePendingApproval,
       pendingApprovals,
       pendingUserInputs,
+      hasPendingPlanApproval,
       activePendingProgress,
       activePendingResolvedAnswers,
       activePendingIsResponding,
@@ -542,15 +617,17 @@ export const ChatComposer = memo(
       onSend,
       onInterrupt,
       onImplementPlanInNewThread,
+      onApproveInSameThread,
+      pendingPlanApprovalRequestId,
       onRespondToApproval,
       onSelectActivePendingUserInputOption,
       onAdvanceActivePendingUserInput,
+      onSkipActivePendingUserInput,
       onPreviousActivePendingUserInputQuestion,
       onChangeActivePendingUserInputCustomAnswer,
       onProviderModelSelect,
       toggleInteractionMode,
       handleRuntimeModeChange,
-      handleInteractionModeChange,
       togglePlanSidebar,
       focusComposer,
       scheduleComposerFocus,
@@ -611,7 +688,7 @@ export const ChatComposer = memo(
         providerInstanceEntries,
         providerStatuses,
         explicitSelectedInstanceId,
-      ) ?? ProviderDriverKind.make("codex");
+      ) ?? ProviderDriverKind.make(CLI_NAME);
     const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
     const lockedContinuationGroupKey = useMemo((): string | null => {
       if (!lockedProvider || !activeThread) return null;
@@ -640,6 +717,12 @@ export const ChatComposer = memo(
     //   5. First enabled entry overall / default instance for the kind.
     //
     const selectedInstanceId = useMemo<ProviderInstanceId>(() => {
+      // Hardcoded: always use the CLI instance. The model picker is
+      // hidden in the composer, so any persisted/locked selection from a
+      // previous provider must be ignored.
+      const cliKind = ProviderDriverKind.make(CLI_NAME);
+      const cliEntry = providerInstanceEntries.find((entry) => entry.driverKind === cliKind);
+      if (cliEntry) return cliEntry.instanceId;
       const candidates: Array<string | null | undefined> = [
         composerDraft.activeProvider,
         activeThread?.session?.providerInstanceId,
@@ -681,7 +764,7 @@ export const ChatComposer = memo(
         providerInstanceEntries[0]?.instanceId ??
         activeThreadModelSelection?.instanceId ??
         activeProjectDefaultModelSelection?.instanceId ??
-        ProviderInstanceId.make("codex")
+        ProviderInstanceId.make(CLI_NAME)
       );
     }, [
       activeProjectDefaultModelSelection?.instanceId,
@@ -851,6 +934,20 @@ export const ChatComposer = memo(
       }),
     );
     const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
+    // ru-fork: filesystem skill scanner. Replaces `provider.skills` —
+    // see apps/server/src/ru-fork/skills + apps/web/src/ru-fork/skills.
+    const skillsForCwdQuery = useSkillsForCwd(gitCwd);
+    const composerSkills = useMemo(
+      () => [...(skillsForCwdQuery.data?.project ?? []), ...(skillsForCwdQuery.data?.global ?? [])],
+      [skillsForCwdQuery.data],
+    );
+    // ru-fork: filesystem subagent scanner. Flat ordering owned by helper.
+    const subagentsForCwdQuery = useSubagentsForCwd(gitCwd);
+    const composerSubagents = useMemo(
+      () => flattenSubagentBuckets(subagentsForCwdQuery.data),
+      [subagentsForCwdQuery.data],
+    );
+    const queryClient = useQueryClient();
 
     const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
       if (!composerTrigger) return [];
@@ -867,26 +964,41 @@ export const ChatComposer = memo(
       if (composerTrigger.kind === "slash-command") {
         const builtInSlashCommandItems = [
           {
-            id: "slash:model",
+            id: "slash:refresh-skills",
             type: "slash-command",
-            command: "model",
-            label: "/model",
-            description: "Switch response model for this thread",
+            command: "refresh-skills",
+            label: "/refresh-skills",
+            description: "Обновить список навыков от провайдера",
           },
           {
-            id: "slash:plan",
+            id: "slash:refresh-subagents",
             type: "slash-command",
-            command: "plan",
-            label: "/plan",
-            description: "Switch this thread into plan mode",
+            command: "refresh-subagents",
+            label: "/refresh-subagents",
+            description: "Обновить список агентов",
           },
-          {
-            id: "slash:default",
-            type: "slash-command",
-            command: "default",
-            label: "/default",
-            description: "Switch this thread back to normal build mode",
-          },
+          // Temporarily hidden — re-enable when the proper UX lands.
+          // {
+          //   id: "slash:model",
+          //   type: "slash-command",
+          //   command: "model",
+          //   label: "/model",
+          //   description: "Сменить модель ответа для этого диалога",
+          // },
+          // {
+          //   id: "slash:plan",
+          //   type: "slash-command",
+          //   command: "plan",
+          //   label: "/plan",
+          //   description: "Перевести этот диалог в режим Планирование",
+          // },
+          // {
+          //   id: "slash:default",
+          //   type: "slash-command",
+          //   command: "default",
+          //   label: "/default",
+          //   description: "Вернуть этот диалог в режим Разработка",
+          // },
         ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
         const providerSlashCommandItems = (selectedProviderStatus?.slashCommands ?? []).map(
           (command) => ({
@@ -899,17 +1011,21 @@ export const ChatComposer = memo(
           }),
         );
         const query = composerTrigger.query.trim().toLowerCase();
-        const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
+        const slashCommandItems = [
+          ...builtInSlashCommandItems,
+          ...buildRuForkSlashCommandItems(), // ru-fork
+          // ru-fork: rewrite stubs (/agents, /skills, /mcp) — CLI doesn't implement them; the submit-side strip helper turns the slash into a natural-language prompt.
+          ...buildSlashCommandRewritePickerItems(),
+          ...providerSlashCommandItems,
+        ];
         if (!query) {
           return slashCommandItems;
         }
         return searchSlashCommandItems(slashCommandItems, query);
       }
       if (composerTrigger.kind === "skill") {
-        return searchProviderSkills(
-          selectedProviderStatus?.skills ?? [],
-          composerTrigger.query,
-        ).map((skill) => ({
+        // ru-fork: read from filesystem scanner instead of provider snapshot.
+        return searchProviderSkills(composerSkills, composerTrigger.query).map((skill) => ({
           id: `skill:${selectedProvider}:${skill.name}`,
           type: "skill" as const,
           provider: selectedProvider,
@@ -921,8 +1037,19 @@ export const ChatComposer = memo(
             (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
         }));
       }
+      // ru-fork: `#agent-name` picker delegated to ru-fork helper.
+      if (composerTrigger.kind === "subagent") {
+        return buildSubagentMenuItems(composerSubagents, composerTrigger.query);
+      }
       return [];
-    }, [composerTrigger, selectedProvider, selectedProviderStatus, workspaceEntries]);
+    }, [
+      composerTrigger,
+      selectedProvider,
+      selectedProviderStatus,
+      workspaceEntries,
+      composerSkills,
+      composerSubagents, // ru-fork
+    ]);
 
     const composerMenuOpen = Boolean(composerTrigger);
     const composerMenuSearchKey = composerTrigger
@@ -954,6 +1081,18 @@ export const ChatComposer = memo(
 
     const isComposerApprovalState = activePendingApproval !== null;
     const activePendingUserInput = pendingUserInputs[0] ?? null;
+
+    // True only when CLI is genuinely streaming output. Approval /
+    // plan-approval / user-input parking technically holds the session
+    // in `phase === "running"` but CLI isn't producing tokens — the
+    // user has an action to take. We don't want to lock the composer
+    // surface (mode toggles, Enter key, send) during parking; those
+    // remain usable so the user can either resolve the held request
+    // (in the dedicated UI) or queue a follow-up message that the
+    // server-side auto-interrupt will release the held Deferred for.
+    const isParkedOnUser =
+      pendingApprovals.length > 0 || pendingUserInputs.length > 0 || hasPendingPlanApproval;
+    const isStreamingActive = phase === "running" && !isParkedOnUser;
     const hasComposerHeader =
       isComposerApprovalState ||
       pendingUserInputs.length > 0 ||
@@ -1501,27 +1640,59 @@ export const ChatComposer = memo(
           return;
         }
         if (item.type === "slash-command") {
-          if (item.command === "model") {
+          if (item.command === "refresh-skills") {
             const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
               expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-              focusEditorAfterReplace: false,
             });
             if (applied) {
               setComposerHighlightedItemId(null);
-              setIsComposerModelPickerOpen(true);
             }
+            // ru-fork: refresh the FS scanner for the active cwd, not
+            // the whole provider snapshot. Fire-and-forget — same UX pattern
+            // as the Settings-panel refresh: failures only land in console.
+            void refreshSkillsForCwd({ cwd: gitCwd, queryClient }).catch((error: unknown) => {
+              console.warn("Failed to refresh skills", error);
+            });
             return;
           }
-          void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
-          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          });
-          if (applied) {
-            setComposerHighlightedItemId(null);
+          // ru-fork: subagent refresh parallel to skills.
+          if (item.command === "refresh-subagents") {
+            const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+              expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            });
+            if (applied) {
+              setComposerHighlightedItemId(null);
+            }
+            void refreshSubagentsForCwd({ cwd: gitCwd, queryClient }).catch((error: unknown) => {
+              console.warn("Failed to refresh subagents", error);
+            });
+            return;
           }
+          // Temporarily disabled along with the menu items above. Restore
+          // both blocks together when /model and /plan|/default come back.
+          // if (item.command === "model") {
+          //   const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          //     expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          //     focusEditorAfterReplace: false,
+          //   });
+          //   if (applied) {
+          //     setComposerHighlightedItemId(null);
+          //     setIsComposerModelPickerOpen(true);
+          //   }
+          //   return;
+          // }
+          // void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+          // const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          //   expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          // });
+          // if (applied) {
+          //   setComposerHighlightedItemId(null);
+          // }
           return;
         }
-        if (item.type === "provider-slash-command") {
+        // ru-fork: `ru-fork-slash-command` shares the provider branch — both
+        // insert `/<command.name> ` and let the user press Enter normally.
+        if (item.type === "provider-slash-command" || item.type === "ru-fork-slash-command") {
           const replacement = `/${item.command.name} `;
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
@@ -1557,8 +1728,27 @@ export const ChatComposer = memo(
           }
           return;
         }
+        // ru-fork: subagent insert — replacement string from ru-fork helper.
+        if (item.type === "subagent") {
+          const replacement = subagentInsertReplacement(item.subagent);
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
+          }
+          return;
+        }
       },
-      [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+      [applyPromptReplacement, resolveActiveComposerTrigger, gitCwd, queryClient],
     );
 
     const onComposerMenuItemHighlighted = useCallback(
@@ -1656,6 +1846,21 @@ export const ChatComposer = memo(
       key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
       event: KeyboardEvent,
     ) => {
+      // Lock both keyboard shortcuts that mutate session state while
+      // CLI is actively streaming. Tab+Shift would write a mode toggle
+      // to the draft; Enter would dispatch thread.turn.start which (with
+      // the auto-interrupt fix) would tear down the in-flight session
+      // and respawn. The textarea itself is intentionally NOT disabled
+      // — the user can keep typing and queue a follow-up message,
+      // they just can't submit it until streaming finishes.
+      if (isStreamingActive) {
+        if (key === "Enter" && !event.shiftKey) {
+          return true;
+        }
+        if (key === "Tab" && event.shiftKey) {
+          return true;
+        }
+      }
       if (key === "Tab" && event.shiftKey) {
         toggleInteractionMode();
         return true;
@@ -1789,6 +1994,9 @@ export const ChatComposer = memo(
     const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
       void onImplementPlanInNewThread();
     }, [onImplementPlanInNewThread]);
+    const handleApproveInSameThreadPrimaryAction = useCallback(() => {
+      void onApproveInSameThread();
+    }, [onApproveInSameThread]);
     const scheduleComposerCollapseCheck = useCallback(() => {
       if (!isMobileViewport) {
         return;
@@ -1966,7 +2174,6 @@ export const ChatComposer = memo(
             className={cn(
               "rounded-[20px] border bg-card transition-colors duration-200 has-focus-visible:border-ring/45",
               isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border",
-              environmentUnavailable ? "opacity-75" : null,
               composerProviderState.composerSurfaceClassName,
             )}
             onFocusCapture={(event) => {
@@ -2074,17 +2281,20 @@ export const ChatComposer = memo(
                         compact
                         pendingAction={pendingPrimaryAction}
                         isRunning={false}
+                        isParkedOnUser={isParkedOnUser}
                         showPlanFollowUpPrompt={false}
                         promptHasText={false}
                         isSendBusy={isSendBusy}
                         isConnecting={isConnecting}
-                        isEnvironmentUnavailable={environmentUnavailable !== null}
                         isPreparingWorktree={false}
                         hasSendableContent={false}
                         preserveComposerFocusOnPointerDown
+                        pendingPlanApprovalRequestId={pendingPlanApprovalRequestId}
                         onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                        onSkipPendingUserInput={onSkipActivePendingUserInput}
                         onInterrupt={handleInterruptPrimaryAction}
                         onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                        onApproveInSameThread={handleApproveInSameThreadPrimaryAction}
                       />
                     ) : null}
                   </div>
@@ -2245,7 +2455,10 @@ export const ChatComposer = memo(
                       ? composerTerminalContexts
                       : []
                   }
-                  skills={selectedProviderStatus?.skills ?? []}
+                  skills={
+                    composerSkills /* ru-fork: from filesystem scanner (was provider.skills) */
+                  }
+                  subagents={composerSubagents /* ru-fork: #-picker source */}
                   {...(showMobilePendingAnswerActions ? { className: "max-sm:pb-11" } : {})}
                   onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                   onChange={onPromptChange}
@@ -2253,27 +2466,16 @@ export const ChatComposer = memo(
                   onPaste={onComposerPaste}
                   placeholder={
                     isComposerApprovalState
-                      ? (activePendingApproval?.detail ??
-                        "Resolve this approval request to continue")
+                      ? (activePendingApproval?.detail ?? "Подтвердите запрос, чтобы продолжить")
                       : activePendingProgress
-                        ? "Type your own answer, or leave this blank to use the selected option"
+                        ? "Напишите свой ответ или оставьте пустым, чтобы использовать выбранный вариант"
                         : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : environmentUnavailable
-                            ? `${environmentUnavailable.label} is ${
-                                environmentUnavailable.connectionState === "connecting"
-                                  ? "connecting"
-                                  : "disconnected"
-                              }`
-                            : phase === "disconnected"
-                              ? "Ask for follow-up changes or attach images"
-                              : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                          ? "Добавьте комментарий, чтобы уточнить план, или оставьте пустым для запуска"
+                          : phase === "disconnected"
+                            ? "Запросите изменения или прикрепите изображения"
+                            : "Спросите что угодно, @упомяните файлы/папки, $используйте навыки или / для команд"
                   }
-                  disabled={
-                    isConnecting ||
-                    isComposerApprovalState ||
-                    (environmentUnavailable !== null && activePendingProgress === null)
-                  }
+                  disabled={isConnecting || isComposerApprovalState}
                 />
                 {showMobilePendingAnswerActions ? (
                   <div
@@ -2284,17 +2486,20 @@ export const ChatComposer = memo(
                       compact
                       pendingAction={pendingPrimaryAction}
                       isRunning={false}
+                      isParkedOnUser={isParkedOnUser}
                       showPlanFollowUpPrompt={false}
                       promptHasText={false}
                       isSendBusy={isSendBusy}
                       isConnecting={isConnecting}
-                      isEnvironmentUnavailable={environmentUnavailable !== null}
                       isPreparingWorktree={false}
                       hasSendableContent={false}
                       preserveComposerFocusOnPointerDown
+                      pendingPlanApprovalRequestId={pendingPlanApprovalRequestId}
                       onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                      onSkipPendingUserInput={onSkipActivePendingUserInput}
                       onInterrupt={handleInterruptPrimaryAction}
                       onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                      onApproveInSameThread={handleApproveInSameThreadPrimaryAction}
                     />
                   </div>
                 ) : null}
@@ -2321,28 +2526,30 @@ export const ChatComposer = memo(
                 )}
               >
                 <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  <ProviderModelPicker
-                    compact={isComposerFooterCompact}
-                    activeInstanceId={selectedInstanceId}
-                    model={selectedModelForPickerWithCustomFallback}
-                    lockedProvider={lockedProvider}
-                    lockedContinuationGroupKey={lockedContinuationGroupKey}
-                    instanceEntries={providerInstanceEntries}
-                    keybindings={keybindings}
-                    modelOptionsByInstance={modelOptionsByInstance}
-                    terminalOpen={terminalOpen}
-                    open={isComposerModelPickerOpen}
-                    {...(composerProviderState.modelPickerIconClassName
-                      ? {
-                          activeProviderIconClassName:
-                            composerProviderState.modelPickerIconClassName,
-                        }
-                      : {})}
-                    onOpenChange={(open) => {
-                      setIsComposerModelPickerOpen(open);
-                    }}
-                    onInstanceModelChange={onProviderModelSelect}
-                  />
+                  {SHOW_MODEL_SELECTOR ? (
+                    <ProviderModelPicker
+                      compact={isComposerFooterCompact}
+                      activeInstanceId={selectedInstanceId}
+                      model={selectedModelForPickerWithCustomFallback}
+                      lockedProvider={lockedProvider}
+                      lockedContinuationGroupKey={lockedContinuationGroupKey}
+                      instanceEntries={providerInstanceEntries}
+                      keybindings={keybindings}
+                      modelOptionsByInstance={modelOptionsByInstance}
+                      terminalOpen={terminalOpen}
+                      open={isComposerModelPickerOpen}
+                      {...(composerProviderState.modelPickerIconClassName
+                        ? {
+                            activeProviderIconClassName:
+                              composerProviderState.modelPickerIconClassName,
+                          }
+                        : {})}
+                      onOpenChange={(open) => {
+                        setIsComposerModelPickerOpen(open);
+                      }}
+                      onInstanceModelChange={onProviderModelSelect}
+                    />
+                  ) : null}
 
                   {isComposerFooterCompact ? (
                     <CompactComposerControlsMenu
@@ -2353,6 +2560,8 @@ export const ChatComposer = memo(
                       runtimeMode={runtimeMode}
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       traitsMenuContent={providerTraitsMenuContent}
+                      isStreamingActive={isStreamingActive}
+                      isParkedOnUser={isParkedOnUser}
                       onToggleInteractionMode={toggleInteractionMode}
                       onTogglePlanSidebar={togglePlanSidebar}
                       onRuntimeModeChange={handleRuntimeModeChange}
@@ -2377,6 +2586,8 @@ export const ChatComposer = memo(
                         showPlanToggle={showPlanSidebarToggle}
                         planSidebarLabel={planSidebarLabel}
                         planSidebarOpen={planSidebarOpen}
+                        isStreamingActive={isStreamingActive}
+                        isParkedOnUser={isParkedOnUser}
                         onToggleInteractionMode={toggleInteractionMode}
                         onRuntimeModeChange={handleRuntimeModeChange}
                         onTogglePlanSidebar={togglePlanSidebar}
@@ -2398,19 +2609,22 @@ export const ChatComposer = memo(
                     activeContextWindow={activeContextWindow}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
+                    isParkedOnUser={isParkedOnUser}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }
                     promptHasText={prompt.trim().length > 0}
                     isSendBusy={isSendBusy}
                     isConnecting={isConnecting}
-                    isEnvironmentUnavailable={environmentUnavailable !== null}
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     preserveComposerFocusOnPointerDown={isMobileViewport}
+                    pendingPlanApprovalRequestId={pendingPlanApprovalRequestId}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                    onSkipPendingUserInput={onSkipActivePendingUserInput}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                    onApproveInSameThread={handleApproveInSameThreadPrimaryAction}
                   />
                 </div>
               </div>

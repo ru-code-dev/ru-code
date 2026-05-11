@@ -120,7 +120,10 @@ export const RuntimeMode = Schema.Literals([
   "full-access",
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+// ru-fork: default flipped from "approval-required" → "auto-accept-edits"
+// so new threads start in «Авто одобрение» (auto-accept edits, ask for
+// commands). Single source of truth for the contract-level default.
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "auto-accept-edits";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -396,6 +399,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  hasPendingPlanApproval: Schema.Boolean,
+  pendingPlanApprovalRequestId: Schema.NullOr(ApprovalRequestId),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 

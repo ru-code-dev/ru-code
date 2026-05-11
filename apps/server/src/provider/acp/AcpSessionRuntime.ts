@@ -14,6 +14,10 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 
+// ru-fork: spawn-policy helper — routes CLI --acp through bash
+// when --windows-use-bash-for lists this binary; otherwise preserves
+// the original cmd.exe / shell:true path. See ru-fork/spawn/policy.ts.
+import { resolveSpawn } from "../../ru-fork/spawn/policy.ts";
 import {
   collectSessionConfigOptionValues,
   extractModelConfigId,
@@ -97,6 +101,23 @@ export interface AcpSessionRuntimeShape {
     payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
   ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
   readonly cancel: Effect.Effect<void, EffectAcpErrors.AcpError>;
+  /**
+   * SIGKILL the spawned ACP child process. Unmaskable by the OS — the
+   * kernel reaps the process unconditionally, so this never hangs even
+   * when the agent is stuck. Skips the agent's own cleanup (MCP
+   * subprocesses, in-memory state, log flushing). Use only on tear-down
+   * paths where the session is being discarded anyway and forward
+   * progress matters more than politeness.
+   */
+  readonly forceKill: Effect.Effect<void>;
+  /**
+   * Resolves when the spawned ACP child process has exited (for any
+   * reason — clean exit, SIGTERM, SIGKILL, crash, OOM). Used by the
+   * adapter's child-exit watcher to detect "agent died on its own"
+   * and force-complete an in-flight turn before the UI hangs forever.
+   * Errors swallowed — we only need the "it ended" signal.
+   */
+  readonly waitForExit: Effect.Effect<void>;
   readonly setMode: (
     modeId: string,
   ) => Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError>;
@@ -165,6 +186,15 @@ const makeAcpSessionRuntime = (
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
+    // True while a session/load request is in flight. Per ACP spec, the agent
+    // replays prior conversation as session/update notifications during this
+    // window. T3 already has its own thread history, so the replay is dropped
+    // to avoid double-rendering historical messages into the live chat.
+    const suppressUpdatesRef = yield* Ref.make(false);
+    // Per-runtime-instance nonce. Used in assistant message item IDs so that a
+    // resumed session (same acpSessionId, fresh in-memory segment counter at 0)
+    // never collides with assistant message IDs persisted by the prior runtime.
+    const runtimeInstanceId = crypto.randomUUID().slice(0, 8);
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -197,12 +227,17 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    // ru-fork: ACP session is the long-running chat-driving spawn.
+    // Honors --windows-use-bash-for; otherwise preserves shell:true on Win32.
+    const resolved = resolveSpawn(options.spawn.command, options.spawn.args, {
+      shell: process.platform === "win32",
+    });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(options.spawn.command, [...options.spawn.args], {
+        ChildProcess.make(resolved.command, [...resolved.args], {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           ...(options.spawn.env ? { env: { ...process.env, ...options.spawn.env } } : {}),
-          shell: process.platform === "win32",
+          shell: resolved.shell,
         }),
       )
       .pipe(
@@ -231,12 +266,17 @@ const makeAcpSessionRuntime = (
     const acp = yield* Effect.service(EffectAcpClient.AcpClient).pipe(Effect.provide(acpContext));
 
     yield* acp.handleSessionUpdate((notification) =>
-      handleSessionUpdate({
-        queue: eventQueue,
-        modeStateRef,
-        toolCallsRef,
-        assistantSegmentRef,
-        params: notification,
+      Effect.gen(function* () {
+        const suppress = yield* Ref.get(suppressUpdatesRef);
+        if (suppress) return;
+        yield* handleSessionUpdate({
+          queue: eventQueue,
+          modeStateRef,
+          toolCallsRef,
+          assistantSegmentRef,
+          params: notification,
+          runtimeInstanceId,
+        });
       }),
     );
 
@@ -399,11 +439,12 @@ const makeAcpSessionRuntime = (
           cwd: options.cwd,
           mcpServers: [],
         } satisfies EffectAcpSchema.LoadSessionRequest;
+        yield* Ref.set(suppressUpdatesRef, true);
         const resumed = yield* runLoggedRequest(
           "session/load",
           loadPayload,
           acp.agent.loadSession(loadPayload),
-        ).pipe(Effect.exit);
+        ).pipe(Effect.exit, Effect.ensuring(Ref.set(suppressUpdatesRef, false)));
         if (Exit.isSuccess(resumed)) {
           sessionId = options.resumeSessionId;
           sessionSetupResult = resumed.value;
@@ -528,6 +569,8 @@ const makeAcpSessionRuntime = (
       cancel: getStartedState.pipe(
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
+      forceKill: Effect.ignore(child.kill({ killSignal: "SIGKILL" })),
+      waitForExit: Effect.ignore(child.exitCode),
       setMode: (modeId) =>
         Ref.get(modeStateRef).pipe(
           Effect.flatMap((modeState) => {
@@ -582,12 +625,14 @@ const handleSessionUpdate = ({
   toolCallsRef,
   assistantSegmentRef,
   params,
+  runtimeInstanceId,
 }: {
   readonly queue: Queue.Queue<AcpParsedSessionEvent>;
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly params: EffectAcpSchema.SessionNotification;
+  readonly runtimeInstanceId: string;
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
     const parsed = parseSessionUpdateEvent(params);
@@ -634,6 +679,7 @@ const handleSessionUpdate = ({
           queue,
           assistantSegmentRef,
           sessionId: params.sessionId,
+          runtimeInstanceId,
         });
         yield* Queue.offer(queue, {
           ...event,
@@ -671,17 +717,19 @@ function shouldEmitToolCallUpdate(
   return previous === undefined || previous.title !== next.title || previous.detail !== next.detail;
 }
 
-const assistantItemId = (sessionId: string, segmentIndex: number) =>
-  `assistant:${sessionId}:segment:${segmentIndex}`;
+const assistantItemId = (sessionId: string, runtimeInstanceId: string, segmentIndex: number) =>
+  `assistant:${sessionId}:r${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   queue,
   assistantSegmentRef,
   sessionId,
+  runtimeInstanceId,
 }: {
   readonly queue: Queue.Queue<AcpParsedSessionEvent>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly sessionId: string;
+  readonly runtimeInstanceId: string;
 }) =>
   Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
     assistantSegmentRef,
@@ -689,7 +737,7 @@ const ensureActiveAssistantSegment = ({
       if (current.activeItemId) {
         return [{ itemId: current.activeItemId }, current] as const;
       }
-      const itemId = assistantItemId(sessionId, current.nextSegmentIndex);
+      const itemId = assistantItemId(sessionId, runtimeInstanceId, current.nextSegmentIndex);
       return [
         {
           itemId,

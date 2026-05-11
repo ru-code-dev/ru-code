@@ -9,7 +9,6 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
-  type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
@@ -17,7 +16,6 @@ import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -39,6 +37,13 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+// ru-fork: classifier-based error routing. See
+// `ru-fork-instrumental/changes/server-errors-handaling.md`.
+import {
+  classify,
+  UNRECOGNIZED_DECISION,
+} from "../../ru-fork/cli-errors-handling/recognizers.ts";
+import { dispatchCause } from "../../ru-fork/cli-errors-handling/dispatch.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -86,8 +91,7 @@ const serverCommandId = (tag: string): CommandId =>
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
-const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const DEFAULT_THREAD_TITLE = "New thread";
+const DEFAULT_THREAD_TITLE = "Новый диалог";
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -123,7 +127,33 @@ function findProviderAdapterRequestError(
   return isProviderAdapterRequestError(failReason?.error) ? failReason.error : undefined;
 }
 
+/**
+ * Ru-fork: after flipping `allowRecovery: false` on the response
+ * paths in ProviderService, a stale response no longer reaches the
+ * adapter — it short-circuits at `requireSession` with a
+ * `ProviderAdapterSessionNotFoundError`. So all "is this a stale
+ * pending request?" checks must accept BOTH error shapes:
+ *
+ *   - `ProviderAdapterSessionNotFoundError` — adapter ctx is gone
+ *     (server restart, mode-change teardown, adapter crash). The
+ *     pending Deferred is also gone.
+ *   - `ProviderAdapterRequestError` with detail "unknown pending …" —
+ *     adapter ctx exists but the specific requestId is no longer in
+ *     its in-memory map (e.g. already resolved, or never registered).
+ *
+ * Either way the request is unrecoverable and we surface the same
+ * stale-detail to the user. See
+ * `instrumental/changes/pending-requests-handling.md`.
+ */
+function isAdapterSessionNotFoundError(cause: Cause.Cause<ProviderServiceError>): boolean {
+  const failReason = cause.reasons.find(Cause.isFailReason);
+  return failReason?.error?._tag === "ProviderAdapterSessionNotFoundError";
+}
+
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
+  if (isAdapterSessionNotFoundError(cause)) {
+    return true;
+  }
   const error = findProviderAdapterRequestError(cause);
   if (error) {
     const detail = error.detail.toLowerCase();
@@ -140,6 +170,9 @@ function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderService
 }
 
 function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
+  if (isAdapterSessionNotFoundError(cause)) {
+    return true;
+  }
   const error = findProviderAdapterRequestError(cause);
   if (error) {
     return error.detail.toLowerCase().includes("unknown pending user-input request");
@@ -153,6 +186,16 @@ function stalePendingRequestDetail(
 ): string {
   return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
 }
+
+// ru-fork: friendly Russian fallback substituted into `session.lastError`
+// when the upstream `detail` arrived empty. The thread.session.set schema
+// requires `lastError` length >= 1, so an empty string would crash
+// persistence and leave the turn live (the "Работаю" timer ticking forever).
+// See `ru-fork-instrumental/changes/server-errors-handaling.md` —
+// side-bug 2 in the Planned section. Empty detail also fires a tripwire
+// log line so the upstream regression (a tagged error class missing a
+// `message` getter) is visible in the server log.
+const FALLBACK_LAST_ERROR = "Произошла ошибка. Подробности в журнале сервера.";
 
 function buildGeneratedWorktreeBranchName(raw: string): string {
   const normalized = raw
@@ -233,16 +276,13 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
-  const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
-    const failReason = cause.reasons.find(Cause.isFailReason);
-    const providerError = isProviderAdapterRequestError(failReason?.error)
-      ? failReason.error
-      : undefined;
-    if (providerError) {
-      return providerError.detail;
-    }
-    return Cause.pretty(cause);
-  };
+  // ru-fork: `formatFailureDetail` deleted. Routing moved to the
+  // classifier in `apps/server/src/ru-fork/cli-errors-handling/`.
+  // The old fast path ("ProviderAdapterRequestError with non-empty
+  // detail → return its detail") is now `Z_CLEAN_REQUEST_ERROR` in
+  // recognizers.ts. The old `Cause.pretty` fallback is replaced by
+  // `UNRECOGNIZED_DECISION` — a fixed Russian fallback in UI plus the
+  // full pretty cause in the `[cli-error.unrecognized]` log line.
 
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
@@ -257,6 +297,62 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+  /**
+   * Ru-fork: clear orphan turn + session state after the failed
+   * response to a stale pending request. After a server restart the
+   * activity log still shows `user-input.requested` (or `approval`/
+   * `plan-approval`) open and the projection still shows the session
+   * with `activeTurnId` set — but the in-memory adapter ctx is gone.
+   * Emitting `.respond.failed` only clears the *request* flag; the
+   * orphaned turn keeps the "Работаю" timer + Stop button visible.
+   * This helper flips the session to `stopped` and nulls
+   * `activeTurnId`, matching what `processSessionStopRequested` does
+   * for an explicit stop command. See
+   * `instrumental/changes/pending-requests-handling.md`.
+   */
+  const recoverOrphanedTurnState = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return;
+    }
+    const session = thread.session;
+    if (!session) {
+      return;
+    }
+    if (session.status === "stopped" && session.activeTurnId === null) {
+      return;
+    }
+    yield* Effect.logInfo("provider-command-reactor.orphan-turn.recover", {
+      threadId: input.threadId,
+      previousStatus: session.status,
+      previousActiveTurnId: session.activeTurnId,
+    });
+    // Dispatch the same command the explicit Stop button uses — it
+    // bundles `providerService.stopSession()` + `setThreadSession({
+    // status: "stopped", activeTurnId: null })` so recovery semantics
+    // match manual stop exactly. `providerService.stopSession` skips
+    // the adapter call when no in-memory ctx exists (see
+    // `ProviderService.ts:807`), so this is cheap when the ctx is
+    // gone; if a half-recovered ctx exists it gets torn down cleanly.
+    //
+    // Note: response paths now use `allowRecovery: false`, so a stale
+    // click no longer triggers a fresh adapter spawn — there is no
+    // longer a `session.started` race to worry about. We still route
+    // through `thread.session.stop` rather than a bare
+    // `setThreadSession` because it's the established primitive for
+    // "fully clear session state" and stays correct if recovery
+    // semantics ever change.
+    yield* orchestrationEngine.dispatch({
+      type: "thread.session.stop",
+      commandId: serverCommandId("provider-orphan-turn-stop"),
+      threadId: input.threadId,
+      createdAt: input.createdAt,
+    });
+  });
+
   const setThreadSessionErrorOnTurnStartFailure = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly detail: string;
@@ -267,13 +363,30 @@ const make = Effect.gen(function* () {
     if (!session) {
       return;
     }
+
+    // ru-fork: tripwire + graceful fallback. An empty `detail` means
+    // something upstream produced `ProviderAdapterRequestError({ detail: "" })`
+    // — typically a tagged error class with a missing or broken `message`
+    // getter (see server-errors-handaling.md side-bug 1). The substitution
+    // below keeps the UI graceful; the logError makes the regression visible
+    // so the upstream cause can be fixed.
+    if (input.detail.trim().length === 0) {
+      yield* Effect.logError("[turn-start.empty-detail]", {
+        threadId: input.threadId,
+        hint:
+          "ProviderAdapterRequestError reached us with empty .detail. " +
+          "Upstream tagged error likely missing a `message` getter.",
+      });
+    }
+    const safeDetail = input.detail.trim().length > 0 ? input.detail : FALLBACK_LAST_ERROR;
+
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
         ...session,
         status: session.status === "stopped" ? "stopped" : "ready",
         activeTurnId: null,
-        lastError: input.detail,
+        lastError: safeDetail,
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
@@ -403,8 +516,8 @@ const make = Effect.gen(function* () {
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
-    }) =>
-      providerService.startSession(threadId, {
+    }) => {
+      return providerService.startSession(threadId, {
         threadId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
@@ -413,6 +526,7 @@ const make = Effect.gen(function* () {
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
+    };
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -443,7 +557,11 @@ const make = Effect.gen(function* () {
     const existingSessionThreadId =
       thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
     if (existingSessionThreadId) {
-      const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
+      // ru-fork: runtimeModeChanged removed from restart triggers — the
+      // adapter receives live runtimeMode on every sendTurn / respondToRequest
+      // input (see ProviderSendTurnInput / ProviderRespondToRequestInput),
+      // so dropdown changes no longer require a session restart. Restart still
+      // fires for cwd / provider-instance / model changes.
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
@@ -454,19 +572,8 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
-      const previousModelSelection = threadModelSelections.get(threadId);
-      const shouldRestartForModelSelectionChange =
-        preferredProvider === "claudeAgent" &&
-        requestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, requestedModelSelection);
 
-      if (
-        !runtimeModeChanged &&
-        !cwdChanged &&
-        !instanceChanged &&
-        !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
-      ) {
+      if (!cwdChanged && !instanceChanged && !shouldRestartForModelChange) {
         return existingSessionThreadId;
       }
 
@@ -480,16 +587,14 @@ const make = Effect.gen(function* () {
         currentInstanceId,
         desiredInstanceId,
         desiredProvider: desiredModelSelection.instanceId,
-        currentRuntimeMode: thread.session?.runtimeMode,
+        currentRuntimeMode: activeSession?.runtimeMode,
         desiredRuntimeMode: thread.runtimeMode,
-        runtimeModeChanged,
         previousCwd: activeSession?.cwd,
         desiredCwd: effectiveCwd,
         cwdChanged,
         modelChanged,
         instanceChanged,
         shouldRestartForModelChange,
-        shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -570,6 +675,10 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      // ru-fork: live runtimeMode per turn — replaces the previous
+      // restart-on-runtimeMode-change path. CliAdapter reads input.runtimeMode
+      // to compute setMode and updates ctx.currentRuntimeMode for closure reads.
+      runtimeMode: thread.runtimeMode,
     };
   });
 
@@ -637,16 +746,31 @@ const make = Effect.gen(function* () {
       readonly titleSeed?: string;
     }) {
       const attachments = input.attachments ?? [];
+      const messageFallbackTitle = (() => {
+        const firstLine = input.messageText.trim().split(/\r?\n/)[0]?.trim() ?? "";
+        const compact = firstLine.replace(/\s+/g, " ");
+        if (compact.length === 0) return "Новый диалог";
+        return compact.length > 60 ? `${compact.slice(0, 57).trimEnd()}…` : compact;
+      })();
       yield* Effect.gen(function* () {
         const { textGenerationModelSelection: modelSelection } =
           yield* serverSettingsService.getSettings;
 
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd: input.cwd,
-          message: input.messageText,
-          ...(attachments.length > 0 ? { attachments } : {}),
-          modelSelection,
-        });
+        const generated = yield* textGeneration
+          .generateThreadTitle({
+            cwd: input.cwd,
+            message: input.messageText,
+            ...(attachments.length > 0 ? { attachments } : {}),
+            modelSelection,
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("thread title generation failed; using message-derived fallback", {
+                threadId: input.threadId,
+                cause: Cause.pretty(Cause.fail(cause)),
+              }).pipe(Effect.as({ title: messageFallbackTitle })),
+            ),
+          );
         if (!generated) return;
 
         const thread = yield* resolveThread(input.threadId);
@@ -730,29 +854,51 @@ const make = Effect.gen(function* () {
       }
     }
 
-    const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
-      if (Cause.hasInterruptsOnly(cause)) {
-        return Effect.void;
-      }
-      const detail = formatFailureDetail(cause);
-      return setThreadSessionErrorOnTurnStartFailure({
-        threadId: event.payload.threadId,
-        detail,
-        createdAt: event.payload.createdAt,
-      }).pipe(
-        Effect.flatMap(() =>
-          appendProviderFailureActivity({
+    // ru-fork: route turn-start failures through the cli-errors-handling
+    // classifier. The classifier walks the cause chain, returns a
+    // `CliErrorDecision`, and the dispatcher applies it (timeline
+    // activity / red notification / kill CLI / end turn).
+    // Unrecognized failures get `UNRECOGNIZED_DECISION` (generic friendly
+    // Russian text in the UI, full `Cause.pretty` in the server log).
+    // The old `formatFailureDetail` helper has been deleted — its fast
+    // path now lives as the `Z_CLEAN_REQUEST_ERROR` recognizer.
+    const handleTurnStartFailure = (cause: Cause.Cause<unknown>) =>
+      Effect.gen(function* () {
+        if (Cause.hasInterruptsOnly(cause)) return;
+
+        const failReason = cause.reasons.find(Cause.isFailReason);
+        const error = failReason?.error;
+        const decision = classify(error, cause) ?? UNRECOGNIZED_DECISION;
+
+        yield* dispatchCause(decision, cause, {
+          killAcp: providerService
+            .interruptTurn({ threadId: event.payload.threadId })
+            // Best-effort: if there's no live session to kill (already
+            // dead, or never attached), don't fail the dispatch. The
+            // [cli-error.<id>] log line above already records the
+            // failure context.
+            .pipe(Effect.catch(() => Effect.void)),
+          appendActivity: (detail: string) =>
+            appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.start.failed",
+              summary: "Provider turn start failed",
+              detail,
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            }),
+          setLastError: (detail: string) =>
+            setThreadSessionErrorOnTurnStartFailure({
+              threadId: event.payload.threadId,
+              detail,
+              createdAt: event.payload.createdAt,
+            }),
+          endTurn: recoverOrphanedTurnState({
             threadId: event.payload.threadId,
-            kind: "provider.turn.start.failed",
-            summary: "Provider turn start failed",
-            detail,
-            turnId: null,
             createdAt: event.payload.createdAt,
           }),
-        ),
-        Effect.asVoid,
-      );
-    };
+        });
+      });
 
     const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
       handleTurnStartFailure(cause).pipe(
@@ -765,6 +911,37 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+
+    // Send-while-parked guard. If the active session is currently
+    // holding a permission/approval/user-input Deferred (e.g. plan-
+    // approval still parked from a previous turn the user navigated
+    // away from), starting a new turn now would deadlock against
+    // CLI's in-flight prompt() RPC. Interrupt first so the held
+    // Deferred settles, the previous turn ends, and the new turn
+    // starts on a clean session. See specs/done/stop-acp-session.md
+    // "Send-while-parked".
+    const isParked = yield* providerService
+      .hasParkedRequests(event.payload.threadId)
+      .pipe(Effect.catch(() => Effect.succeed(false)));
+    if (isParked) {
+      yield* Effect.logInfo(
+        "provider command reactor auto-interrupting parked session before turn start",
+        {
+          threadId: event.payload.threadId,
+          messageId: event.payload.messageId,
+        },
+      );
+      yield* providerService
+        .interruptTurn({ threadId: event.payload.threadId })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "provider command reactor auto-interrupt before turn-start failed; proceeding anyway",
+              { threadId: event.payload.threadId, cause: Cause.pretty(cause) },
+            ),
+          ),
+        );
+    }
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
@@ -819,37 +996,93 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    // Bind the failure activity (if it fires) to the turn that owns
+    // the pending request. Otherwise the work-log timeline filter
+    // (`session-logic.ts:490` requires `activity.turnId === latestTurnId`)
+    // drops the row and the user sees nothing — or a flicker if
+    // `latestTurnId` happens to be null at render time. Mirrors the
+    // user-input branch (`processUserInputResponseRequested`).
+    const failureTurnId = thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
     const hasSession = thread.session && thread.session.status !== "stopped";
     if (!hasSession) {
-      return yield* appendProviderFailureActivity({
+      yield* Effect.logWarning("provider-command-reactor.approval.no-session", {
+        threadId: event.payload.threadId,
+        requestId: event.payload.requestId,
+      });
+      yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
         summary: "Provider approval response failed",
         detail: "No active provider session is bound to this thread.",
-        turnId: null,
+        turnId: failureTurnId,
         createdAt: event.payload.createdAt,
         requestId: event.payload.requestId,
       });
+      // Stale-restart recovery: clear any orphan activeTurnId so the
+      // "Работаю" timer + Stop button don't get stuck on. See the
+      // helper for why dispatching `thread.session.stop` is the right
+      // shape here.
+      yield* recoverOrphanedTurnState({
+        threadId: event.payload.threadId,
+        createdAt: event.payload.createdAt,
+      });
+      return;
     }
 
+    // ru-fork: read thread.runtimeMode at dispatch time so the adapter
+    // picks plan-approval optionId (and refreshes its currentRuntimeMode
+    // mirror) using the value the user has on screen right now, not whatever
+    // was captured at session start.
+    const respondingThread = yield* resolveThread(event.payload.threadId);
     yield* providerService
       .respondToRequest({
         threadId: event.payload.threadId,
         requestId: event.payload.requestId,
         decision: event.payload.decision,
+        runtimeMode: respondingThread?.runtimeMode ?? "approval-required",
       })
       .pipe(
         Effect.catchCause((cause) =>
-          appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.approval.respond.failed",
-            summary: "Provider approval response failed",
-            detail: isUnknownPendingApprovalRequestError(cause)
-              ? stalePendingRequestDetail("approval", event.payload.requestId)
-              : Cause.pretty(cause),
-            turnId: null,
-            createdAt: event.payload.createdAt,
-            requestId: event.payload.requestId,
+          Effect.gen(function* () {
+            const isStaleRequest = isUnknownPendingApprovalRequestError(cause);
+            // ru-fork: bump live-failure log to error level — stale
+            // requests are expected (post-restart orphans) and stay at
+            // warn. Live failures mean CLI is parked waiting and we
+            // couldn't deliver the response, which is operational.
+            yield* (isStaleRequest ? Effect.logWarning : Effect.logError)(
+              "provider-command-reactor.approval.cause",
+              {
+                threadId: event.payload.threadId,
+                requestId: event.payload.requestId,
+                stale: isStaleRequest,
+                cause: Cause.pretty(cause),
+              },
+            );
+            yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.approval.respond.failed",
+              summary: "Provider approval response failed",
+              // ru-fork: friendly Russian instead of Cause.pretty
+              // for the live-failure branch. F2 in the routing table —
+              // CLI alive and parked, user retries submission. The full
+              // `Cause.pretty` is in the server log via the line above.
+              detail: isStaleRequest
+                ? stalePendingRequestDetail("approval", event.payload.requestId)
+                : "Не удалось отправить ответ-разрешение в Cli. Попробуйте отправить ответ снова.",
+              turnId: failureTurnId,
+              createdAt: event.payload.createdAt,
+              requestId: event.payload.requestId,
+            });
+            // Stale-request branch is exactly the after-restart case:
+            // DB still shows the session running and a turn active, but
+            // the adapter ctx is gone. Clear the orphan state. Mirrors
+            // `processUserInputResponseRequested`.
+            if (isStaleRequest) {
+              yield* recoverOrphanedTurnState({
+                threadId: event.payload.threadId,
+                createdAt: event.payload.createdAt,
+              });
+            }
           }),
         ),
       );
@@ -863,17 +1096,37 @@ const make = Effect.gen(function* () {
       if (!thread) {
         return;
       }
+      // Bind the failure activity (if it fires) to the turn that owns
+      // the pending request. Otherwise the work-log timeline filter
+      // (`session-logic.ts:490` requires `activity.turnId === latestTurnId`)
+      // drops the row and the user sees nothing — or a flicker if
+      // `latestTurnId` happens to be null at render time. Prefer the
+      // active turn; fall back to the latest turn so a freshly-completed
+      // turn still carries the failure forward to the work log.
+      const failureTurnId = thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
       const hasSession = thread.session && thread.session.status !== "stopped";
       if (!hasSession) {
-        return yield* appendProviderFailureActivity({
+        yield* Effect.logWarning("provider-command-reactor.user-input.no-session", {
+          threadId: event.payload.threadId,
+          requestId: event.payload.requestId,
+        });
+        yield* appendProviderFailureActivity({
           threadId: event.payload.threadId,
           kind: "provider.user-input.respond.failed",
           summary: "Provider user input response failed",
           detail: "No active provider session is bound to this thread.",
-          turnId: null,
+          turnId: failureTurnId,
           createdAt: event.payload.createdAt,
           requestId: event.payload.requestId,
         });
+        // Stale-restart recovery: clear any orphan activeTurnId so the
+        // "Работаю" timer + Stop button don't get stuck on. See helper
+        // comment for context.
+        yield* recoverOrphanedTurnState({
+          threadId: event.payload.threadId,
+          createdAt: event.payload.createdAt,
+        });
+        return;
       }
 
       yield* providerService
@@ -884,16 +1137,42 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.catchCause((cause) =>
-            appendProviderFailureActivity({
-              threadId: event.payload.threadId,
-              kind: "provider.user-input.respond.failed",
-              summary: "Provider user input response failed",
-              detail: isUnknownPendingUserInputRequestError(cause)
-                ? stalePendingRequestDetail("user-input", event.payload.requestId)
-                : Cause.pretty(cause),
-              turnId: null,
-              createdAt: event.payload.createdAt,
-              requestId: event.payload.requestId,
+            Effect.gen(function* () {
+              const isStaleRequest = isUnknownPendingUserInputRequestError(cause);
+              // ru-fork: bump live-failure log to error level — see
+              // approval-response branch above for rationale.
+              yield* (isStaleRequest ? Effect.logWarning : Effect.logError)(
+                "provider-command-reactor.user-input.cause",
+                {
+                  threadId: event.payload.threadId,
+                  requestId: event.payload.requestId,
+                  stale: isStaleRequest,
+                  cause: Cause.pretty(cause),
+                },
+              );
+              yield* appendProviderFailureActivity({
+                threadId: event.payload.threadId,
+                kind: "provider.user-input.respond.failed",
+                summary: "Provider user input response failed",
+                // ru-fork: friendly Russian instead of Cause.pretty
+                // for the live-failure branch. F5 in the routing table —
+                // CLI alive and parked, user retries submission.
+                detail: isStaleRequest
+                  ? stalePendingRequestDetail("user-input", event.payload.requestId)
+                  : "Не удалось отправить ответ на запрос Cli. Попробуйте отправить ответ снова.",
+                turnId: failureTurnId,
+                createdAt: event.payload.createdAt,
+                requestId: event.payload.requestId,
+              });
+              // Stale-request branch is exactly the after-restart case:
+              // DB still shows the session running and a turn active, but
+              // the adapter ctx is gone. Clear the orphan state.
+              if (isStaleRequest) {
+                yield* recoverOrphanedTurnState({
+                  threadId: event.payload.threadId,
+                  createdAt: event.payload.createdAt,
+                });
+              }
             }),
           ),
         );
@@ -922,7 +1201,7 @@ const make = Effect.gen(function* () {
         ...(thread.session?.providerInstanceId !== undefined
           ? { providerInstanceId: thread.session.providerInstanceId }
           : {}),
-        runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
         updatedAt: now,

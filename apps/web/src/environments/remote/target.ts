@@ -1,5 +1,4 @@
 import { getPairingTokenFromUrl } from "../../pairingUrl";
-import { readHostedPairingRequest } from "../../hostedPairing";
 
 export interface ResolvedRemotePairingTarget {
   readonly credential: string;
@@ -10,7 +9,7 @@ export interface ResolvedRemotePairingTarget {
 function normalizeRemoteBaseUrl(rawValue: string): URL {
   const trimmed = rawValue.trim();
   if (!trimmed) {
-    throw new Error("Enter a backend URL.");
+    throw new Error("Введите URL бэкенда.");
   }
 
   const normalizedInput =
@@ -18,10 +17,26 @@ function normalizeRemoteBaseUrl(rawValue: string): URL {
       ? trimmed
       : `https://${trimmed}`;
   const url = new URL(normalizedInput, window.location.origin);
-  url.pathname = "/";
+  // ru-fork: preserve the path portion the user typed (it may
+  // encode a reverse-proxy prefix like /services/u001/my-app); only
+  // strip a trailing slash.
+  if (url.pathname.length > 1 && url.pathname.endsWith("/")) {
+    url.pathname = url.pathname.replace(/\/+$/, "");
+  }
   url.search = "";
   url.hash = "";
   return url;
+}
+
+// ru-fork: a pairing URL ends in "/pair"; strip that suffix when
+// converting to a base URL so we're left with just the proxy prefix
+// (which may be empty / "/").
+function stripPairSuffixAndTrailingSlash(url: URL): void {
+  let path = url.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/pair")) {
+    path = path.slice(0, -"/pair".length);
+  }
+  url.pathname = path.length === 0 ? "/" : path;
 }
 
 function toHttpBaseUrl(url: URL): string {
@@ -31,7 +46,7 @@ function toHttpBaseUrl(url: URL): string {
   } else if (next.protocol === "wss:") {
     next.protocol = "https:";
   }
-  next.pathname = "/";
+  stripPairSuffixAndTrailingSlash(next);
   next.search = "";
   next.hash = "";
   return next.toString();
@@ -44,7 +59,7 @@ function toWsBaseUrl(url: URL): string {
   } else if (next.protocol === "https:") {
     next.protocol = "wss:";
   }
-  next.pathname = "/";
+  stripPairSuffixAndTrailingSlash(next);
   next.search = "";
   next.hash = "";
   return next.toString();
@@ -58,16 +73,6 @@ export function resolveRemotePairingTarget(input: {
   const pairingUrl = input.pairingUrl?.trim() ?? "";
   if (pairingUrl.length > 0) {
     const url = new URL(pairingUrl, window.location.origin);
-    const hostedPairingRequest = readHostedPairingRequest(url);
-    if (hostedPairingRequest) {
-      const hostedBackendUrl = normalizeRemoteBaseUrl(hostedPairingRequest.host);
-      return {
-        credential: hostedPairingRequest.token,
-        httpBaseUrl: toHttpBaseUrl(hostedBackendUrl),
-        wsBaseUrl: toWsBaseUrl(hostedBackendUrl),
-      };
-    }
-
     const credential = getPairingTokenFromUrl(url) ?? "";
     if (!credential) {
       throw new Error("Pairing URL is missing its token.");
@@ -82,10 +87,10 @@ export function resolveRemotePairingTarget(input: {
   const host = input.host?.trim() ?? "";
   const pairingCode = input.pairingCode?.trim() ?? "";
   if (!host) {
-    throw new Error("Enter a backend URL.");
+    throw new Error("Введите URL бэкенда.");
   }
   if (!pairingCode) {
-    throw new Error("Enter a pairing code.");
+    throw new Error("Введите код связки.");
   }
 
   const normalizedHost = normalizeRemoteBaseUrl(host);

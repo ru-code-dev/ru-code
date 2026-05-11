@@ -111,6 +111,14 @@ export interface TerminalManagerShape {
   readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
   /**
+   * SIGKILL every active PTY immediately — no SIGTERM grace, no
+   * registered finalizer escalation. Called from `/shutdown` and the
+   * SIGINT/SIGTERM fast path so the daemon can exit in ~50ms instead
+   * of waiting one second per terminal. Errors swallowed.
+   */
+  readonly killAll: Effect.Effect<void>;
+
+  /**
    * Subscribe to terminal runtime events with a direct callback.
    *
    * Returns an unsubscribe function.

@@ -1,46 +1,6 @@
-import { ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
+import { type ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
 import { deepMerge } from "./Struct.ts";
-import { fromLenientJson } from "./schemaJson.ts";
 import { createModelSelection } from "./model.ts";
-
-const ServerSettingsJson = fromLenientJson(ServerSettings);
-const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
-
-export interface PersistedServerObservabilitySettings {
-  readonly otlpTracesUrl: string | undefined;
-  readonly otlpMetricsUrl: string | undefined;
-}
-
-export function normalizePersistedServerSettingString(
-  value: string | null | undefined,
-): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-export function extractPersistedServerObservabilitySettings(input: {
-  readonly observability?: {
-    readonly otlpTracesUrl?: string;
-    readonly otlpMetricsUrl?: string;
-  };
-}): PersistedServerObservabilitySettings {
-  return {
-    otlpTracesUrl: normalizePersistedServerSettingString(input.observability?.otlpTracesUrl),
-    otlpMetricsUrl: normalizePersistedServerSettingString(input.observability?.otlpMetricsUrl),
-  };
-}
-
-export function parsePersistedServerObservabilitySettings(
-  raw: string,
-): PersistedServerObservabilitySettings {
-  const decoded = decodeServerSettingsJson(raw);
-  if (Option.isSome(decoded)) {
-    return extractPersistedServerObservabilitySettings(decoded.value);
-  }
-  return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
-}
 
 function shouldReplaceTextGenerationModelSelection(
   patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,

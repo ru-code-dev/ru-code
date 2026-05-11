@@ -80,7 +80,7 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
       <PopoverPopup tooltipStyle side="top" align="end" className="w-max max-w-none px-3 py-2">
         <div className="space-y-1.5 leading-tight">
           <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Context window
+            Контекстное окно
           </div>
           {usage.maxTokens !== null && usedPercentage ? (
             <div className="whitespace-nowrap text-xs font-medium text-foreground">
@@ -88,23 +88,25 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
               <span className="mx-1">⋅</span>
               <span>{formatContextWindowTokens(usage.usedTokens)}</span>
               <span>/</span>
-              <span>{formatContextWindowTokens(usage.maxTokens ?? null)} context used</span>
+              <span>
+                {formatContextWindowTokens(usage.maxTokens ?? null)} контекста использовано
+              </span>
             </div>
           ) : (
             <div className="text-sm text-foreground">
-              {formatContextWindowTokens(usage.usedTokens)} tokens used so far
+              использовано токенов: {formatContextWindowTokens(usage.usedTokens)}
             </div>
           )}
           {(usage.totalProcessedTokens ?? null) !== null &&
           (usage.totalProcessedTokens ?? 0) > usage.usedTokens ? (
             <div className="text-xs text-muted-foreground">
-              Total processed: {formatContextWindowTokens(usage.totalProcessedTokens ?? null)}{" "}
-              tokens
+              Всего обработано: {formatContextWindowTokens(usage.totalProcessedTokens ?? null)}{" "}
+              токенов
             </div>
           ) : null}
           {usage.compactsAutomatically ? (
             <div className="text-xs text-muted-foreground">
-              Automatically compacts its context when needed.
+              Автоматически уплотняет контекст при необходимости.
             </div>
           ) : null}
         </div>

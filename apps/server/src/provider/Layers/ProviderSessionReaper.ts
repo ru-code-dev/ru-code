@@ -72,7 +72,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         const reaped = yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
           Effect.tap(() =>
-            Effect.logInfo("provider.session.reaped", {
+            // ru-fork: routine reaper events are noise at info level
+            Effect.logDebug("provider.session.reaped", {
               threadId: binding.threadId,
               provider: binding.provider,
               idleDurationMs,
@@ -96,7 +97,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       }
 
       if (reapedCount > 0) {
-        yield* Effect.logInfo("provider.session.reaper.sweep-complete", {
+        // ru-fork: routine reaper events are noise at info level
+        yield* Effect.logDebug("provider.session.reaper.sweep-complete", {
           reapedCount,
           totalBindings: bindings.length,
         });
@@ -121,7 +123,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           ),
         );
 
-        yield* Effect.logInfo("provider.session.reaper.started", {
+        // ru-fork: demoted from info — startup/lifecycle log too chatty for default level.
+        yield* Effect.logDebug("provider.session.reaper.started", {
           inactivityThresholdMs,
           sweepIntervalMs,
         });

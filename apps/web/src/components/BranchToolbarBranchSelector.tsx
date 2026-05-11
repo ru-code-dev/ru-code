@@ -60,7 +60,7 @@ interface BranchToolbarBranchSelectorProps {
 }
 
 function toBranchActionErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "An error occurred.";
+  return error instanceof Error ? error.message : "Произошла ошибка.";
 }
 
 function getBranchTriggerLabel(input: {
@@ -70,10 +70,10 @@ function getBranchTriggerLabel(input: {
 }): string {
   const { activeWorktreePath, effectiveEnvMode, resolvedActiveBranch } = input;
   if (!resolvedActiveBranch) {
-    return "Select ref";
+    return "Выберите ref";
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
-    return `From ${resolvedActiveBranch}`;
+    return `Из ${resolvedActiveBranch}`;
   }
   return resolvedActiveBranch;
 }
@@ -295,11 +295,11 @@ export function BranchToolbarBranchSelector({
   const shouldVirtualizeBranchList = filteredBranchPickerItems.length > 40;
   const totalBranchCount = branchesSearchData?.pages[0]?.totalCount ?? 0;
   const branchStatusText = isBranchesSearchPending
-    ? "Loading refs..."
+    ? "Загрузка refs…"
     : isFetchingNextPage
-      ? "Loading more refs..."
+      ? "Загрузка ещё refs…"
       : hasNextPage
-        ? `Showing ${refs.length} of ${totalBranchCount} refs`
+        ? `Показано ${refs.length} из ${totalBranchCount} refs`
         : null;
 
   // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ export function BranchToolbarBranchSelector({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to switch ref.",
+            title: "Не удалось переключить ref.",
             description: toBranchActionErrorMessage(error),
           }),
         );
@@ -395,7 +395,7 @@ export function BranchToolbarBranchSelector({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to create and switch ref.",
+            title: "Не удалось создать и переключить ref.",
             description: toBranchActionErrorMessage(error),
           }),
         );
@@ -518,7 +518,7 @@ export function BranchToolbarBranchSelector({
             <SourceControlIcon className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="flex min-w-0 flex-col items-start">
               <span className="truncate font-medium">
-                Checkout {sourceControlPresentation.terminology.singular}
+                Загрузить {sourceControlPresentation.terminology.singular}
               </span>
               <span className="truncate text-muted-foreground text-xs">{prReference}</span>
             </span>
@@ -602,7 +602,7 @@ export function BranchToolbarBranchSelector({
           <ComboboxInput
             className="[&_input]:font-sans rounded-md"
             inputClassName="ring-0"
-            placeholder="Search refs..."
+            placeholder="Поиск refs…"
             showTrigger={false}
             size="sm"
             value={branchQuery}

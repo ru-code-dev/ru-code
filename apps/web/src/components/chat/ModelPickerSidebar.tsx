@@ -20,12 +20,12 @@ function describeUnavailableInstance(entry: ProviderInstanceEntry): string {
   }
   const kind =
     entry.status === "error"
-      ? "Unavailable"
+      ? "Недоступен"
       : entry.status === "warning"
-        ? "Limited"
+        ? "Ограничено"
         : entry.status === "disabled"
-          ? "Disabled in settings"
-          : "Not ready";
+          ? "Отключено в настройках"
+          : "Не готов";
   const msg = entry.snapshot.message?.trim();
   return msg ? `${label} — ${kind}. ${msg}` : `${label} — ${kind}.`;
 }

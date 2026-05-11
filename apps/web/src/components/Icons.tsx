@@ -684,3 +684,13 @@ export const PiAgentIcon: Icon = ({ className, ...props }) => (
     <path fill="#fff" d="M517.36 400H634.72V634.72H517.36Z" />
   </svg>
 );
+
+export const CliIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 256 256"
+    className={cn("fill-[#615CED] dark:fill-[#8A86F0]", className)}
+  >
+    <path d="M128 16C128 16 112 80 80 112C48 144 16 128 16 128C16 128 80 144 112 176C144 208 128 240 128 240C128 240 144 176 176 144C208 112 240 128 240 128C240 128 176 112 144 80C112 48 128 16 128 16Z" />
+  </svg>
+);

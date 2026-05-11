@@ -2,6 +2,8 @@ import {
   type EnvironmentId,
   type MessageId,
   type ServerProviderSkill,
+  // ru-fork: subagent inline-text rendering in message bubbles.
+  type ServerProviderSubagent,
   type TurnId,
 } from "@t3tools/contracts";
 import {
@@ -21,9 +23,6 @@ import { type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import ChatMarkdown from "../ChatMarkdown";
 import {
-  BotIcon,
-  CheckIcon,
-  CircleAlertIcon,
   EyeIcon,
   GlobeIcon,
   HammerIcon,
@@ -32,8 +31,8 @@ import {
   TerminalIcon,
   Undo2Icon,
   WrenchIcon,
-  ZapIcon,
 } from "lucide-react";
+import { workToneClass, workToneIcon } from "../../ru-fork/workToneVisuals";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -65,7 +64,9 @@ import {
   formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
-import { SkillInlineText } from "./SkillInlineText";
+// ru-fork: SlashCommandInlineText falls back to SkillInlineText for no-match,
+// so it's a drop-in replacement that adds `/command` chip rendering.
+import { SlashCommandInlineText } from "~/ru-fork/custom-commands/SlashCommandInlineText";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,8 @@ interface TimelineRowSharedState {
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  // ru-fork: subagent names only — chip color is themed, not user-driven.
+  subagents: ReadonlyArray<Pick<ServerProviderSubagent, "name">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -101,6 +104,8 @@ const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+// ru-fork: stable empty default for the subagent prop.
+const EMPTY_TIMELINE_SUBAGENTS: ReadonlyArray<Pick<ServerProviderSubagent, "name">> = [];
 
 // ---------------------------------------------------------------------------
 // Props (public API)
@@ -128,6 +133,8 @@ interface MessagesTimelineProps {
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  // ru-fork: subagent list for inline `#agent-name` chip rendering.
+  subagents?: ReadonlyArray<Pick<ServerProviderSubagent, "name">>;
   onIsAtEndChange: (isAtEnd: boolean) => void;
 }
 
@@ -157,6 +164,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timestampFormat,
   workspaceRoot,
   skills = EMPTY_TIMELINE_SKILLS,
+  subagents = EMPTY_TIMELINE_SUBAGENTS, // ru-fork
   onIsAtEndChange,
 }: MessagesTimelineProps) {
   const rawRows = useMemo(
@@ -213,6 +221,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       skills,
+      subagents, // ru-fork
       activeThreadEnvironmentId,
       onRevertUserMessage,
       onImageExpand,
@@ -225,6 +234,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       skills,
+      subagents, // ru-fork
       activeThreadEnvironmentId,
       onRevertUserMessage,
       onImageExpand,
@@ -257,7 +267,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
+          Отправьте сообщение, чтобы начать беседу.
         </p>
       </div>
     );
@@ -369,6 +379,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           text={displayedUserMessage.visibleText}
           terminalContexts={terminalContexts}
           skills={ctx.skills}
+          subagents={ctx.subagents /* ru-fork */}
           footer={
             <>
               <div className="flex items-center gap-1.5 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
@@ -399,7 +410,7 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
       variant="outline"
       disabled={activity.isRevertingCheckpoint || activity.isWorking}
       onClick={() => ctx.onRevertUserMessage(messageId)}
-      title="Revert to this message"
+      title="Откатить к этому сообщению"
     >
       <Undo2Icon className="size-3" />
     </Button>
@@ -408,7 +419,7 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const messageText = row.message.text || (row.message.streaming ? "" : "(пустой ответ)");
 
   return (
     <>
@@ -456,7 +467,7 @@ function AssistantCompletionDivider() {
     <div className="my-3 flex items-center gap-3">
       <span className="h-px flex-1 bg-border" />
       <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
-        {activity.completionSummary ? `Response • ${activity.completionSummary}` : "Response"}
+        {activity.completionSummary ? `Ответ • ${activity.completionSummary}` : "Ответ"}
       </span>
       <span className="h-px flex-1 bg-border" />
     </div>
@@ -522,10 +533,10 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
         <span>
           {row.createdAt ? (
             <>
-              Working for <WorkingTimer createdAt={row.createdAt} />
+              Работаю <WorkingTimer createdAt={row.createdAt} />
             </>
           ) : (
-            "Working..."
+            "Работаю…"
           )}
         </span>
       </div>
@@ -613,7 +624,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
   const hiddenCount = groupedEntries.length - visibleEntries.length;
   const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
   const showHeader = hasOverflow || !onlyToolEntries;
-  const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
+  const groupLabel = onlyToolEntries ? "Вызовы инструментов" : "Журнал работы";
 
   return (
     <div className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5">
@@ -628,7 +639,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
               className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
               onClick={() => setIsExpanded((v) => !v)}
             >
-              {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+              {isExpanded ? "Свернуть" : `Показать ещё ${hiddenCount}`}
             </button>
           )}
         </div>
@@ -700,7 +711,7 @@ function AssistantChangedFilesSectionInner({
     <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
       <div className="sticky top-2 z-10 mb-1.5 flex items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:absolute before:inset-x-0 before:-top-2 before:h-2 before:bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:content-['']">
         <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-          <span>Changed files ({changedFileCountLabel})</span>
+          <span>Изменённые файлы ({changedFileCountLabel})</span>
           {hasNonZeroStat(summaryStat) && (
             <>
               <span className="mx-1">•</span>
@@ -716,7 +727,7 @@ function AssistantChangedFilesSectionInner({
             data-scroll-anchor-ignore
             onClick={() => setExpanded(routeThreadKey, turnSummary.turnId, !allDirectoriesExpanded)}
           >
-            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
+            {allDirectoriesExpanded ? "Свернуть всё" : "Развернуть всё"}
           </Button>
           <Button
             type="button"
@@ -724,7 +735,7 @@ function AssistantChangedFilesSectionInner({
             variant="outline"
             onClick={() => onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)}
           >
-            View diff
+            Открыть diff
           </Button>
         </div>
       </div>
@@ -775,6 +786,8 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  // ru-fork: subagent metadata for `#agent-name` chip rendering.
+  subagents: ReadonlyArray<Pick<ServerProviderSubagent, "name">>;
   footer?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -804,6 +817,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
             text={props.text}
             terminalContexts={props.terminalContexts}
             skills={props.skills}
+            subagents={props.subagents /* ru-fork */}
           />
         </div>
       ) : null}
@@ -825,7 +839,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
               onClick={() => setExpanded((value) => !value)}
               className="-ml-1 h-6 rounded-md px-1.5 text-xs text-muted-foreground/72 hover:bg-muted/55 hover:text-foreground/85"
             >
-              {expanded ? "Show less" : "Show full message"}
+              {expanded ? "Свернуть" : "Показать целиком"}
             </Button>
           ) : null}
           {props.footer ? (
@@ -841,6 +855,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  // ru-fork: subagent inline chips.
+  subagents: ReadonlyArray<Pick<ServerProviderSubagent, "name">>;
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -863,7 +879,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         if (matchIndex > cursor) {
           inlineNodes.push(
             <span key={`user-terminal-context-inline-before:${context.header}:${cursor}`}>
-              <SkillInlineText text={props.text.slice(cursor, matchIndex)} skills={props.skills} />
+              <SlashCommandInlineText
+                text={props.text.slice(cursor, matchIndex)}
+                skills={props.skills}
+                subagents={props.subagents /* ru-fork */}
+              />
             </span>,
           );
         }
@@ -880,7 +900,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         if (cursor < props.text.length) {
           inlineNodes.push(
             <span key={`user-message-terminal-context-inline-rest:${cursor}`}>
-              <SkillInlineText text={props.text.slice(cursor)} skills={props.skills} />
+              <SlashCommandInlineText
+                text={props.text.slice(cursor)}
+                skills={props.skills}
+                subagents={props.subagents /* ru-fork */}
+              />
             </span>,
           );
         }
@@ -910,7 +934,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     if (props.text.length > 0) {
       inlineNodes.push(
         <span key="user-message-terminal-context-inline-text">
-          <SkillInlineText text={props.text} skills={props.skills} />
+          <SlashCommandInlineText
+            text={props.text}
+            skills={props.skills}
+            subagents={props.subagents /* ru-fork */}
+          />
         </span>,
       );
     } else if (inlinePrefix.length === 0) {
@@ -930,7 +958,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
   return (
     <div className="whitespace-pre-wrap wrap-break-word text-sm leading-relaxed text-foreground">
-      <SkillInlineText text={props.text} skills={props.skills} />
+      <SlashCommandInlineText
+        text={props.text}
+        skills={props.skills}
+        subagents={props.subagents /* ru-fork */}
+      />
     </div>
   );
 });
@@ -1004,40 +1036,11 @@ function formatMessageMeta(
   return `${formatTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
 
-function workToneIcon(tone: TimelineWorkEntry["tone"]): {
-  icon: LucideIcon;
-  className: string;
-} {
-  if (tone === "error") {
-    return {
-      icon: CircleAlertIcon,
-      className: "text-foreground/92",
-    };
-  }
-  if (tone === "thinking") {
-    return {
-      icon: BotIcon,
-      className: "text-foreground/92",
-    };
-  }
-  if (tone === "info") {
-    return {
-      icon: CheckIcon,
-      className: "text-foreground/92",
-    };
-  }
-  return {
-    icon: ZapIcon,
-    className: "text-foreground/92",
-  };
-}
-
-function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
-  if (tone === "error") return "text-rose-300/50 dark:text-rose-300/50";
-  if (tone === "tool") return "text-muted-foreground/70";
-  if (tone === "thinking") return "text-muted-foreground/50";
-  return "text-muted-foreground/40";
-}
+// `workToneIcon` and `workToneClass` are imported from
+// `../../ru-fork/workToneVisuals` so the tone palette (including the
+// ru-fork-only `"warning"` tone) lives outside this upstream-tracked
+// file. If T3 adds a new tone here on a future sync, mirror it into
+// `workToneVisuals.ts` — see `instrumental/changes/pending-requests-handling.md`.
 
 function workEntryPreview(
   workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,

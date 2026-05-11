@@ -1,6 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
 import * as NodeTimers from "node:timers";
+
+// ru-fork: spawn-policy helper. Generic runProcess; preserve
+// shell:true on Win32 (callers may pass .cmd shims), bash-route on
+// opt-in via --windows-use-bash-for. See ru-fork/spawn/policy.ts.
+import { resolveSpawn } from "./ru-fork/spawn/policy.ts";
 export interface ProcessRunOptions {
   cwd?: string | undefined;
   timeoutMs?: number | undefined;
@@ -149,11 +154,16 @@ export async function runProcess(
   const outputMode = options.outputMode ?? "error";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
-    const child = spawn(command, args, {
+    // ru-fork: generic runProcess; preserve shell:true on Win32
+    // (callers may pass .cmd shims), bash-route on opt-in.
+    const resolved = resolveSpawn(command, args, {
+      shell: process.platform === "win32",
+    });
+    const child = spawn(resolved.command, [...resolved.args], {
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: process.platform === "win32",
+      shell: resolved.shell,
     });
 
     let stdout = "";

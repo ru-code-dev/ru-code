@@ -1,6 +1,8 @@
+import { CLI_NAME } from "@ru-fork/branding";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_RUNTIME_MODE,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   ModelSelection,
@@ -30,7 +32,7 @@ import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model"
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection, resolveAppModelSelectionForInstance } from "./modelSelection";
-import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type ChatImageAttachment } from "./types";
+import { DEFAULT_INTERACTION_MODE, type ChatImageAttachment } from "./types";
 import {
   type TerminalContextDraft,
   ensureInlineTerminalContextPlaceholders,
@@ -641,46 +643,20 @@ function coerceProviderOptionSelections(
 }
 
 /**
- * Normalize a per-provider options bag from either the v3 or legacy v2 shape.
+ * Normalize a per-provider options bag.
  *
- * `provider` and `legacy` parameters are migration-only inputs used to
- * recover legacy codex fields (effort/codexFastMode/serviceTier) that lived
- * directly on the draft instead of inside `modelOptions.codex`.
+ * Originally this also recovered legacy codex fields (effort/codexFastMode/
+ * serviceTier) via additional `provider` and `legacy` parameters; the codex
+ * migration block was removed when ru-fork dropped non-CLI providers
+ * (commit `a447dde7`), so this is now a straight Cli-only normalizer.
  */
-function normalizeProviderModelOptions(
-  value: unknown,
-  provider?: ProviderDriverKind | null,
-  legacy?: LegacyCodexFields,
-): ProviderOptionSelectionsByProvider | null {
+function normalizeProviderModelOptions(value: unknown): ProviderOptionSelectionsByProvider | null {
   const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
   const result: ProviderOptionSelectionsByProvider = {};
-  for (const providerKey of ["codex", "claudeAgent", "cursor", "opencode"] as const) {
+  for (const providerKey of [CLI_NAME] as const) {
     const selections = coerceProviderOptionSelections(candidate?.[providerKey]);
     if (selections) {
       result[providerKey] = selections;
-    }
-  }
-
-  // Recover legacy codex fields that lived outside modelOptions.
-  if (provider === "codex" && legacy) {
-    const codexExtras: ProviderOptionSelection[] = [];
-    if (typeof legacy.effort === "string" && legacy.effort.length > 0) {
-      codexExtras.push({ id: "reasoningEffort", value: legacy.effort });
-    }
-    const fastMode =
-      legacy.codexFastMode === true ||
-      (typeof legacy.serviceTier === "string" && legacy.serviceTier === "fast");
-    if (fastMode) {
-      codexExtras.push({ id: "fastMode", value: true });
-    }
-    if (codexExtras.length > 0) {
-      const existing = result.codex ?? [];
-      const existingIds = new Set(existing.map((entry) => entry.id));
-      const merged = [...existing];
-      for (const extra of codexExtras) {
-        if (!existingIds.has(extra.id)) merged.push(extra);
-      }
-      result.codex = merged;
     }
   }
 
@@ -722,7 +698,7 @@ function normalizeModelSelection(
   // into a driver kind here; they get generic default normalization.
   const driverKindHint =
     normalizeProviderDriverKind(candidate?.provider ?? legacy?.provider) ??
-    ProviderDriverKind.make("codex");
+    ProviderDriverKind.make(CLI_NAME);
   const model = normalizeModelSlug(rawModel, driverKindHint);
   if (!model) {
     return null;
@@ -738,8 +714,6 @@ function normalizeModelSelection(
   const modelOptions = kindForLegacyOptions
     ? normalizeProviderModelOptions(
         candidate?.options ? { [kindForLegacyOptions]: candidate.options } : legacy?.modelOptions,
-        kindForLegacyOptions,
-        kindForLegacyOptions === "codex" ? legacy?.legacyCodex : undefined,
       )
     : null;
   const options = kindForLegacyOptions ? modelOptions?.[kindForLegacyOptions] : undefined;
@@ -813,7 +787,7 @@ function legacyToModelSelectionByProvider(
 ): Partial<Record<ProviderInstanceId, ModelSelection>> {
   const result: Partial<Record<ProviderInstanceId, ModelSelection>> = {};
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "cursor", "opencode"] as const) {
+    for (const provider of [CLI_NAME] as const) {
       const options = modelOptions[provider];
       if (options && options.length > 0) {
         const driverKind = ProviderDriverKind.make(provider);
@@ -1503,11 +1477,7 @@ function normalizePersistedDraftsByThreadId(
     } else {
       // v2 or legacy format: migrate
       const normalizedModelOptions =
-        normalizeProviderModelOptions(
-          legacyDraftCandidate.modelOptions,
-          undefined,
-          legacyDraftCandidate,
-        ) ?? null;
+        normalizeProviderModelOptions(legacyDraftCandidate.modelOptions) ?? null;
       const normalizedModelSelection = normalizeModelSelection(
         legacyDraftCandidate.modelSelection,
         {
@@ -1593,7 +1563,7 @@ function migratePersistedComposerDraftStoreState(
   // Migrate sticky state from v2 (dual) to v3 (consolidated)
   const stickyModelOptions = normalizeProviderModelOptions(candidate.stickyModelOptions) ?? {};
   const normalizedStickyModelSelection = normalizeModelSelection(candidate.stickyModelSelection, {
-    provider: candidate.stickyProvider ?? "codex",
+    provider: candidate.stickyProvider ?? CLI_NAME,
     model: candidate.stickyModel,
     modelOptions: stickyModelOptions,
   });
@@ -2414,7 +2384,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             const base = existing ?? createEmptyThreadDraft();
             const nextMap = { ...base.modelSelectionByProvider };
-            for (const provider of ["codex", "claudeAgent", "cursor", "opencode"] as const) {
+            for (const provider of [CLI_NAME] as const) {
               if (!modelOptions || !(provider in modelOptions)) continue;
               const opts = modelOptions[provider];
               const driverKind = ProviderDriverKind.make(provider);

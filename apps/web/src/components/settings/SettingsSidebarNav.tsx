@@ -2,7 +2,6 @@ import { useCallback, type ComponentType } from "react";
 import {
   ArchiveIcon,
   ArrowLeftIcon,
-  BotIcon,
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
@@ -20,7 +19,6 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "../ui/sidebar";
-
 export type SettingsSectionPath =
   | "/settings/general"
   | "/settings/keybindings"
@@ -34,12 +32,12 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   to: SettingsSectionPath;
   icon: ComponentType<{ className?: string }>;
 }> = [
-  { label: "General", to: "/settings/general", icon: Settings2Icon },
-  { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
-  { label: "Providers", to: "/settings/providers", icon: BotIcon },
-  { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
-  { label: "Connections", to: "/settings/connections", icon: Link2Icon },
-  { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
+  { label: "Общие", to: "/settings/general", icon: Settings2Icon },
+  { label: "Сочетания клавиш", to: "/settings/keybindings", icon: KeyboardIcon },
+  // { label: "Провайдеры", to: "/settings/providers", icon: BotIcon },
+  { label: "Контроль версий", to: "/settings/source-control", icon: GitBranchIcon },
+  { label: "Подключения", to: "/settings/connections", icon: Link2Icon },
+  { label: "Архив", to: "/settings/archived", icon: ArchiveIcon },
 ];
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
@@ -112,7 +110,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
               onClick={handleBackClick}
             >
               <ArrowLeftIcon className="size-4" />
-              <span>Back</span>
+              <span>Назад</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

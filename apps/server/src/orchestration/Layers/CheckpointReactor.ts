@@ -329,8 +329,14 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // Captures a real git checkpoint when a turn completes via a runtime event.
-  const captureCheckpointFromTurnCompletion = Effect.fn("captureCheckpointFromTurnCompletion")(
+  // ru-fork: intentionally unused. Upstream T3's direct path for capturing
+  // a checkpoint on turn.completed runtime events; we disable it (see the
+  // turn.completed branch in `processRuntimeEvent` below) and run capture via
+  // the placeholder dispatch from `ProviderRuntimeIngestion` instead. Kept
+  // for documentation and to make re-enabling the upstream path a one-line
+  // change if the placeholder pattern is ever removed. Underscore-prefixed
+  // to satisfy `eslint(no-unused-vars)`.
+  const _captureCheckpointFromTurnCompletion = Effect.fn("captureCheckpointFromTurnCompletion")(
     function* (event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>) {
       const turnId = toTurnId(event.turnId);
       if (!turnId) {
@@ -605,16 +611,23 @@ const make = Effect.gen(function* () {
     }
 
     const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
-    if (Option.isNone(sessionRuntime)) {
+    // ru-fork: revert must work before a provider session is bound
+    // (e.g. right after app restart). Fall back to project workspace cwd;
+    // git restore + projection truncation don't need a live session.
+    const projects = yield* resolveThreadProjects(thread.projectId);
+    const checkpointCwd = Option.isSome(sessionRuntime)
+      ? sessionRuntime.value.cwd
+      : resolveThreadWorkspaceCwd({ thread, projects });
+    if (!checkpointCwd) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
-        detail: "No active provider session with workspace cwd is bound to this thread.",
+        detail: "No workspace cwd is available for this thread.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
     }
-    if (!isGitWorkspace(sessionRuntime.value.cwd)) {
+    if (!isGitWorkspace(checkpointCwd)) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -657,7 +670,7 @@ const make = Effect.gen(function* () {
     }
 
     const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: sessionRuntime.value.cwd,
+      cwd: checkpointCwd,
       checkpointRef: targetCheckpointRef,
       fallbackToHead: event.payload.turnCount === 0,
     });
@@ -673,12 +686,12 @@ const make = Effect.gen(function* () {
 
     // Invalidate the workspace entry cache so the @-mention file picker
     // reflects the reverted filesystem state.
-    yield* workspaceEntries.invalidate(sessionRuntime.value.cwd);
+    yield* workspaceEntries.invalidate(checkpointCwd);
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     if (rolledBackTurns > 0) {
       yield* providerService.rollbackConversation({
-        threadId: sessionRuntime.value.threadId,
+        threadId: event.payload.threadId,
         numTurns: rolledBackTurns,
       });
     }
@@ -689,7 +702,7 @@ const make = Effect.gen(function* () {
 
     if (staleCheckpointRefs.length > 0) {
       yield* checkpointStore.deleteCheckpointRefs({
-        cwd: sessionRuntime.value.cwd,
+        cwd: checkpointCwd,
         checkpointRefs: staleCheckpointRefs,
       });
     }
@@ -767,20 +780,15 @@ const make = Effect.gen(function* () {
     }
 
     if (event.type === "turn.completed") {
-      const turnId = toTurnId(event.turnId);
       yield* refreshLocalGitStatusFromTurnCompletion(event);
-      yield* captureCheckpointFromTurnCompletion(event).pipe(
-        Effect.catch((error) =>
-          Effect.flatMap(nowIso, (createdAt) =>
-            appendCaptureFailureActivity({
-              threadId: event.threadId,
-              turnId,
-              detail: error.message,
-              createdAt,
-            }).pipe(Effect.catch(() => Effect.void)),
-          ),
-        ),
-      );
+      // ru-fork: post-turn checkpoint capture is driven from
+      // ProviderRuntimeIngestion via dispatchTurnCompletedCheckpointPlaceholder
+      // (Codex-style placeholder → captureCheckpointFromPlaceholder).
+      // The upstream direct path (captureCheckpointFromTurnCompletion) is
+      // disabled here because, with our placeholder dispatch active, both
+      // paths would race and double-capture: Path B's guard checks
+      // `status !== "missing"` but our placeholder is `status === "missing"`,
+      // so it doesn't see the in-flight capture as a blocker.
       return;
     }
   });

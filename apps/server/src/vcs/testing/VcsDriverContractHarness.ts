@@ -9,7 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
 import type { VcsDriverKind } from "@t3tools/contracts";
-import * as VcsDriver from "../VcsDriver.ts";
+import { VcsDriver } from "../VcsDriver.ts";
 
 export interface VcsDriverFixture<R, E> {
   readonly createRepo: (cwd: string) => Effect.Effect<void, E, R>;
@@ -29,11 +29,7 @@ export interface VcsDriverFixture<R, E> {
 export interface VcsDriverContractSuiteInput<R, E> {
   readonly name: string;
   readonly kind: VcsDriverKind;
-  readonly layer: Layer.Layer<
-    VcsDriver.VcsDriver | R | FileSystem.FileSystem | Path.Path,
-    E,
-    never
-  >;
+  readonly layer: Layer.Layer<VcsDriver | R | FileSystem.FileSystem | Path.Path, E, never>;
   readonly fixture: VcsDriverFixture<R, E>;
 }
 
@@ -51,7 +47,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
       it.effect("returns null outside a repository", () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
-          const driver = yield* VcsDriver.VcsDriver;
+          const driver = yield* VcsDriver;
 
           assert.equal(yield* driver.detectRepository(cwd), null);
           assert.equal(yield* driver.isInsideWorkTree(cwd), false);
@@ -61,7 +57,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
       it.effect("detects repository identity inside a repository and nested directories", () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
-          const driver = yield* VcsDriver.VcsDriver;
+          const driver = yield* VcsDriver;
 
           yield* input.fixture.createRepo(cwd);
           yield* input.fixture.writeFile(cwd, "src/index.ts", "export const value = 1;\n");
@@ -86,7 +82,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
       it.effect("lists tracked and untracked non-ignored files", () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
-          const driver = yield* VcsDriver.VcsDriver;
+          const driver = yield* VcsDriver;
 
           yield* input.fixture.createRepo(cwd);
           yield* input.fixture.writeFile(cwd, "tracked.ts", "export const tracked = true;\n");
@@ -110,7 +106,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
       it.effect("excludes ignored files from workspace listing", () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
-          const driver = yield* VcsDriver.VcsDriver;
+          const driver = yield* VcsDriver;
 
           yield* input.fixture.createRepo(cwd);
           yield* input.fixture.ignorePath(cwd, "*.log");
@@ -131,7 +127,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
       it.effect("filters ignored paths", () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
-          const driver = yield* VcsDriver.VcsDriver;
+          const driver = yield* VcsDriver;
 
           yield* input.fixture.createRepo(cwd);
           yield* input.fixture.ignorePath(cwd, "*.log");
@@ -149,7 +145,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
       it.effect("returns empty input unchanged", () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
-          const driver = yield* VcsDriver.VcsDriver;
+          const driver = yield* VcsDriver;
 
           yield* input.fixture.createRepo(cwd);
 

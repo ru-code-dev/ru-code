@@ -9,7 +9,7 @@ import * as nodePath from "node:path";
 import { Console, Data, Duration, Effect, Schedule } from "effect";
 
 import { initSpawnPolicy } from "./ru-fork/spawn/policy.ts";
-import { runPreflight } from "./ru-fork/startup/preflight.ts";
+import { resolveStartupCli, runStartupChecks } from "./ru-fork/preflight/preflight-startup.ts";
 // ru-fork: shared TTY-aware ANSI palette + ready-banner extracted out
 // of this file so both daemon and foreground surfaces share a visual style.
 import { ARROW_DIM, ARROW_OK, ARROW_WARN, paint } from "./ru-fork/local-startup/cliPaint.ts";
@@ -235,13 +235,15 @@ const fetchPairingStartupUrl = (origin: string) =>
 const resolveDerivedPaths = (input: {
   readonly baseDirOverride: string | undefined;
   readonly devUrlOverride: URL | undefined;
+  // ru-fork: resolver's app root — the default base dir when no override.
+  readonly ourRoot: string;
 }) =>
   Effect.gen(function* () {
     const baseDirOverrideExpanded =
       input.baseDirOverride !== undefined
         ? yield* expandHomePath(input.baseDirOverride.trim())
         : undefined;
-    const baseDir = yield* resolveBaseDir(baseDirOverrideExpanded);
+    const baseDir = yield* resolveBaseDir(baseDirOverrideExpanded ?? input.ourRoot);
     return yield* deriveServerPaths(baseDir, input.devUrlOverride);
   });
 
@@ -279,14 +281,17 @@ export const runDaemonLauncher = (input: DaemonLauncherInput) =>
       injectExtraPaths: input.injectExtraPaths,
       windowsUseBashFor: input.windowsUseBashFor,
     });
-    // ru-fork: hard gate on node/git/CLI before spawning the
-    // detached daemon. Parent runs preflight once; the spawn below
-    // forwards --no-preflight-check so the child skips. See
+    // ru-fork: resolve cli.js / CLI config dir / app root once (shared resolver).
+    // Always runs — the daemon's base-dir derivation and the spawned child both
+    // depend on it; a failed resolution stops here. The node/git/CLI version
+    // checks are gated: parent runs them once, the spawn below forwards
+    // --no-preflight-check so the child skips. See
     // `ru-fork-instrumental/changes/deamon/startap-checks.md`.
+    const cli = yield* resolveStartupCli;
     if (!input.noPreflightCheck) {
-      yield* runPreflight;
+      yield* runStartupChecks(cli.cliJs);
     }
-    const derivedPaths = yield* resolveDerivedPaths(input);
+    const derivedPaths = yield* resolveDerivedPaths({ ...input, ourRoot: cli.ourRoot });
     const { serverRuntimeStatePath, logsDir } = derivedPaths;
     const launcherLogPath = nodePath.join(logsDir, "ru-fork.log");
 
@@ -342,7 +347,10 @@ export const runDaemonLauncher = (input: DaemonLauncherInput) =>
 
 export const runStopCommand = (input: StopCommandInput) =>
   Effect.gen(function* () {
-    const derivedPaths = yield* resolveDerivedPaths(input);
+    // ru-fork: resolve the same app root as start, so we look for the running
+    // server's runtime-state under the right tree (bin split included).
+    const cli = yield* resolveStartupCli;
+    const derivedPaths = yield* resolveDerivedPaths({ ...input, ourRoot: cli.ourRoot });
     const state = yield* readPersistedServerRuntimeState(derivedPaths.serverRuntimeStatePath);
     if (state._tag !== "Some") {
       yield* Console.log("");

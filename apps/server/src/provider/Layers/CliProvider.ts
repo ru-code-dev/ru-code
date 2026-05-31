@@ -26,9 +26,9 @@ import * as Result from "effect/Result";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 // ru-fork: route through the spawn-policy helper so
-// --windows-use-bash-for can opt CLI out of the cmd.exe path on
-// Windows. See ru-fork/spawn/policy.ts.
-import { resolveSpawn } from "../../ru-fork/spawn/policy.ts";
+// ru-fork: CLI is launched as `node <cliJs> …` directly. See
+// ru-fork/spawn/policy.ts buildCliSpawn.
+import { buildCliSpawn } from "../../ru-fork/spawn/policy.ts";
 import { APP_NAME } from "@ru-fork/branding";
 import { CLI_BINARY_NAME, CLI_NAME } from "../../config.ts";
 import {
@@ -130,16 +130,13 @@ export function buildInitialCliProviderSnapshot(
 }
 
 const runCliVersionCommand = (
-  cliSettings: CliSettings,
+  cliJs: string,
   environment: NodeJS.ProcessEnv = process.env,
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    // ru-fork: preserve shell:true on Win32 unless --windows-use-bash-for
-    // lists this binary; then resolveSpawn routes through `bash -c`.
-    const resolved = resolveSpawn(CLI_BINARY_NAME, ["--version"], {
-      shell: process.platform === "win32",
-    });
+    // ru-fork: `node <cliJs> --version` directly — no shell, no PATH lookup.
+    const resolved = buildCliSpawn(cliJs, ["--version"]);
     const command = ChildProcess.make(resolved.command, [...resolved.args], {
       env: environment,
       shell: resolved.shell,
@@ -159,6 +156,7 @@ const runCliVersionCommand = (
   }).pipe(Effect.scoped);
 
 export const checkCliProviderStatus = Effect.fn("checkCliProviderStatus")(function* (
+  cliJs: string,
   cliSettings: CliSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
@@ -180,7 +178,7 @@ export const checkCliProviderStatus = Effect.fn("checkCliProviderStatus")(functi
     });
   }
 
-  const versionProbe = yield* runCliVersionCommand(cliSettings, environment).pipe(
+  const versionProbe = yield* runCliVersionCommand(cliJs, environment).pipe(
     Effect.timeoutOption(VERSION_TIMEOUT_MS),
     Effect.result,
   );

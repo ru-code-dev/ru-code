@@ -14,7 +14,8 @@ import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
-import { ACP_SERVER_NO_SSL, CLI_AUTH_METHOD_ID, CLI_BINARY_NAME } from "../../config.ts";
+import { ACP_SERVER_NO_SSL, CLI_AUTH_METHOD_ID } from "../../config.ts";
+import { buildCliSpawn } from "../../ru-fork/spawn/policy.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -31,6 +32,8 @@ export interface CliAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly cliSettings: CliAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
+  // ru-fork: resolved cli.js (ServerConfig.cliJs). Spawned as `node <cliJs> --acp`.
+  readonly cliJs: string;
 }
 
 /**
@@ -46,6 +49,7 @@ function parseLaunchArgs(launchArgs: string | undefined): ReadonlyArray<string> 
 }
 
 export function buildCliAcpSpawnInput(
+  cliJs: string,
   cliSettings: CliAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
@@ -58,9 +62,11 @@ export function buildCliAcpSpawnInput(
   if (ACP_SERVER_NO_SSL) {
     env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
+  // ru-fork: `node <cliJs> [launchArgs] --acp` directly — no shell, no PATH lookup.
+  const spawn = buildCliSpawn(cliJs, [...parseLaunchArgs(cliSettings?.launchArgs), "--acp"]);
   return {
-    command: CLI_BINARY_NAME,
-    args: [...parseLaunchArgs(cliSettings?.launchArgs), "--acp"],
+    command: spawn.command,
+    args: [...spawn.args],
     cwd,
     ...(Object.keys(env).length > 0 ? { env } : {}),
   };
@@ -73,7 +79,7 @@ export const makeCliAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildCliAcpSpawnInput(input.cliSettings, input.cwd, input.environment),
+        spawn: buildCliAcpSpawnInput(input.cliJs, input.cliSettings, input.cwd, input.environment),
         authMethodId: CLI_AUTH_METHOD_ID,
       }).pipe(
         Layer.provide(

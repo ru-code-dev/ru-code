@@ -57,8 +57,7 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
-const STRICT_PROVIDER_LIFECYCLE_GUARD =
-  process.env.RU_FORK_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.RU_FORK_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
   OrchestrationEvent,
@@ -1506,6 +1505,22 @@ const make = Effect.gen(function* () {
         const turnId = toTurnId(event.turnId);
         if (turnId) {
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+          // ru-fork: diagnostic for the stuck-streaming-bubble bug. The bubble
+          // timer keys off `message.streaming`, cleared ONLY by the
+          // `assistant.complete` dispatched in the forEach below — which runs
+          // zero times if this set is empty. On qwen death, `abortSession`
+          // emits `turn.completed` + `session.exited` together, and
+          // `session.exited` → `clearTurnStateForSession` invalidates this same
+          // cache. If size===0 here on a death turn.completed, the cache was
+          // stripped before finalize → streaming never cleared → timer ticks
+          // forever. Confirms cache-race vs. always-miss. Remove once fixed.
+          yield* Effect.logDebug("[ingestion.turn-completed] finalize assistant messages", {
+            threadId: thread.id,
+            turnId,
+            state: event.type === "turn.completed" ? event.payload.state : undefined,
+            assistantMessageIdCount: assistantMessageIds.size,
+            assistantMessageIds: Array.from(assistantMessageIds),
+          });
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>

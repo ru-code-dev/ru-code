@@ -2463,7 +2463,9 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader() {
                   <span className="truncate text-lg font-semibold tracking-tight text-foreground">
                     {APP_SHORT_NAME}
                   </span>
-                  <span className="truncate text-lg font-semibold tracking-tight text-muted-foreground">Code</span>
+                  <span className="truncate text-lg font-semibold tracking-tight text-muted-foreground">
+                    Code
+                  </span>
                 </div>
               </Link>
             }

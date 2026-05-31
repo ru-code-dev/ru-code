@@ -49,6 +49,17 @@ export interface ResolvedSpawn {
   readonly shell: boolean;
 }
 
+// Direct `node cli.js <args…>` spawn shape. Pure — `cliJs` comes from
+// ServerConfig (resolved once by the startup preflight). Reuses the app's own
+// interpreter (`process.execPath`) as node: no bash / cmd / PowerShell, no PATH
+// lookup, never `shell:true`. Replaces `resolveSpawn(CLI_BINARY_NAME, …)` at
+// every CLI spawn site and kills the Windows shell:true / DEP0190 path.
+export const buildCliSpawn = (cliJs: string, args: ReadonlyArray<string>): ResolvedSpawn => ({
+  command: process.execPath,
+  args: [cliJs, ...args],
+  shell: false,
+});
+
 // Returns the spawn shape after applying the policy.
 // - non-Windows: pass-through (shell:false always).
 // - Windows + bin in `--windows-use-bash-for`: bash-route via

@@ -6,19 +6,13 @@ import * as Exit from "effect/Exit";
 import * as Metric from "effect/Metric";
 import { dual } from "effect/Function";
 
-export const orchestrationCommandsTotal = Metric.counter(
-  "ru_fork_orchestration_commands_total",
-  {
-    description: "Total orchestration commands dispatched.",
-  },
-);
+export const orchestrationCommandsTotal = Metric.counter("ru_fork_orchestration_commands_total", {
+  description: "Total orchestration commands dispatched.",
+});
 
-export const orchestrationCommandDuration = Metric.timer(
-  "ru_fork_orchestration_command_duration",
-  {
-    description: "Orchestration command dispatch duration.",
-  },
-);
+export const orchestrationCommandDuration = Metric.timer("ru_fork_orchestration_command_duration", {
+  description: "Orchestration command dispatch duration.",
+});
 
 export const orchestrationCommandAckDuration = Metric.timer(
   "ru_fork_orchestration_command_ack_duration",
@@ -47,12 +41,9 @@ export const providerTurnDuration = Metric.timer("ru_fork_provider_turn_duration
   description: "Provider turn request duration.",
 });
 
-export const providerRuntimeEventsTotal = Metric.counter(
-  "ru_fork_provider_runtime_events_total",
-  {
-    description: "Total canonical provider runtime events processed.",
-  },
-);
+export const providerRuntimeEventsTotal = Metric.counter("ru_fork_provider_runtime_events_total", {
+  description: "Total canonical provider runtime events processed.",
+});
 
 export const gitCommandsTotal = Metric.counter("ru_fork_git_commands_total", {
   description: "Total git commands executed by the server runtime.",

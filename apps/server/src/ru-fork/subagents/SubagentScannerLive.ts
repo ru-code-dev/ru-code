@@ -45,7 +45,7 @@ const makeScanner = Effect.gen(function* () {
     itemSchema: ServerProviderSubagentSchema,
     scanUser: (now) =>
       Effect.gen(function* () {
-        const root = yield* cliUserRoot(config.baseDir, AGENTS_SUBDIR);
+        const root = yield* cliUserRoot(config.cliConfigDir, AGENTS_SUBDIR);
         const items = yield* scanCliAgentsDir(root, SCOPE_USER);
         return { items, scannedAt: now };
       }),

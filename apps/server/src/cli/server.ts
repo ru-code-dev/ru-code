@@ -6,7 +6,7 @@ import * as References from "effect/References";
 import { Command, GlobalFlag } from "effect/unstable/cli";
 
 import { initSpawnPolicy } from "../ru-fork/spawn/policy.ts";
-import { runPreflight } from "../ru-fork/startup/preflight.ts";
+import { resolveStartupCli, runStartupChecks } from "../ru-fork/preflight/preflight-startup.ts";
 // ru-fork: only the server-launching path probes port availability;
 // other CLI subcommands (auth, project) reach config without binding.
 import { assertLocalPortAvailable } from "../ru-fork/local-startup/assertLocalPortAvailable.ts";
@@ -30,15 +30,18 @@ export const runServerCommand = (
       injectExtraPaths: Option.getOrUndefined(flags.injectExtraPaths),
       windowsUseBashFor: Option.getOrUndefined(flags.windowsUseBashFor),
     });
-    // ru-fork: hard gate on node/git/CLI. Skipped when the daemon
-    // launcher already ran it in the parent and passed
-    // --no-preflight-check to this spawned child. See
-    // `ru-fork-instrumental/changes/deamon/startap-checks.md`.
+    // ru-fork: resolve cli.js / CLI config dir / our app root once (shared
+    // resolver, common-preflight.md). ALWAYS runs — the config and every CLI
+    // spawn depend on it, and a failed resolution stops startup with a readable
+    // Russian error. The node/git/CLI *version* checks are gated by
+    // --no-preflight-check (the daemon child skips them: the parent already ran
+    // them). See `ru-fork-instrumental/changes/deamon/startap-checks.md`.
+    const cli = yield* resolveStartupCli;
     if (!Option.getOrElse(flags.noPreflightCheck, () => false)) {
-      yield* runPreflight;
+      yield* runStartupChecks(cli.cliJs);
     }
     const logLevel = yield* GlobalFlag.LogLevel;
-    const config = yield* resolveServerConfig(flags, logLevel, options);
+    const config = yield* resolveServerConfig(flags, logLevel, cli, options);
     // ru-fork: desktop mode pins the port (no findAvailablePort
     // fallback), so verify it's free before the listener layer tries to
     // bind. Failure surfaces as the Russian PortInUseError instead of an

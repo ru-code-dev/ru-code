@@ -14,10 +14,6 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 
-// ru-fork: spawn-policy helper — routes CLI --acp through bash
-// when --windows-use-bash-for lists this binary; otherwise preserves
-// the original cmd.exe / shell:true path. See ru-fork/spawn/policy.ts.
-import { resolveSpawn } from "../../ru-fork/spawn/policy.ts";
 import {
   collectSessionConfigOptionValues,
   extractModelConfigId,
@@ -227,17 +223,16 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    // ru-fork: ACP session is the long-running chat-driving spawn.
-    // Honors --windows-use-bash-for; otherwise preserves shell:true on Win32.
-    const resolved = resolveSpawn(options.spawn.command, options.spawn.args, {
-      shell: process.platform === "win32",
-    });
+    // ru-fork: ACP session is the long-running chat-driving spawn. The command
+    // is already `node <cliJs> --acp` (built by buildCliSpawn), so we spawn it
+    // directly with shell:false — no bash/cmd/PowerShell, no PATH lookup, never
+    // shell:true on Windows (kills the DEP0190 path).
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(resolved.command, [...resolved.args], {
+        ChildProcess.make(options.spawn.command, [...options.spawn.args], {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           ...(options.spawn.env ? { env: { ...process.env, ...options.spawn.env } } : {}),
-          shell: resolved.shell,
+          shell: false,
         }),
       )
       .pipe(

@@ -24,10 +24,9 @@ import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
 import { TextGenerationError } from "@t3tools/contracts";
 // ru-fork: spawn-policy helper — routes the CLI text-generation
-// spawn through bash on Windows when --windows-use-bash-for opts in.
-// See ru-fork/spawn/policy.ts.
-import { resolveSpawn } from "../ru-fork/spawn/policy.ts";
-import { CLI_BINARY_NAME } from "../config.ts";
+// ru-fork: CLI is launched as `node <cliJs> …` directly. See
+// ru-fork/spawn/policy.ts buildCliSpawn.
+import { buildCliSpawn } from "../ru-fork/spawn/policy.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import { type TextGenerationShape } from "./TextGeneration.ts";
 import {
@@ -118,6 +117,7 @@ function extractCliResultText(rawStdout: string): string {
 }
 
 export const makeCliTextGeneration = Effect.fn("makeCliTextGeneration")(function* (
+  cliJs: string,
   cliSettings: CliSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ) {
@@ -155,12 +155,8 @@ export const makeCliTextGeneration = Effect.fn("makeCliTextGeneration")(function
     prompt: string;
   }) {
     // ru-fork: text-generation operations (commit msg, branch name, ...).
-    // Same policy as the ACP session spawn.
-    const resolved = resolveSpawn(
-      CLI_BINARY_NAME,
-      ["-p", input.prompt, "--output-format", "json"],
-      { shell: process.platform === "win32" },
-    );
+    // `node <cliJs> -p … --output-format json` directly — no shell, no PATH lookup.
+    const resolved = buildCliSpawn(cliJs, ["-p", input.prompt, "--output-format", "json"]);
     const command = ChildProcess.make(resolved.command, [...resolved.args], {
       env: cliEnvironment,
       cwd: input.cwd,

@@ -80,6 +80,28 @@ const buildCmd = Command.make(
         }),
       );
 
+      // Standalone install-time preflight (dist/preflight.mjs). Separate tsdown
+      // run so it stays one self-contained file (see tsdown.preflight.config.ts).
+      yield* Effect.log("[cli] Bundling install preflight...");
+      yield* runCommand(
+        ChildProcess.make(process.execPath, ["--run", "build:preflight"], {
+          cwd: serverDir,
+          stdout: config.verbose ? "inherit" : "ignore",
+          stderr: "inherit",
+          shell: process.platform === "win32",
+        }),
+      );
+
+      // Copy the preflight bundle to the repo root so `cat install | bash`
+      // finds it next to the install script during local testing.
+      const preflightBundle = path.join(serverDir, "dist/preflight.mjs");
+      if (yield* fs.exists(preflightBundle)) {
+        yield* fs.copyFile(preflightBundle, path.join(repoRoot, "preflight.mjs"));
+        yield* Effect.log("[cli] Copied preflight.mjs to repo root");
+      } else {
+        yield* Effect.logWarning("[cli] dist/preflight.mjs not found — skipping root copy");
+      }
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 

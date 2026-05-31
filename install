@@ -1,0 +1,486 @@
+#!/usr/bin/env bash
+# Installer.
+#
+# Bash does the bare minimum; all checks (node / git / CLI version) and all
+# directory + name resolution (including the app name) happen in the node
+# preflight (preflight.mjs, next to this script) — one resolver shared with the
+# app, so install-time and launch-time agree.
+#
+# Every run: resolve via the preflight, then CLEAN the old install (scrub rc
+# files + stop & remove the old bin), then INSTALL the new one only if the
+# environment is compatible. On any crash, everything we touched is removed.
+#
+# Usage:
+#   cat install | bash                          # auto-detect dist-bundle/*-*.tgz
+#   cat install | bash -s -- --keep-source       # keep the cloned repo dir
+#   cat install | bash -s -- --local <file.tgz>
+#   cat install | bash -s -- --uninstall
+#   curl -fsSL <url>/install | DIST_URL=<tarball-url> bash
+#   ./install --help
+
+set -euo pipefail
+
+# Display name only — the standalone installer can't import branding. The
+# command name (APP_BIN) and every path/dir name come from the node preflight.
+APP_DISPLAY_NAME="Ru Code"
+PREFLIGHT_BASENAME="preflight.mjs"
+# Node runtime flags (sqlite + silence the experimental warnings).
+NODE_FLAGS="--experimental-sqlite --disable-warning=ExperimentalWarning"
+# Written to <bin>/.version on a successful install (for a future version gate).
+INSTALL_VERSION="1"
+INSTALL_VERSION_FILE=".version"
+DIST_URL="${DIST_URL:-}"
+
+# Credits banner (edit to taste; shown after a successful install).
+CREDITS_AUTHOR_FIO="<ФАМИЛИЯ ИМЯ ОТЧЕСТВО>"
+CREDITS_EMAIL="<email>"
+CREDITS_VIDEO_URL="<video-channel-url>"
+CREDITS_SUPPORT_URL="<support-chat-url>"
+CREDITS_BOX_INNER=63
+
+if [ -t 1 ]; then
+  RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+  MAGENTA=$'\033[0;35m'; CYAN=$'\033[0;36m'; DIM=$'\033[2m'
+  BOLD=$'\033[1m'; NC=$'\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; MAGENTA=''; CYAN=''; DIM=''; BOLD=''; NC=''
+fi
+
+# All human output → stderr, so the whole run is one ordered stream alongside
+# the node preflight report (also stderr). stdout carries nothing during install.
+info()  { printf "${GREEN}[INFO]${NC} %s\n" "$*" >&2; }
+warn()  { printf "${YELLOW}[WARN]${NC} %s\n" "$*" >&2; }
+error() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
+die()   { error "$*"; exit 1; }
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# State
+OS=""
+TEMP_DIR=""
+EXTRACTED_DIR=""
+ARCHIVE_PATH=""
+INSTALL_DIR=""
+DO_UNINSTALL=false
+KEEP_SOURCE=false
+SOURCE_DIR=""          # the cloned repo dir we remove on success/crash
+BUNDLE_DIR=""          # dir holding our artifacts (install, preflight.mjs, dist-bundle/)
+NODE_PATH=""
+# Resolved by the node preflight (no brand literals live in this script):
+APP_ROOT=""            # OUR_ROOT — the app folder, e.g. .../.ru-fork
+APP_BIN=""             # the command / wrapper name
+APP_DIR_NAME=""        # basename(APP_ROOT), e.g. .ru-fork — drives rc cleanup
+NODE_OK=""             # 1 if node is compatible (gates the old app's `stop`)
+BIN_DIR=""             # APP_ROOT/bin
+PREFLIGHT_STATUS=1     # 0 only when the environment is compatible
+
+detect_os() {
+  case "$(uname -s)" in
+    Linux*) OS="linux" ;;
+    Darwin*) OS="darwin" ;;
+    MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
+    *) die "Неподдерживаемая ОС: $(uname -s)" ;;
+  esac
+}
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --local) [ $# -ge 2 ] || die "--local требует путь к файлу"; ARCHIVE_PATH="$2"; shift 2 ;;
+      --install-dir) [ $# -ge 2 ] || die "--install-dir требует путь"; INSTALL_DIR="$2"; shift 2 ;;
+      --uninstall) DO_UNINSTALL=true; shift ;;
+      --keep-source) KEEP_SOURCE=true; shift ;;
+      --help|-h) sed -n '2,22p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+      *) die "Неизвестный параметр: $1. Используйте --help." ;;
+    esac
+  done
+}
+
+# Locate the bundle dir — the folder that holds our artifacts (install,
+# preflight.mjs, dist-bundle/). A piped script (`cat ./<clone>/install | bash`)
+# has NO path of its own ($0 is "bash", BASH_SOURCE is empty), so we can't ask
+# "where do I live". Instead we anchor on the archive, exactly like the legacy
+# installer did: recursively find */dist-bundle/*.tgz from cwd (the search
+# descends, so it works even when run from the PARENT of the clone). The bundle
+# dir is the parent of dist-bundle; install + preflight.mjs live there too, and
+# that is the clone we may remove on success/crash.
+#
+# Brand-agnostic on purpose: we match any *.tgz under a dist-bundle/ (a release
+# carries exactly one app tarball) rather than ${APP_BIN}-*.tgz, so discovery
+# never depends on the slug the preflight will later resolve.
+resolve_bundle_dir() {
+  if [ -z "$ARCHIVE_PATH" ] && [ -z "$DIST_URL" ]; then
+    local found dir
+    found=$(find . -maxdepth 4 -type f -name '*.tgz' -path '*/dist-bundle/*' 2>/dev/null | sort -V | tail -1)
+    if [ -n "$found" ]; then
+      dir=$(cd "$(dirname "$found")" && pwd)
+      ARCHIVE_PATH="$dir/$(basename "$found")"
+      BUNDLE_DIR=$(cd "$dir/.." && pwd)        # parent of dist-bundle
+      SOURCE_DIR="$BUNDLE_DIR"                  # the clone we may remove
+      info "Архив обнаружен: $ARCHIVE_PATH"
+    fi
+  fi
+
+  # Fallback anchor for --local / DIST_URL (no dist-bundle to find): the script's
+  # own dir when invoked as a file (`bash ./install`), else a recursive search
+  # for preflight.mjs from cwd, else cwd. run_preflight reports a clear error if
+  # preflight.mjs still isn't there.
+  if [ -z "$BUNDLE_DIR" ]; then
+    local self preflight
+    self="${BASH_SOURCE[0]:-}"
+    if [ -n "$self" ] && [ -f "$self" ]; then
+      BUNDLE_DIR=$(cd "$(dirname "$self")" && pwd)
+    else
+      preflight=$(find . -maxdepth 4 -type f -name "$PREFLIGHT_BASENAME" 2>/dev/null | head -1)
+      if [ -n "$preflight" ]; then BUNDLE_DIR=$(cd "$(dirname "$preflight")" && pwd); else BUNDLE_DIR=$(pwd); fi
+    fi
+  fi
+}
+
+remove_source_dir() {
+  [ -n "$SOURCE_DIR" ] || return 0
+  [ "$KEEP_SOURCE" = false ] || { info "Исходный каталог сохранён: $SOURCE_DIR"; return 0; }
+  case "$SOURCE_DIR" in
+    /|/home|/Users|"$HOME") warn "Отказ удалять: $SOURCE_DIR"; return 0 ;;
+  esac
+  rm -rf "$SOURCE_DIR" 2>/dev/null && info "Исходный каталог удалён: $SOURCE_DIR" || true
+}
+
+# ---------------------------------------------------------------------------
+# node + preflight
+# ---------------------------------------------------------------------------
+
+find_node() {
+  command_exists node || die "Node.js не найден на PATH. Установите Node.js: https://nodejs.org/"
+  NODE_PATH="$(command -v node 2>/dev/null || printf 'node')"
+}
+
+# Run preflight.mjs. It prints the report to stderr and KEY=VALUE result lines to
+# stdout — including OUR_ROOT/APP_BIN/NODE_OK even when its checks fail, so we
+# parse them regardless of exit status (PREFLIGHT_STATUS holds compatibility).
+# Native (Windows backslash) paths become forward slashes so git-bash tools
+# accept them; a no-op elsewhere.
+run_preflight() {
+  local script out
+  script="${RU_FORK_PREFLIGHT:-$BUNDLE_DIR/$PREFLIGHT_BASENAME}"
+  [ -f "$script" ] || die "$PREFLIGHT_BASENAME не найден (искали в: $BUNDLE_DIR). Соберите проект: pnpm build"
+
+  PREFLIGHT_STATUS=0
+  out=$("$NODE_PATH" "$script") || PREFLIGHT_STATUS=$?
+
+  APP_ROOT=$(printf '%s\n' "$out" | grep '^OUR_ROOT=' | head -n 1 | cut -d'=' -f2-)
+  APP_BIN=$(printf '%s\n'  "$out" | grep '^APP_BIN='  | head -n 1 | cut -d'=' -f2-)
+  NODE_OK=$(printf '%s\n'  "$out" | grep '^NODE_OK='  | head -n 1 | cut -d'=' -f2-)
+
+  APP_ROOT="${APP_ROOT//\\//}"
+  [ -n "$INSTALL_DIR" ] && APP_ROOT="${INSTALL_DIR//\\//}"
+  [ -n "$APP_ROOT" ] || { remove_source_dir; die "preflight: путь установки не получен."; }
+
+  BIN_DIR="${APP_ROOT}/bin"
+  APP_DIR_NAME=$(basename "$APP_ROOT")
+}
+
+# ---------------------------------------------------------------------------
+# Clean (always, before deciding) + rollback. Two independent actions:
+#   1. scrub the rc files of every line referencing our app dir (any location,
+#      any prior version) — strip-then-readd means lines never duplicate.
+#   2. stop (only if node can run it) and remove the old bin folder.
+# ---------------------------------------------------------------------------
+
+rc_files() {
+  if [ "$OS" = "windows" ]; then
+    printf '%s\n' "$HOME/.bashrc" "$HOME/.bash_profile"
+  else
+    printf '%s\n' "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.profile"
+  fi
+}
+
+# Remove every rc line whose PATH references our app dir (e.g. /.ru-fork/bin).
+# Matched by the dir name the preflight resolved — no version, no hardcoded brand.
+# Removed lines: the PATH export (matched by /<appdir>/bin) AND any legacy marker
+# comment the old installer left above it (`# <slug> v1`, slug = APP_BIN). Both
+# keyed off names the preflight resolved — no hardcoded brand, no version pin.
+clean_rc() {
+  [ -n "$APP_DIR_NAME" ] || return 0
+  local rc
+  while IFS= read -r rc; do
+    [ -f "$rc" ] || continue
+    grep -qF -e "/$APP_DIR_NAME/bin" -e "# $APP_BIN v" "$rc" 2>/dev/null || continue
+    grep -vF -e "/$APP_DIR_NAME/bin" -e "# $APP_BIN v" "$rc" > "$rc.tmp" 2>/dev/null || true
+    # Replace only when the result is non-empty (a real rc keeps other lines);
+    # back up first so the edit is recoverable.
+    if [ -s "$rc.tmp" ]; then
+      cp "$rc" "$rc.bak" 2>/dev/null || true
+      mv "$rc.tmp" "$rc"
+      info "Очищено $rc (резервная копия: $rc.bak)"
+    else
+      rm -f "$rc.tmp"
+      warn "Очистка $rc пропущена (пустой результат) — проверьте вручную"
+    fi
+  done < <(rc_files)
+}
+
+# Stop the old app via node on its installed cli.js — only when node is
+# compatible (it can't run otherwise). No-op if there is no old install.
+stop_old() {
+  [ "$NODE_OK" = "1" ] || return 0
+  [ -f "$BIN_DIR/cli.js" ] || return 0
+  info "Остановка приложения..."
+  "$NODE_PATH" $NODE_FLAGS "$BIN_DIR/cli.js" stop >/dev/null 2>&1 || true
+}
+
+remove_bin() {
+  [ -n "$BIN_DIR" ] && [ -d "$BIN_DIR" ] || return 0
+  # Safety: only ever delete a path that is .../<appdir>/bin.
+  [ -n "$APP_DIR_NAME" ] || die "Защита: имя каталога приложения не определено."
+  case "$BIN_DIR" in
+    */"$APP_DIR_NAME"/bin) ;;
+    *) die "Защита: отказ удалять подозрительный путь: $BIN_DIR" ;;
+  esac
+  info "Удаление старой установки: $BIN_DIR"
+  rm -rf "$BIN_DIR"
+}
+
+# Full teardown — used by the crash rollback (no stop; the new install never
+# fully started).
+tear_down() {
+  remove_bin
+  clean_rc
+}
+
+# Clean the OLD install before installing/​aborting. Independent actions.
+clean_old() {
+  clean_rc
+  stop_old
+  remove_bin
+}
+
+# ---------------------------------------------------------------------------
+# Archive -> copy
+# ---------------------------------------------------------------------------
+
+resolve_archive() {
+  # ARCHIVE_PATH is set by --local or by resolve_bundle_dir's startup discovery.
+  if [ -n "$ARCHIVE_PATH" ]; then
+    [ -f "$ARCHIVE_PATH" ] || die "Файл не найден: $ARCHIVE_PATH"
+    info "Используется архив: $ARCHIVE_PATH"; return
+  fi
+  if [ -z "$DIST_URL" ]; then
+    die "Архив не найден. Используйте --local, задайте DIST_URL или запустите из каталога с dist-bundle/*.tgz."
+  fi
+  ARCHIVE_PATH="${TEMP_DIR}/archive.tgz"
+  info "Загрузка: $DIST_URL"
+  if command_exists curl; then
+    curl -fSL --progress-bar -o "$ARCHIVE_PATH" "$DIST_URL" || die "Не удалось загрузить."
+  elif command_exists wget; then
+    wget -q --show-progress -O "$ARCHIVE_PATH" "$DIST_URL" || die "Не удалось загрузить."
+  else
+    die "Для загрузки требуется curl или wget."
+  fi
+  [ -s "$ARCHIVE_PATH" ] || die "Загруженный файл пуст."
+}
+
+extract_archive() {
+  local extract_dir="${TEMP_DIR}/extracted" nested
+  mkdir -p "$extract_dir"
+  info "Распаковка архива..."
+  tar xzf "$ARCHIVE_PATH" -C "$extract_dir" 2>/dev/null || die "Не удалось распаковать архив."
+  if [ -f "$extract_dir/cli.js" ]; then EXTRACTED_DIR="$extract_dir"; return; fi
+  nested=$(find "$extract_dir" -maxdepth 3 -name "cli.js" -type f | head -1)
+  [ -n "$nested" ] || die "cli.js не найден в архиве."
+  EXTRACTED_DIR="$(dirname "$nested")"
+}
+
+validate_archive() {
+  local missing=0 part
+  for part in cli.js package.json client node_modules; do
+    [ -e "$EXTRACTED_DIR/$part" ] || { error "В архиве отсутствует: $part"; missing=1; }
+  done
+  [ "$missing" -eq 0 ] || die "Проверка пакета не пройдена."
+}
+
+install_files() {
+  info "Установка: $BIN_DIR"
+  mkdir -p "$BIN_DIR"
+  cp "$EXTRACTED_DIR/cli.js" "$BIN_DIR/"
+  cp "$EXTRACTED_DIR/package.json" "$BIN_DIR/"
+  cp -R "$EXTRACTED_DIR/client" "$BIN_DIR/"
+  cp -R "$EXTRACTED_DIR/node_modules" "$BIN_DIR/"
+  find "$EXTRACTED_DIR" -maxdepth 1 -name '*.mjs' -exec cp {} "$BIN_DIR/" \;
+  # Integrity marker, written last — its presence means the copy completed.
+  printf '%s\n' "$INSTALL_VERSION" > "$BIN_DIR/$INSTALL_VERSION_FILE"
+}
+
+create_wrapper() {
+  local node_quoted
+  node_quoted=$(printf "'%s'" "$(printf '%s' "$NODE_PATH" | sed "s/'/'\\\\''/g")")
+  cat > "$BIN_DIR/$APP_BIN" <<WRAPPER
+#!/bin/sh
+if [ -x ${node_quoted} ] || [ -f ${node_quoted} ]; then
+  exec ${node_quoted} ${NODE_FLAGS} "\$(dirname "\$0")/cli.js" "\$@"
+fi
+exec node ${NODE_FLAGS} "\$(dirname "\$0")/cli.js" "\$@"
+WRAPPER
+  chmod +x "$BIN_DIR/$APP_BIN"
+}
+
+# Append a fresh PATH line. clean_rc already removed any prior ones, so it can
+# never duplicate.
+add_path() {
+  local line="export PATH=\"${BIN_DIR}:\$PATH\"" rc any=false
+  while IFS= read -r rc; do
+    [ -f "$rc" ] || continue
+    any=true
+    printf '%s\n' "$line" >> "$rc"
+    info "PATH добавлен в $rc"
+  done < <(rc_files)
+  [ "$any" = true ] || die "Не найдены файлы запуска оболочки. Откройте оболочку и перезапустите."
+  export PATH="$BIN_DIR:$PATH"
+}
+
+verify() {
+  "$NODE_PATH" $NODE_FLAGS "$BIN_DIR/cli.js" --version >/dev/null 2>&1 \
+    || die "Проверка не пройдена: $BIN_DIR/cli.js не запускается."
+}
+
+do_uninstall() {
+  find_node
+  run_preflight
+  stop_old
+  remove_bin
+  clean_rc
+  info "Удалено."
+}
+
+# ---------------------------------------------------------------------------
+# Rollback + summary
+# ---------------------------------------------------------------------------
+
+# On any non-zero exit after a path was resolved, leave nothing behind.
+on_exit() {
+  local status=$?
+  [ -n "${TEMP_DIR:-}" ] && rm -rf "$TEMP_DIR" 2>/dev/null || true
+  if [ "$status" -ne 0 ] && [ -n "${BIN_DIR:-}" ]; then
+    tear_down
+    remove_source_dir
+  fi
+  return "$status"
+}
+
+box_top() {
+  local i
+  printf '  %s╔' "${BOLD}${CYAN}"
+  for ((i = 0; i < CREDITS_BOX_INNER; i++)); do printf '═'; done
+  printf '╗%s\n' "$NC"
+}
+
+box_bottom() {
+  local i
+  printf '  %s╚' "${BOLD}${CYAN}"
+  for ((i = 0; i < CREDITS_BOX_INNER; i++)); do printf '═'; done
+  printf '╝%s\n' "$NC"
+}
+
+# Pad a (possibly colored) line to the box width. ANSI codes stripped for length
+# math; `wc -m` is UTF-8 aware so Cyrillic stays single-width.
+box_line() {
+  local content="$1" visible esc len pad
+  esc=$'\033'
+  visible=$(printf '%s' "$content" | sed "s/${esc}\[[0-9;]*m//g")
+  len=$(printf '%s' "$visible" | wc -m | tr -d ' ')
+  pad=$((CREDITS_BOX_INNER - len))
+  [ "$pad" -lt 0 ] && pad=0
+  printf '  %s║%s%s%*s%s║%s\n' "${BOLD}${CYAN}" "$NC" "$content" "$pad" "" "${BOLD}${CYAN}" "$NC"
+}
+
+box_blank() { box_line ""; }
+
+print_credits() {
+  echo ""
+  box_top
+  box_line "  ${BOLD}${MAGENTA}${APP_DISPLAY_NAME}${NC} ${DIM}·${NC} ${CYAN}MIT License${NC}"
+  box_line "  ${DIM}Based on${NC} ${BOLD}T3 Code${NC} ${DIM}— github.com/pingdotgg/t3code${NC}"
+  box_blank
+  box_line "  ${YELLOW}Author:${NC}   ${BOLD}${CREDITS_AUTHOR_FIO}${NC}"
+  box_line "  ${YELLOW}Contact:${NC}  ${CYAN}${CREDITS_EMAIL}${NC}"
+  box_blank
+  box_line "  ${YELLOW}Video:${NC}    ${CYAN}${CREDITS_VIDEO_URL}${NC}"
+  box_line "  ${YELLOW}Support:${NC}  ${CYAN}${CREDITS_SUPPORT_URL}${NC}"
+  box_bottom
+  echo ""
+}
+
+print_summary() {
+  echo ""
+  box_top
+  box_line "  ${BOLD}${GREEN}${APP_DISPLAY_NAME} успешно установлен${NC}"
+  box_bottom
+  echo ""
+  echo "  Дальше:"
+  if [ "$OS" = "windows" ]; then
+    echo "    1. Перезапустите Git Bash"
+  else
+    echo "    1. Перезапустите оболочку (или откройте новый терминал)"
+  fi
+  echo "    2. $APP_BIN --version"
+  print_credits
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+main() {
+  detect_os
+  parse_args "$@"
+
+  # On Windows the only supported launch context is Git Bash (MSYSTEM is set
+  # only by git-bash). The git binary itself is validated in the node preflight.
+  if [ "$OS" = "windows" ] && [ -z "${MSYSTEM:-}" ]; then
+    die "Запустите установку из Git Bash (Git for Windows): https://git-scm.com/downloads"
+  fi
+
+  # Find our artifacts up front (archive → bundle dir → source dir). Done before
+  # anything destructive so a wrong-directory run fails cleanly without touching
+  # an existing install.
+  resolve_bundle_dir
+
+  if [ "$DO_UNINSTALL" = true ]; then
+    do_uninstall
+    exit 0
+  fi
+
+  # Install needs an archive: stop here, before clean_old, if none was found.
+  if [ -z "$ARCHIVE_PATH" ] && [ -z "$DIST_URL" ]; then
+    die "Архив не найден. Запустите из каталога с <repo>/dist-bundle/*.tgz, либо укажите --local <файл> / DIST_URL."
+  fi
+
+  TEMP_DIR=$(mktemp -d)
+  trap 'on_exit' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  command_exists tar || die "tar не найден."
+  find_node
+  run_preflight
+
+  # Always clean the old install first (independent of compatibility): scrub the
+  # rc files, stop (if node can) and remove the old bin folder.
+  clean_old
+
+  # Install the new one only if the environment is compatible.
+  [ "$PREFLIGHT_STATUS" -eq 0 ] || { remove_source_dir; die "Несовместимое окружение — установка прервана."; }
+
+  resolve_archive
+  extract_archive
+  validate_archive
+  install_files
+  create_wrapper
+  add_path
+  verify
+  remove_source_dir
+  # Banner to stderr so it lands in order with the rest of the output.
+  print_summary >&2
+}
+
+main "$@"

@@ -4,7 +4,6 @@
 // re-skin the product (new app name, different underlying CLI) edit the values
 // in this file and nothing else. Everywhere else references these constants.
 
-
 export const APP_SHORT_NAME = "Ru";
 /**
  * APP_NAME — display name of the application. This is the one and only place
@@ -12,6 +11,19 @@ export const APP_SHORT_NAME = "Ru";
  * error messages all reference this constant.
  */
 export const APP_NAME = "Ru Code";
+
+/**
+ * APP_HOME_SLUG — kebab-case slug used to derive on-disk identifiers: the
+ * per-user home dot-directory (`~/.ru-fork`), env-var prefixes and temp-file
+ * prefixes. Distinct from {@link APP_NAME} (the display name) because these
+ * paths must be filesystem- and shell-safe and stable across re-skins. This is
+ * the one and only place the home-dir slug lives; the installer and the app's
+ * base-dir resolution both derive from it so they cannot diverge.
+ */
+export const APP_HOME_SLUG = "ru-fork";
+
+/** `~/.${APP_HOME_SLUG}` directory name (without leading `/`), e.g. `.ru-fork`. */
+export const APP_HOME_DIRNAME = `.${APP_HOME_SLUG}`;
 
 /**
  * CLI_NAME — name of the underlying CLI binary / ACP provider. This is the one

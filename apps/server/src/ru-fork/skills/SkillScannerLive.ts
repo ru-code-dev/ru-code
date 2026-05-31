@@ -44,7 +44,7 @@ const makeScanner = Effect.gen(function* () {
     itemSchema: ServerProviderSkillSchema,
     scanUser: (now) =>
       Effect.gen(function* () {
-        const root = yield* cliUserRoot(config.baseDir, SKILLS_SUBDIR);
+        const root = yield* cliUserRoot(config.cliConfigDir, SKILLS_SUBDIR);
         const items = yield* scanCliSkillsDir(root, SCOPE_USER);
         return { items, scannedAt: now };
       }),

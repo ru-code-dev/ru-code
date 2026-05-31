@@ -1,0 +1,7 @@
+{
+  "type": "patch",
+  "comment": "feat(ru-code): fix install + error handling",
+  "packageName": "@ru-code/ru-code",
+  "email": "53821477+ru-code-dev@users.noreply.github.com",
+  "dependentChangeType": "patch"
+}

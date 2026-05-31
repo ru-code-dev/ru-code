@@ -33,7 +33,10 @@ export const describeRequestFailure = (cause: Cause.Cause<unknown>): Record<stri
   }
   const data = error.data;
   const details =
-    typeof data === "object" && data !== null && "details" in data && typeof data.details === "string"
+    typeof data === "object" &&
+    data !== null &&
+    "details" in data &&
+    typeof data.details === "string"
       ? data.details
       : undefined;
   return {
@@ -55,7 +58,8 @@ const describePromptPart = (part: unknown): string => {
   const type = String((part as { readonly type: unknown }).type);
   const text = (part as { readonly text?: unknown }).text;
   if (type === "text" && typeof text === "string") {
-    const preview = text.length > MAX_PROMPT_PREVIEW ? `${text.slice(0, MAX_PROMPT_PREVIEW)}…` : text;
+    const preview =
+      text.length > MAX_PROMPT_PREVIEW ? `${text.slice(0, MAX_PROMPT_PREVIEW)}…` : text;
     return `text: ${preview}`;
   }
   const mimeType = (part as { readonly mimeType?: unknown }).mimeType;

@@ -2,6 +2,21 @@
   "name": "@ru-code/ru-code",
   "entries": [
     {
+      "date": "Sun, 31 May 2026 23:42:25 GMT",
+      "version": "3.0.1",
+      "tag": "@ru-code/ru-code_v3.0.1",
+      "comments": {
+        "patch": [
+          {
+            "author": "53821477+ru-code-dev@users.noreply.github.com",
+            "package": "@ru-code/ru-code",
+            "commit": "5931168bbba4be6bf4bbc87f21c10315f696abbc",
+            "comment": "feat(ru-code): fix install + error handling"
+          }
+        ]
+      }
+    },
+    {
       "date": "Sun, 31 May 2026 10:51:07 GMT",
       "version": "3.0.0",
       "tag": "@ru-code/ru-code_v3.0.0",

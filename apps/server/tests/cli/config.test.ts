@@ -18,6 +18,24 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../../src/config.ts";
 import { resolveServerConfig } from "../../src/cli/config.ts";
 
+// ru-fork: these unit tests exercise resolveServerConfig in isolation (no real
+// preflight). resolveServerConfig now takes a required `cli` resolution; inject
+// a stub. Every test sets a baseDir override (flag / RU_FORK_HOME / bootstrap),
+// so the stub's ourRoot is never the chosen baseDir — only cliJs/cliConfigDir
+// surface on the resolved config.
+const TEST_CLI = {
+  cliJs: "/tmp/test-cli/.qwen/bin/cli.js",
+  configDir: "/tmp/test-cli/.qwen",
+  ourRoot: "/tmp/test-cli/.ru-fork",
+  source: "standard",
+} as const;
+
+const resolveServerConfigT = (
+  flags: Parameters<typeof resolveServerConfig>[0],
+  cliLogLevel: Parameters<typeof resolveServerConfig>[1],
+  options?: Parameters<typeof resolveServerConfig>[3],
+) => resolveServerConfig(flags, cliLogLevel, TEST_CLI, options);
+
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 
 const makeDesktopBootstrap = (
@@ -52,7 +70,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-env-base");
       const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:5173"));
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.none(),
           port: Option.none(),
@@ -97,6 +115,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 4001,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: "0.0.0.0",
         staticDir: undefined,
@@ -116,7 +136,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-flags-base");
       const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.some("web"),
           port: Option.some(8788),
@@ -161,6 +181,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 8788,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: "127.0.0.1",
         staticDir: undefined,
@@ -186,7 +208,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
       const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
 
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.some("web"),
           port: Option.some(8788),
@@ -226,6 +248,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 8788,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: "127.0.0.1",
         staticDir: undefined,
@@ -257,7 +281,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
       const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
 
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.none(),
           port: Option.none(),
@@ -294,6 +318,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 4888,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: "127.0.0.2",
         staticDir: resolved.staticDir,
@@ -316,7 +342,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-dirs-" });
       const customCwd = path.join(baseDir, "nested", "project");
 
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.some("desktop"),
           port: Option.some(4888),
@@ -371,7 +397,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
       const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
 
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.none(),
           port: Option.some(8788),
@@ -413,6 +439,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 8788,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: "127.0.0.1",
         staticDir: undefined,
@@ -445,7 +473,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         })}\n`,
       );
 
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.some("desktop"),
           port: Option.some(4888),
@@ -480,6 +508,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 4888,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: "127.0.0.1",
         staticDir: resolved.staticDir,
@@ -500,7 +530,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-headless-base");
       const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
 
-      const resolved = yield* resolveServerConfig(
+      const resolved = yield* resolveServerConfigT(
         {
           mode: Option.some("web"),
           port: Option.some(3773),
@@ -541,6 +571,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         port: 3773,
         cwd: process.cwd(),
         baseDir,
+        cliJs: TEST_CLI.cliJs,
+        cliConfigDir: TEST_CLI.configDir,
         ...derivedPaths,
         host: undefined,
         staticDir: resolved.staticDir,

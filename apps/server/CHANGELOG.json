@@ -1,0 +1,20 @@
+{
+  "name": "@ru-code/ru-code",
+  "entries": [
+    {
+      "date": "Sun, 31 May 2026 10:51:07 GMT",
+      "version": "3.0.0",
+      "tag": "@ru-code/ru-code_v3.0.0",
+      "comments": {
+        "major": [
+          {
+            "author": "53821477+ru-code-dev@users.noreply.github.com",
+            "package": "@ru-code/ru-code",
+            "commit": "8e85af345455479200efbeebe035f8bfd9d88ec6",
+            "comment": "feat(ru-code): Russian localization + Qwen support + Cleanup"
+          }
+        ]
+      }
+    }
+  ]
+}

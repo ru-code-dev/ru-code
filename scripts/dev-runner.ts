@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { APP_HOME_DIRNAME } from "@t3tools/contracts";
+import { APP_HOME_DIRNAME } from "@ru-fork/branding";
 import * as NetService from "@t3tools/shared/Net";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
@@ -358,8 +358,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       Effect.mapError(
         (cause) =>
           new DevRunnerError({
-            message:
-              "Failed to read RU_FORK_PORT_OFFSET/RU_FORK_DEV_INSTANCE configuration.",
+            message: "Failed to read RU_FORK_PORT_OFFSET/RU_FORK_DEV_INSTANCE configuration.",
             cause,
           }),
       ),
@@ -463,9 +462,7 @@ const devRunnerCli = Command.make("dev-runner", {
     Flag.withFallbackConfig(optionalBooleanConfig("RU_FORK_AUTO_BOOTSTRAP_PROJECT_FROM_CWD")),
   ),
   logWebSocketEvents: Flag.boolean("log-websocket-events").pipe(
-    Flag.withDescription(
-      "WebSocket event logging toggle (equivalent to RU_FORK_LOG_WS_EVENTS).",
-    ),
+    Flag.withDescription("WebSocket event logging toggle (equivalent to RU_FORK_LOG_WS_EVENTS)."),
     Flag.withAlias("log-ws-events"),
     Flag.withFallbackConfig(optionalBooleanConfig("RU_FORK_LOG_WS_EVENTS")),
   ),

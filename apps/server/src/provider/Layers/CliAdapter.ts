@@ -633,6 +633,8 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
             cliSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
+            // ru-fork: resolved cli.js — spawned as `node <cliJs> --acp` directly.
+            cliJs: serverConfig.cliJs,
             cwd,
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(resumeSessionId ? { resumeSessionId } : {}),

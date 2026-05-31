@@ -33,3 +33,4 @@ staging
 .vscode
 dist-bundle
 ru-fork-instrumental
+preflight.mjs

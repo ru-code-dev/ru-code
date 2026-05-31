@@ -23,11 +23,12 @@ import {
   type StartupPresentation,
 } from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
-// ru-fork: unified local-startup defaults.
 import {
-  DESKTOP_LOOPBACK_HOST,
-  DESKTOP_RUNTIME_MODE,
-} from "../ru-fork/local-startup/defaults.ts";
+  type PreflightResolution,
+  resolveStartupCli,
+} from "../ru-fork/preflight/preflight-startup.ts";
+// ru-fork: unified local-startup defaults.
+import { DESKTOP_LOOPBACK_HOST, DESKTOP_RUNTIME_MODE } from "../ru-fork/local-startup/defaults.ts";
 // ru-fork: --base-url normalization (path or full-URL accepted).
 import { normalizeBasePath } from "../ru-fork/basePath/basePath.ts";
 
@@ -126,10 +127,7 @@ const EnvServerConfig = Config.all({
   t3Home: Config.string("RU_FORK_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   // ru-fork: env binding for --base-url. See baseUrlFlag.
-  baseUrl: Config.string("RU_FORK_BASE_URL").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
+  baseUrl: Config.string("RU_FORK_BASE_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   noBrowser: Config.boolean("RU_FORK_NO_BROWSER").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -220,6 +218,11 @@ const resolveOptionPrecedence = <Value>(
 export const resolveServerConfig = (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
+  // ru-fork: resolved once by the startup preflight (resolveStartupCli) and
+  // threaded in — never re-derived here. configDir / cliJs / ourRoot all come
+  // straight from the shared resolver, so install-time and launch-time agree
+  // even in the bin split (config in {home}/.qwen, bin + our root elsewhere).
+  cli: PreflightResolution,
   options?: {
     readonly startupPresentation?: StartupPresentation;
     readonly forceAutoBootstrapProjectFromCwd?: boolean;
@@ -302,6 +305,8 @@ export const resolveServerConfig = (
         resolveOptionPrecedence(normalizedFlags.baseUrl, Option.fromUndefinedOr(env.baseUrl)),
       ),
     );
+    // Default base dir is the resolver's ourRoot (the installed app folder,
+    // bin-aware). --base-dir / RU_FORK_HOME / desktop bootstrap still override.
     const baseDir = yield* resolveBaseDir(
       Option.getOrUndefined(
         resolveOptionPrecedence(
@@ -309,7 +314,7 @@ export const resolveServerConfig = (
           Option.fromUndefinedOr(env.t3Home),
           Option.fromUndefinedOr(bootstrap?.t3Home),
         ),
-      ),
+      ) ?? cli.ourRoot,
     );
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
@@ -378,6 +383,9 @@ export const resolveServerConfig = (
       port,
       cwd,
       baseDir,
+      // ru-fork: straight from the resolver — no dirname(baseDir) derivation.
+      cliJs: cli.cliJs,
+      cliConfigDir: cli.configDir,
       ...derivedPaths,
       host,
       staticDir,
@@ -398,8 +406,12 @@ export const resolveCliAuthConfig = (
   flags: CliAuthLocationFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
 ) =>
-  resolveServerConfig(
-    {
+  Effect.gen(function* () {
+    // Auth subcommands read config too, so they need the same resolution. The
+    // app is a CLI front-end — if the CLI can't be resolved, stop here as well.
+    const cli = yield* resolveStartupCli;
+    return yield* resolveServerConfig(
+      {
       mode: Option.none(),
       port: Option.none(),
       host: Option.none(),
@@ -418,9 +430,11 @@ export const resolveCliAuthConfig = (
       // needs the policy, but CliServerFlags requires the fields.
       injectExtraPaths: Option.none(),
       windowsUseBashFor: Option.none(),
-    },
-    cliLogLevel,
-  );
+      },
+      cliLogLevel,
+      cli,
+    );
+  });
 
 const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w)$/i;
 

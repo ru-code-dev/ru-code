@@ -1,7 +1,7 @@
 import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { APP_HOME_DIRNAME } from "@t3tools/contracts";
+import { APP_HOME_DIRNAME } from "@ru-fork/branding";
 import {
   readPathFromLoginShell,
   // ru-fork: Windows-side env probing kept around (commented) in

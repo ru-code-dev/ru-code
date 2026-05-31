@@ -21,10 +21,7 @@ import { ServerConfig } from "../../config.ts";
 import { makeCliTextGeneration } from "../../textGeneration/CliTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCliAdapter } from "../Layers/CliAdapter.ts";
-import {
-  buildInitialCliProviderSnapshot,
-  checkCliProviderStatus,
-} from "../Layers/CliProvider.ts";
+import { buildInitialCliProviderSnapshot, checkCliProviderStatus } from "../Layers/CliProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -90,6 +87,8 @@ export const CliDriver: ProviderDriver<CliSettings, CliDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      // ru-fork: resolved cli.js, threaded into every CLI spawn (node <cliJs> …).
+      const serverConfig = yield* ServerConfig;
       const eventLoggers = yield* ProviderEventLoggers;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -114,9 +113,13 @@ export const CliDriver: ProviderDriver<CliSettings, CliDriverEnv> = {
         instanceId,
       });
 
-      const textGeneration = yield* makeCliTextGeneration(effectiveConfig, processEnv);
+      const textGeneration = yield* makeCliTextGeneration(
+        serverConfig.cliJs,
+        effectiveConfig,
+        processEnv,
+      );
 
-      const checkProvider = checkCliProviderStatus(effectiveConfig, processEnv).pipe(
+      const checkProvider = checkCliProviderStatus(serverConfig.cliJs, effectiveConfig, processEnv).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );

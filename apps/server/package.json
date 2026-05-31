@@ -18,6 +18,7 @@
     "dev": "node --watch src/bin.ts start",
     "build": "node scripts/cli.ts build",
     "build:bundle": "tsdown",
+    "build:preflight": "tsdown --config tsdown.preflight.config.ts",
     "start": "node dist/bin.mjs start --port 8080",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",

@@ -24,6 +24,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { APP_HOME_SLUG } from "@ru-fork/branding";
+
 // =============================================================================
 // CONFIG — comment out targets you don't ship
 // =============================================================================
@@ -63,7 +65,11 @@ const serverPkg: ServerPkg = JSON.parse(
   fs.readFileSync(path.join(serverDir, "package.json"), "utf8"),
 );
 const VERSION = serverPkg.version;
-const tarballPath = path.join(distBundleDir, `ru-fork-${VERSION}.tgz`);
+// Tarball name and bin key both derive from the branding slug — the same value
+// the installer resolves as APP_BIN (preflight: APP_BIN = APP_HOME_SLUG). Keeps
+// the produced `<slug>-<version>.tgz` matched to install's discovery across a
+// rebrand, with no hand-editing.
+const tarballPath = path.join(distBundleDir, `${APP_HOME_SLUG}-${VERSION}.tgz`);
 
 function log(msg: string): void {
   process.stdout.write(`[prepare-release] ${msg}\n`);
@@ -132,11 +138,8 @@ function writeBootstrapPackageJson(): void {
   // We overwrite it with the slim publish-ready version after the install.
   fs.writeFileSync(
     path.join(packageDir, "package.json"),
-    JSON.stringify(
-      { name: "ru-fork-bundle-staging", version: VERSION, private: true },
-      null,
-      2,
-    ) + "\n",
+    JSON.stringify({ name: "ru-fork-bundle-staging", version: VERSION, private: true }, null, 2) +
+      "\n",
   );
 }
 
@@ -203,7 +206,7 @@ function writeSlimPackageJson(): void {
     license: serverPkg.license,
     repository: serverPkg.repository,
     type: "module",
-    bin: { "ru-fork": "./cli.js" },
+    bin: { [APP_HOME_SLUG]: "./cli.js" },
     engines: serverPkg.engines,
     dependencies: {
       "node-pty": NODE_PTY_VERSION,

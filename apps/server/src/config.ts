@@ -16,7 +16,12 @@ import * as Context from "effect/Context";
 
 import type { AbortMethod } from "@t3tools/contracts";
 
-import { CLI_BINARY_NAME as BRAND_CLI_BINARY_NAME, CLI_CONFIG_DIRNAME, CLI_DISPLAY_NAME, SLASH_COMMAND_NOTIFICATION_METHODS as BRAND_SLASH_COMMAND_NOTIFICATION_METHODS } from "@ru-fork/branding";
+import {
+  CLI_BINARY_NAME as BRAND_CLI_BINARY_NAME,
+  CLI_CONFIG_DIRNAME,
+  CLI_DISPLAY_NAME,
+  SLASH_COMMAND_NOTIFICATION_METHODS as BRAND_SLASH_COMMAND_NOTIFICATION_METHODS,
+} from "@ru-fork/branding";
 // ru-fork: unified to 7777 across platforms so desktop mode can bind a
 // stable loopback port everywhere. See `ru-fork/local-startup/` for the
 // policy (port-80 on macOS was the only reason for the platform carve-out;
@@ -211,6 +216,12 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly host: string | undefined;
   readonly cwd: string;
   readonly baseDir: string;
+  // ru-fork: resolved by the startup preflight (shared resolver, common-preflight.md).
+  // cliJs   — absolute path to the underlying CLI's cli.js; every CLI spawn runs
+  //           `node <cliJs> …` directly (see ru-fork/spawn/policy.ts buildCliSpawn).
+  // cliConfigDir — the CLI's config dir ({home}/$CLI_DIR); skills/agents read here.
+  readonly cliJs: string;
+  readonly cliConfigDir: string;
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
   readonly noBrowser: boolean;
@@ -298,11 +309,17 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
             : yield* fs.makeTempDirectoryScoped({ prefix: baseDirOrPrefix.prefix });
         const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
         yield* ensureServerDirectories(derivedPaths);
+        const path = yield* Path.Path;
 
         return {
           logLevel: "Error",
           cwd,
           baseDir,
+          // ru-fork: tests don't spawn the real CLI; keep the legacy
+          // dirname(baseDir)/$CLI_DIR layout so skill/agent scanner tests resolve
+          // the same roots as before.
+          cliJs: path.join(baseDir, "cli.js"),
+          cliConfigDir: path.join(path.dirname(baseDir), CLI_FOLDER),
           ...derivedPaths,
           mode: "web",
           autoBootstrapProjectFromCwd: false,

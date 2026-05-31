@@ -39,10 +39,7 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 // ru-fork: classifier-based error routing. See
 // `ru-fork-instrumental/changes/server-errors-handaling.md`.
-import {
-  classify,
-  UNRECOGNIZED_DECISION,
-} from "../../ru-fork/cli-errors-handling/recognizers.ts";
+import { classify, UNRECOGNIZED_DECISION } from "../../ru-fork/cli-errors-handling/recognizers.ts";
 import { dispatchCause } from "../../ru-fork/cli-errors-handling/dispatch.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);

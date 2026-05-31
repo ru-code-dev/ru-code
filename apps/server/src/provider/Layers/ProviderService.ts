@@ -682,8 +682,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
+          // ru-fork: was `true`. Interrupting a dead session must never
+          // resurrect it — `allowRecovery:true` here spawned a fresh qwen
+          // child just to immediately kill it (the "spawn-then-kill"
+          // thrash that re-opened the dead turn). Recovery for the NEXT
+          // user message still works: `sendTurn` keeps its own
+          // `allowRecovery:true`. See `ru-fork-instrumental/flow.md` §8 Fix #1.
+          allowRecovery: false,
         });
+        if (!routed.isActive) {
+          // ru-fork: no live session to interrupt → clean no-op. DEBUG-log
+          // every hit so we can see how many redundant interrupt attempts
+          // fire per death (child-exit watcher + C4 killAcp + Stop race)
+          // — data for the future teardown-ownership refactor (flow.md P6).
+          yield* Effect.logDebug("[provider.interruptTurn] no live session — skipping (no-op)", {
+            threadId: input.threadId,
+            operation: "ProviderService.interruptTurn",
+          });
+          return;
+        }
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
           "provider.operation": "interrupt-turn",

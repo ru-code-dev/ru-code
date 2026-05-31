@@ -35,5 +35,5 @@
       }
     ]
   },
-  "include": ["src", "vite.config.ts", "vercel.ts", "test"]
+  "include": ["src", "vite.config.ts", "vite-branding-plugin.ts", "vercel.ts", "test"]
 }

@@ -4,7 +4,7 @@ import {
   isAtLeast,
   parseVersion,
   satisfiesRange,
-} from "../../../src/ru-fork/startup/versionRange.ts";
+} from "../../../src/ru-fork/preflight/common/version.ts";
 
 describe("parseVersion", () => {
   it.each([

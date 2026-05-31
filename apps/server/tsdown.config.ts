@@ -15,6 +15,10 @@ export default defineConfig({
   // machine.
   noExternal: () => true,
   external: ["node-pty", "msgpackr-extract"],
+  // We bundle every dep on purpose (noExternal above). tsdown warns about that
+  // and, because failOnWarn defaults to "ci-only", the warning becomes a hard
+  // error under CI=true (passes locally, fails in CI). Disable the check.
+  inlineOnly: false,
   banner: {
     js: "#!/usr/bin/env node\n",
   },

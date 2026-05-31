@@ -1,0 +1,29 @@
+name: publish
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install workspace
+        uses: ./.github/actions/install
+
+      - name: Set git credentials
+        run: |
+          git config user.name "ru-code-dev"
+          git config user.email "53821477+ru-code-dev@users.noreply.github.com"
+          git remote set-url origin "https://$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY"
+        env:
+          REPO_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        run: pnpm beachball publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

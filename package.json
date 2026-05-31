@@ -3,7 +3,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pingdotgg/t3code.git"
+    "url": "git+https://github.com/ru-code-dev/ru-code.git"
   },
   "type": "module",
   "scripts": {
@@ -23,8 +23,7 @@
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
     "sync:vscode-icons": "node scripts/sync-vscode-icons.mjs",
     "prepare-release": "NODE_OPTIONS='--experimental-strip-types --experimental-sqlite' node scripts/prepare-release.ts",
-    "change": "beachball change",
-    "release": "pnpm run build && beachball publish --yes"
+    "change": "beachball change --no-commit"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
@@ -54,5 +53,9 @@
       "node-pty",
       "msgpackr-extract"
     ]
+  },
+  "beachball": {
+    "branch": "ru-code",
+    "registry": "https://registry.npmjs.org"
   }
 }

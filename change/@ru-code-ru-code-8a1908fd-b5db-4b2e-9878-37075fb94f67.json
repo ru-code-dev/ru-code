@@ -1,0 +1,7 @@
+{
+  "type": "major",
+  "comment": "feat(ru-code): Russian localization + Qwen support + Cleanup",
+  "packageName": "@ru-code/ru-code",
+  "email": "53821477+ru-code-dev@users.noreply.github.com",
+  "dependentChangeType": "patch"
+}

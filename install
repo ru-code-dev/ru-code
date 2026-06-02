@@ -24,6 +24,9 @@ set -euo pipefail
 # command name (APP_BIN) and every path/dir name come from the node preflight.
 APP_DISPLAY_NAME="Ru Code"
 PREFLIGHT_BASENAME="preflight.mjs"
+# git clone target. The bundle (install, preflight.mjs, dist-bundle/) is the
+# directory named REPO_NAME, sitting in the dir where the user ran git clone.
+REPO_NAME="ru-code"
 # Node runtime flags (sqlite + silence the experimental warnings).
 NODE_FLAGS="--experimental-sqlite --disable-warning=ExperimentalWarning"
 # Written to <bin>/.version on a successful install (for a future version gate).
@@ -97,42 +100,32 @@ parse_args() {
 }
 
 # Locate the bundle dir — the folder that holds our artifacts (install,
-# preflight.mjs, dist-bundle/). A piped script (`cat ./<clone>/install | bash`)
-# has NO path of its own ($0 is "bash", BASH_SOURCE is empty), so we can't ask
-# "where do I live". Instead we anchor on the archive, exactly like the legacy
-# installer did: recursively find */dist-bundle/*.tgz from cwd (the search
-# descends, so it works even when run from the PARENT of the clone). The bundle
-# dir is the parent of dist-bundle; install + preflight.mjs live there too, and
-# that is the clone we may remove on success/crash.
+# preflight.mjs, dist-bundle/). We KNOW its name (REPO_NAME) and that the user
+# runs the installer from the PARENT of the clone (`git clone <url> &&
+# bash atomic-code/install`), so we resolve it deterministically as ./REPO_NAME.
 #
-# Brand-agnostic on purpose: we match any *.tgz under a dist-bundle/ (a release
-# carries exactly one app tarball) rather than ${APP_BIN}-*.tgz, so discovery
-# never depends on the slug the preflight will later resolve.
+# Deliberately NO filesystem scan / `find`: scanning the home tree triggered the
+# macOS privacy prompt (descending into ~/Documents etc.) and could silently
+# abort the whole script under `set -euo pipefail` when `find` hit an unreadable
+# dir. ./REPO_NAME touches only the clone — no prompt, no spurious exit.
+# ./REPO_NAME is also the clone we may remove on success/crash.
 resolve_bundle_dir() {
-  if [ -z "$ARCHIVE_PATH" ] && [ -z "$DIST_URL" ]; then
-    local found dir
-    found=$(find . -maxdepth 4 -type f -name '*.tgz' -path '*/dist-bundle/*' 2>/dev/null | sort -V | tail -1)
-    if [ -n "$found" ]; then
-      dir=$(cd "$(dirname "$found")" && pwd)
-      ARCHIVE_PATH="$dir/$(basename "$found")"
-      BUNDLE_DIR=$(cd "$dir/.." && pwd)        # parent of dist-bundle
-      SOURCE_DIR="$BUNDLE_DIR"                  # the clone we may remove
-      info "Архив обнаружен: $ARCHIVE_PATH"
-    fi
-  fi
+  local dir
+  dir=$(cd "./$REPO_NAME" 2>/dev/null && pwd) \
+    || die "Каталог $REPO_NAME не найден. Запустите из каталога, где выполняли git clone."
+  BUNDLE_DIR="$dir"
 
-  # Fallback anchor for --local / DIST_URL (no dist-bundle to find): the script's
-  # own dir when invoked as a file (`bash ./install`), else a recursive search
-  # for preflight.mjs from cwd, else cwd. run_preflight reports a clear error if
-  # preflight.mjs still isn't there.
-  if [ -z "$BUNDLE_DIR" ]; then
-    local self preflight
-    self="${BASH_SOURCE[0]:-}"
-    if [ -n "$self" ] && [ -f "$self" ]; then
-      BUNDLE_DIR=$(cd "$(dirname "$self")" && pwd)
-    else
-      preflight=$(find . -maxdepth 4 -type f -name "$PREFLIGHT_BASENAME" 2>/dev/null | head -1)
-      if [ -n "$preflight" ]; then BUNDLE_DIR=$(cd "$(dirname "$preflight")" && pwd); else BUNDLE_DIR=$(pwd); fi
+  # Auto-discover the release archive (skipped for --local / DIST_URL, which
+  # bring their own). A missing archive is NOT fatal here: uninstall doesn't need
+  # it, and the install path checks for it in main() after the uninstall branch.
+  if [ -z "$ARCHIVE_PATH" ] && [ -z "$DIST_URL" ]; then
+    shopt -s nullglob
+    local tarballs=( "$dir"/dist-bundle/*.tgz )
+    shopt -u nullglob
+    if [ "${#tarballs[@]}" -gt 0 ]; then
+      ARCHIVE_PATH=$(printf '%s\n' "${tarballs[@]}" | sort -V | tail -1)
+      SOURCE_DIR="$dir"                        # the clone we may remove
+      info "Архив обнаружен: $ARCHIVE_PATH"
     fi
   fi
 }
@@ -211,8 +204,13 @@ clean_rc() {
     # back up first so the edit is recoverable.
     if [ -s "$rc.tmp" ]; then
       cp "$rc" "$rc.bak" 2>/dev/null || true
-      mv "$rc.tmp" "$rc"
-      info "Очищено $rc (резервная копия: $rc.bak)"
+      # Same set -e guard as add_path: a read-only rc must not abort the run.
+      if mv "$rc.tmp" "$rc" 2>/dev/null; then
+        info "Очищено $rc (резервная копия: $rc.bak)"
+      else
+        rm -f "$rc.tmp"
+        warn "Нет прав на изменение $rc — пропущен"
+      fi
     else
       rm -f "$rc.tmp"
       warn "Очистка $rc пропущена (пустой результат) — проверьте вручную"
@@ -327,14 +325,19 @@ WRAPPER
 # Append a fresh PATH line. clean_rc already removed any prior ones, so it can
 # never duplicate.
 add_path() {
-  local line="export PATH=\"${BIN_DIR}:\$PATH\"" rc any=false
+  local line="export PATH=\"${BIN_DIR}:\$PATH\"" rc added=false
   while IFS= read -r rc; do
     [ -f "$rc" ] || continue
-    any=true
-    printf '%s\n' "$line" >> "$rc"
-    info "PATH добавлен в $rc"
+    # A read-only rc (e.g. corp-managed .bash_profile) must NOT abort the install
+    # under `set -e`: catch the failed redirect, warn, and try the next file.
+    if printf '%s\n' "$line" >> "$rc" 2>/dev/null; then
+      added=true
+      info "PATH добавлен в $rc"
+    else
+      warn "Нет прав на запись $rc — пропущен"
+    fi
   done < <(rc_files)
-  [ "$any" = true ] || die "Не найдены файлы запуска оболочки. Откройте оболочку и перезапустите."
+  [ "$added" = true ] || die "Не удалось записать PATH ни в один файл оболочки. Добавьте вручную: $line"
   export PATH="$BIN_DIR:$PATH"
 }
 
@@ -410,19 +413,39 @@ print_credits() {
   echo ""
 }
 
+# One aligned row: cyan command padded to $1 columns, then dim description.
+# Padding uses the command's *visible* length (no color codes in $cmd).
+cmd_row() {
+  local width="$1" cmd="$2" desc="$3"
+  printf "    ${CYAN}%s${NC}%*s${DIM}%s${NC}\n" "$cmd" $(( width - ${#cmd} )) "" "$desc"
+}
+
 print_summary() {
+  # Align descriptions past the longest command: "$APP_BIN --version".
+  local width=$(( ${#APP_BIN} + 14 ))
   echo ""
   box_top
   box_line "  ${BOLD}${GREEN}${APP_DISPLAY_NAME} успешно установлен${NC}"
   box_bottom
   echo ""
-  echo "  Дальше:"
   if [ "$OS" = "windows" ]; then
-    echo "    1. Перезапустите Git Bash"
+    echo "  ${BOLD}Готово.${NC} Перезапустите Git Bash."
   else
-    echo "    1. Перезапустите оболочку (или откройте новый терминал)"
+    echo "  ${BOLD}Готово.${NC} Перезапустите оболочку (или откройте новый терминал)."
   fi
-  echo "    2. $APP_BIN --version"
+  echo ""
+  printf "  ${DIM}── Использование ──────────────────────────${NC}\n"
+  cmd_row "$width" "$APP_BIN --version" "проверить версию"
+  if [ "$OS" = "windows" ]; then
+    cmd_row "$width" "$APP_BIN"         "запустить"
+  else
+    cmd_row "$width" "$APP_BIN"         "запустить в фоне (демон, лог в файл)"
+    cmd_row "$width" "$APP_BIN start"   "запустить в этом окне, синхронно"
+  fi
+  cmd_row "$width" "$APP_BIN stop"      "остановить приложение"
+  echo ""
+  printf "  ${DIM}── Если PATH не подхватился ────────────────${NC}\n"
+  printf "    ${CYAN}%s${NC}\n" "$BIN_DIR/$APP_BIN"
   print_credits
 }
 

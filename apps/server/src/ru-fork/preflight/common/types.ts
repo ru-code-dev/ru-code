@@ -20,6 +20,10 @@ export type CliResolution =
       readonly cliJs: string;
       readonly source: CliSource;
       readonly ourRoot: string;
+      /** Linux only: orphaned {home}/.<app> to delete after relocation. */
+      readonly legacyRoot?: string;
+      /** Non-fatal report lines (e.g. which primary CLIs the backup bypassed). */
+      readonly warnings?: ReadonlyArray<string>;
     }
   | {
       readonly ok: false;

@@ -68,12 +68,14 @@ const main = (): void => {
   process.stdout.write(`CLI_JS=${cliJs}\n`);
   process.stdout.write(`CONFIG_DIR=${configDir}\n`);
   process.stdout.write(`SOURCE=${source}\n`);
+  if (resolution.legacyRoot) process.stdout.write(`LEGACY_ROOT=${resolution.legacyRoot}\n`);
 
   // Mandatory location log lines (every successful resolution, all platforms).
   writeInfo(`CLI config dir : ${configDir}`);
   if (source === "fallback") writeWarn(`cli.js в АЛЬТЕРНАТИВНОМ пути: ${cliJs}`);
   writeInfo(`CLI bin (cli.js): ${cliJs}  [source: ${source}]`);
   writeInfo(`app root        : ${ourRoot}`);
+  resolution.warnings?.forEach(writeWarn);
 
   // STEP 4–6 — dependency checks. Skip the cli probe if node is out of range so
   // the failure reads as "node", not a confusing cli error. (nodeCheck computed

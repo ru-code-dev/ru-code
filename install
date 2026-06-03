@@ -73,6 +73,7 @@ NODE_PATH=""
 APP_ROOT=""            # OUR_ROOT — the app folder, e.g. .../.ru-fork
 APP_BIN=""             # the command / wrapper name
 APP_DIR_NAME=""        # basename(APP_ROOT), e.g. .ru-fork — drives rc cleanup
+LEGACY_ROOT=""         # Linux: orphaned {home}/.<app> to delete after relocation
 NODE_OK=""             # 1 if node is compatible (gates the old app's `stop`)
 BIN_DIR=""             # APP_ROOT/bin
 PREFLIGHT_STATUS=1     # 0 only when the environment is compatible
@@ -132,11 +133,15 @@ resolve_bundle_dir() {
 
 remove_source_dir() {
   [ -n "$SOURCE_DIR" ] || return 0
-  [ "$KEEP_SOURCE" = false ] || { info "Исходный каталог сохранён: $SOURCE_DIR"; return 0; }
-  case "$SOURCE_DIR" in
-    /|/home|/Users|"$HOME") warn "Отказ удалять: $SOURCE_DIR"; return 0 ;;
+  # Capture + clear up front so this is idempotent: the success path and the
+  # on_exit trap (and the failure dies) all call it, but it acts exactly once.
+  local dir="$SOURCE_DIR"
+  SOURCE_DIR=""
+  [ "$KEEP_SOURCE" = false ] || { info "Исходный каталог сохранён: $dir"; return 0; }
+  case "$dir" in
+    /|/home|/Users|"$HOME") warn "Отказ удалять: $dir"; return 0 ;;
   esac
-  rm -rf "$SOURCE_DIR" 2>/dev/null && info "Исходный каталог удалён: $SOURCE_DIR" || true
+  rm -rf "$dir" 2>/dev/null && info "Исходный каталог удалён: $dir" || true
 }
 
 # ---------------------------------------------------------------------------
@@ -161,11 +166,17 @@ run_preflight() {
   PREFLIGHT_STATUS=0
   out=$("$NODE_PATH" "$script") || PREFLIGHT_STATUS=$?
 
-  APP_ROOT=$(printf '%s\n' "$out" | grep '^OUR_ROOT=' | head -n 1 | cut -d'=' -f2-)
-  APP_BIN=$(printf '%s\n'  "$out" | grep '^APP_BIN='  | head -n 1 | cut -d'=' -f2-)
-  NODE_OK=$(printf '%s\n'  "$out" | grep '^NODE_OK='  | head -n 1 | cut -d'=' -f2-)
+  # `|| true` on every extraction: a no-match grep (the preflight failed and
+  # emitted no keys, or LEGACY_ROOT is absent without a relocation) must not trip
+  # set -e/pipefail. Empty values are fine — the empty-APP_ROOT check below then
+  # reports a clean error and rolls back.
+  APP_ROOT=$(printf '%s\n' "$out" | grep '^OUR_ROOT=' | head -n 1 | cut -d'=' -f2- || true)
+  APP_BIN=$(printf '%s\n'  "$out" | grep '^APP_BIN='  | head -n 1 | cut -d'=' -f2- || true)
+  NODE_OK=$(printf '%s\n'  "$out" | grep '^NODE_OK='  | head -n 1 | cut -d'=' -f2- || true)
+  LEGACY_ROOT=$(printf '%s\n' "$out" | grep '^LEGACY_ROOT=' | head -n 1 | cut -d'=' -f2- || true)
 
   APP_ROOT="${APP_ROOT//\\//}"
+  LEGACY_ROOT="${LEGACY_ROOT//\\//}"
   [ -n "$INSTALL_DIR" ] && APP_ROOT="${INSTALL_DIR//\\//}"
   [ -n "$APP_ROOT" ] || { remove_source_dir; die "preflight: путь установки не получен."; }
 
@@ -218,13 +229,22 @@ clean_rc() {
   done < <(rc_files)
 }
 
-# Stop the old app via node on its installed cli.js — only when node is
-# compatible (it can't run otherwise). No-op if there is no old install.
-stop_old() {
+# Stop a running daemon via node on the cli.js in bin dir $1 — only when node is
+# compatible (it can't run otherwise). No-op if that cli.js is absent.
+stop_daemon_at() {
+  local bin="$1"
   [ "$NODE_OK" = "1" ] || return 0
-  [ -f "$BIN_DIR/cli.js" ] || return 0
-  info "Остановка приложения..."
-  "$NODE_PATH" $NODE_FLAGS "$BIN_DIR/cli.js" stop >/dev/null 2>&1 || true
+  [ -n "$bin" ] && [ -f "$bin/cli.js" ] || return 0
+  info "Остановка приложения: $bin"
+  "$NODE_PATH" $NODE_FLAGS "$bin/cli.js" stop >/dev/null 2>&1 || true
+}
+
+# Stop both the new install and (after a relocation) the old home install.
+# (uses `if`, not `&&`, so an empty LEGACY_ROOT can't make the function return
+#  non-zero and trip set -e in the caller.)
+stop_old() {
+  stop_daemon_at "$BIN_DIR"
+  if [ -n "${LEGACY_ROOT:-}" ]; then stop_daemon_at "$LEGACY_ROOT/bin"; fi
 }
 
 remove_bin() {
@@ -237,6 +257,25 @@ remove_bin() {
   esac
   info "Удаление старой установки: $BIN_DIR"
   rm -rf "$BIN_DIR"
+}
+
+# Remove the orphaned home install after the resolver relocated OUR_ROOT to the
+# preferred dir (LEGACY_ROOT, Linux only). On install this runs only AFTER verify
+# (so a failed relocation never wipes a working old install); do_uninstall calls
+# it too. Guarded: must exist, end in the app dir name, not a dangerous path.
+remove_legacy_root() {
+  [ -n "${LEGACY_ROOT:-}" ] && [ -d "$LEGACY_ROOT" ] || return 0
+  # Without the app dir name the */<appdir> guard below can't be trusted — skip.
+  [ -n "$APP_DIR_NAME" ] || { warn "Отказ удалять: имя каталога приложения не определено"; return 0; }
+  case "$LEGACY_ROOT" in
+    /|/home|/Users|"$HOME") warn "Отказ удалять: $LEGACY_ROOT"; return 0 ;;
+  esac
+  case "$LEGACY_ROOT" in
+    */"$APP_DIR_NAME") ;;
+    *) warn "Отказ удалять подозрительный LEGACY_ROOT: $LEGACY_ROOT"; return 0 ;;
+  esac
+  info "Удаление старой установки в домашнем каталоге: $LEGACY_ROOT"
+  rm -rf "$LEGACY_ROOT" 2>/dev/null || true
 }
 
 # Full teardown — used by the crash rollback (no stop; the new install never
@@ -322,13 +361,31 @@ WRAPPER
   chmod +x "$BIN_DIR/$APP_BIN"
 }
 
+# Convert a "C:/path" (drive-letter, forward slashes) to MSYS "/c/path" so it can
+# live in Git Bash's colon-separated PATH — the drive colon would otherwise split
+# the entry into "C" + "/path". Non-Windows paths pass straight through.
+to_msys_path() {
+  local p="$1"
+  if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
+    # tr (not bash-4 ${x,,}) so this also works on the bash 3.2 macOS ships.
+    local drive; drive=$(printf '%s' "${BASH_REMATCH[1]}" | tr 'A-Z' 'a-z')
+    printf '/%s/%s' "$drive" "${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
 # Append a fresh PATH line. clean_rc already removed any prior ones, so it can
 # never duplicate.
 add_path() {
-  local line="export PATH=\"${BIN_DIR}:\$PATH\"" rc added=false
+  # Git Bash PATH is colon-separated, so a Windows "C:/..." entry splits at the
+  # drive colon. Use MSYS form "/c/..." on Windows; pass-through elsewhere.
+  local bin_for_path="$BIN_DIR"
+  [ "$OS" = "windows" ] && bin_for_path="$(to_msys_path "$BIN_DIR")"
+  local line="export PATH=\"${bin_for_path}:\$PATH\"" rc added=false
   while IFS= read -r rc; do
     [ -f "$rc" ] || continue
-    # A read-only rc (e.g. corp-managed .bash_profile) must NOT abort the install
+    # A read-only rc (e.g. a managed/locked .bash_profile) must NOT abort the install
     # under `set -e`: catch the failed redirect, warn, and try the next file.
     if printf '%s\n' "$line" >> "$rc" 2>/dev/null; then
       added=true
@@ -338,7 +395,7 @@ add_path() {
     fi
   done < <(rc_files)
   [ "$added" = true ] || die "Не удалось записать PATH ни в один файл оболочки. Добавьте вручную: $line"
-  export PATH="$BIN_DIR:$PATH"
+  export PATH="$bin_for_path:$PATH"
 }
 
 verify() {
@@ -351,6 +408,7 @@ do_uninstall() {
   run_preflight
   stop_old
   remove_bin
+  remove_legacy_root
   clean_rc
   info "Удалено."
 }
@@ -363,9 +421,14 @@ do_uninstall() {
 on_exit() {
   local status=$?
   [ -n "${TEMP_DIR:-}" ] && rm -rf "$TEMP_DIR" 2>/dev/null || true
+  # The cloned installer dir is ALWAYS removed on exit (success or fail); only
+  # --keep-source spares it (checked inside remove_source_dir). Closes the gap
+  # where early failures (before BIN_DIR was set) left the clone behind.
+  remove_source_dir
+  # The freshly-laid bin is torn down only on a real failure (needs BIN_DIR for
+  # its app-dir-name safety guard); a successful install keeps it.
   if [ "$status" -ne 0 ] && [ -n "${BIN_DIR:-}" ]; then
     tear_down
-    remove_source_dir
   fi
   return "$status"
 }
@@ -501,6 +564,7 @@ main() {
   create_wrapper
   add_path
   verify
+  remove_legacy_root
   remove_source_dir
   # Banner to stderr so it lands in order with the rest of the output.
   print_summary >&2

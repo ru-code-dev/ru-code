@@ -18,4 +18,6 @@ export const MESSAGES = {
   CLI_BROKEN: "CLI установлен, но `cli.js --version` завершилась с ошибкой или превысила тайм-аут.",
   CLI_LOW: `CLI {found} установлен, требуется ≥ ${CLI_MIN_VERSION}. Обновите: npm install -g ${CLI_NPM_PACKAGE}@latest`,
   FOOTER_FAIL: "Установите недостающие компоненты и перезапустите.",
+  USING_BACKUP_PRIORITY:
+    "Используется резервный CLI (TRY_TO_FIND_CLI имеет приоритет над основным).",
 } as const;

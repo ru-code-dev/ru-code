@@ -73,9 +73,7 @@ export const resolveStartupCli: Effect.Effect<PreflightResolution, PreflightFail
 
     // The three lines support reads to know everything (mirrors install §10).
     yield* Effect.logInfo(`CLI config dir  : ${resolution.configDir}`);
-    yield* Effect.logInfo(
-      `CLI bin (cli.js): ${resolution.cliJs}  [source: ${resolution.source}]`,
-    );
+    yield* Effect.logInfo(`CLI bin (cli.js): ${resolution.cliJs}  [source: ${resolution.source}]`);
     yield* Effect.logInfo(`app root        : ${resolution.ourRoot}`);
 
     return {

@@ -9,6 +9,9 @@ export const CLI_DIR = CLI_CONFIG_DIRNAME;
 export const APP_DIR = APP_HOME_DIRNAME;
 /** Our app command / wrapper name, e.g. "ru-fork". */
 export const APP_BIN = APP_HOME_SLUG;
+/** Linux-only path segment under /home. When /home/<LINUX_SAFE_DIR>/<user> exists,
+ *  OUR_ROOT is placed there; otherwise it stays in the home dir. */
+export const LINUX_SAFE_DIR = "work";
 
 export const NODE_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
 /** Minimum CLI version; "" disables the version check (presence only). */

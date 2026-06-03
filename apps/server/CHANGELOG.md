@@ -1,8 +1,16 @@
 # Change Log - @ru-code/ru-code
 
-<!-- This log was last generated on Sun, 31 May 2026 23:42:25 GMT and should not be manually modified. -->
+<!-- This log was last generated on Wed, 03 Jun 2026 01:39:08 GMT and should not be manually modified. -->
 
 <!-- Start content -->
+
+## 3.0.2
+
+Wed, 03 Jun 2026 01:39:08 GMT
+
+### Patches
+
+- feat(ru-code): install script improvments (53821477+ru-code-dev@users.noreply.github.com)
 
 ## 3.0.1
 

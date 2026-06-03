@@ -2,6 +2,21 @@
   "name": "@ru-code/ru-code",
   "entries": [
     {
+      "date": "Wed, 03 Jun 2026 01:39:08 GMT",
+      "version": "3.0.2",
+      "tag": "@ru-code/ru-code_v3.0.2",
+      "comments": {
+        "patch": [
+          {
+            "author": "53821477+ru-code-dev@users.noreply.github.com",
+            "package": "@ru-code/ru-code",
+            "commit": "9ae8fc12c0287d723f03300ca8beab97529bbb1d",
+            "comment": "feat(ru-code): install script improvments"
+          }
+        ]
+      }
+    },
+    {
       "date": "Sun, 31 May 2026 23:42:25 GMT",
       "version": "3.0.1",
       "tag": "@ru-code/ru-code_v3.0.1",

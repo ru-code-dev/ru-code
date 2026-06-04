@@ -169,6 +169,12 @@ function truncateDetail(value: string, limit = ACTIVITY_DETAIL_MAX_CHARS): strin
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+// ru-fork: DEFENSIVE only. By contract the adapter always sets
+// `errorMessage = decision.text` (non-empty for every T/T+N recognizer and the
+// unrecognized fallback) on turn.completed{failed}, so this is unreachable in
+// practice — it exists so a malformed event can't produce an empty banner/row.
+const FALLBACK_TURN_FAILED_TEXT = "Шаг не выполнен";
+
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
   const trimmed = planMarkdown?.trim();
   if (!trimmed) {
@@ -1275,7 +1281,17 @@ const make = Effect.gen(function* () {
                 ? null
                 : (thread.session?.lastError ?? null);
 
-        if (shouldApplyThreadLifecycle) {
+        // ru-fork: a FAILED turn.completed is owned end-to-end by the dedicated
+        // single-writer block below (it writes the timeline row with the real
+        // turnId + the session error per surface). Skip the generic lifecycle
+        // session.set here so there is exactly ONE writer for failed-turn state
+        // (and so the legacy "Шаг не выполнен" + always-banner path no longer
+        // races it). Completed / cancelled turns still flow through here.
+        const isFailedTurnCompleted =
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed";
+
+        if (shouldApplyThreadLifecycle && !isFailedTurnCompleted) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
             yield* markSourceProposedPlanImplemented(
               acceptedTurnStartedSourcePlan.sourceThreadId,
@@ -1310,6 +1326,59 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
               activeTurnId: nextActiveTurnId,
               lastError,
+              updatedAt: now,
+            },
+            createdAt: now,
+          });
+        }
+
+        // ru-fork: SINGLE WRITER for a failed turn. Everything the user sees on
+        // a failure comes from this one event: the timeline error row carries
+        // the REAL turnId (event.turnId, set by the adapter when it created the
+        // turn) so the web work-log filter (activity.turnId === latestTurnId,
+        // session-logic.ts:492) keeps the row and it persists; the surface
+        // decides banner-or-not. The message-finalize loop further below still
+        // runs for failed turns and clears `message.streaming` (timer stops).
+        // No projection write for a failed turn happens on the reactor bus.
+        if (event.type === "turn.completed" && isFailedTurnCompleted && shouldApplyThreadLifecycle) {
+          const failedTurnId = toTurnId(event.turnId) ?? null;
+          const detail = event.payload.errorMessage ?? FALLBACK_TURN_FAILED_TEXT;
+          // true ⇒ T+N (row + notification); false ⇒ T (row only); absent ⇒
+          // notification (legacy default). The row is written unconditionally below.
+          const surfacesNotification = event.payload.showNotification ?? true;
+          // (1) timeline row, bound to the real turn id
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: providerCommandId(event, "turn-failed-activity"),
+            threadId: thread.id,
+            activity: {
+              id: event.eventId,
+              tone: "error",
+              kind: "provider.turn.start.failed",
+              summary: "Provider turn failed",
+              payload: { detail: truncateDetail(detail) },
+              turnId: failedTurnId,
+              createdAt: now,
+            } satisfies OrchestrationThreadActivity,
+            createdAt: now,
+          });
+          // (2) session error per surface — T+N ⇒ banner (status error +
+          // lastError); T ⇒ no banner (status ready + lastError null). Both
+          // clear activeTurnId so the "Работаю" timer stops.
+          yield* orchestrationEngine.dispatch({
+            type: "thread.session.set",
+            commandId: providerCommandId(event, "turn-failed-session"),
+            threadId: thread.id,
+            session: {
+              threadId: thread.id,
+              status: surfacesNotification ? "error" : "ready",
+              providerName: event.provider,
+              ...(event.providerInstanceId !== undefined
+                ? { providerInstanceId: event.providerInstanceId }
+                : {}),
+              runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
+              activeTurnId: null,
+              lastError: surfacesNotification ? detail : null,
               updatedAt: now,
             },
             createdAt: now,

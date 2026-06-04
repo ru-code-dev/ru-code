@@ -74,14 +74,6 @@ const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
 
-/** Read `data.details` from an AcpRequestError (if it's a string). */
-const readAcpDetails = (error: unknown): string | undefined => {
-  if (!isAcpRequestError(error)) return undefined;
-  if (!isRecord(error.data)) return undefined;
-  const details = error.data["details"];
-  return typeof details === "string" ? details : undefined;
-};
-
 /**
  * Walk one level of `.cause` on a wrapped tagged error to extract the
  * original AcpError. Used at sites #2-#4 where the original tag has
@@ -90,6 +82,32 @@ const readAcpDetails = (error: unknown): string | undefined => {
 const innerCause = (error: unknown): unknown => {
   if (!isRecord(error)) return undefined;
   return error["cause"];
+};
+
+/**
+ * ru-fork: resolve the underlying `AcpRequestError` from either the bare error
+ * (site #1, before mapping) OR a `mapAcpToAdapterError`-wrapped tag whose
+ * `.cause` is the original (the finalizer / reactor sites, which classify the
+ * MAPPED error). Without this, the A-bucket code matchers (A4/A5/A6 — surfaced
+ * only after the turn fails into the finalizer) never matched the wrapped error
+ * and fell through to the generic Z fallback, losing their T-vs-T+N surface and
+ * Russian text. (A1/A2/A3/A7 are B-surface and matched at site #1 on the bare
+ * error, so they worked already; this keeps them working and adds the wrapped
+ * path harmlessly.)
+ */
+const asAcpRequestError = (error: unknown): EffectAcpErrors.AcpRequestError | undefined => {
+  if (isAcpRequestError(error)) return error;
+  const inner = innerCause(error);
+  return isAcpRequestError(inner) ? inner : undefined;
+};
+
+/** Read `data.details` from an AcpRequestError (bare or wrapped, if a string). */
+const readAcpDetails = (error: unknown): string | undefined => {
+  const request = asAcpRequestError(error);
+  if (request === undefined) return undefined;
+  if (!isRecord(request.data)) return undefined;
+  const details = request.data["details"];
+  return typeof details === "string" ? details : undefined;
 };
 
 const readExitCode = (error: unknown): number | undefined => {
@@ -120,8 +138,9 @@ const EMPTY_STREAM_DETAIL_MARKERS = [
 export const A1_EMPTY_STREAM: CliErrorRecognizer = {
   id: "A1",
   match: (error) => {
-    if (!isAcpRequestError(error)) return false;
-    if (error.code !== -32603) return false;
+    const request = asAcpRequestError(error);
+    if (request === undefined) return false;
+    if (request.code !== -32603) return false;
     const details = readAcpDetails(error);
     if (details === undefined) return false;
     return EMPTY_STREAM_DETAIL_MARKERS.some((marker) => details.includes(marker));
@@ -137,9 +156,10 @@ export const A1_EMPTY_STREAM: CliErrorRecognizer = {
 export const A2_RATE_LIMIT: CliErrorRecognizer = {
   id: "A2",
   match: (error) => {
-    if (!isAcpRequestError(error)) return false;
-    if (error.code === 429) return true;
-    if (error.code === -32603) {
+    const request = asAcpRequestError(error);
+    if (request === undefined) return false;
+    if (request.code === 429) return true;
+    if (request.code === -32603) {
       const details = readAcpDetails(error);
       if (details !== undefined && details.includes("Rate limit exceeded")) return true;
     }
@@ -197,8 +217,9 @@ export const A7_SLASH_UNSUPPORTED: CliErrorRecognizer = {
 export const A3_GENERIC_RPC_DETAIL: CliErrorRecognizer = {
   id: "A3",
   match: (error) => {
-    if (!isAcpRequestError(error)) return false;
-    if (error.code !== -32603) return false;
+    const request = asAcpRequestError(error);
+    if (request === undefined) return false;
+    if (request.code !== -32603) return false;
     const details = readAcpDetails(error);
     return details !== undefined && details.trim().length > 0;
   },
@@ -213,8 +234,9 @@ export const A3_GENERIC_RPC_DETAIL: CliErrorRecognizer = {
 export const A4_PROTOCOL: CliErrorRecognizer = {
   id: "A4",
   match: (error) => {
-    if (!isAcpRequestError(error)) return false;
-    return error.code === -32600 || error.code === -32601 || error.code === -32602;
+    const request = asAcpRequestError(error);
+    if (request === undefined) return false;
+    return request.code === -32600 || request.code === -32601 || request.code === -32602;
   },
   decide: () => ({
     id: "A4",
@@ -228,7 +250,7 @@ export const A4_PROTOCOL: CliErrorRecognizer = {
 /** A5 — auth required. */
 export const A5_AUTH_REQUIRED: CliErrorRecognizer = {
   id: "A5",
-  match: (error) => isAcpRequestError(error) && error.code === -32000,
+  match: (error) => asAcpRequestError(error)?.code === -32000,
   decide: () => ({
     id: "A5",
     surface: "T+N",
@@ -240,7 +262,7 @@ export const A5_AUTH_REQUIRED: CliErrorRecognizer = {
 /** A6 — resource not found. */
 export const A6_RESOURCE_NOT_FOUND: CliErrorRecognizer = {
   id: "A6",
-  match: (error) => isAcpRequestError(error) && error.code === -32002,
+  match: (error) => asAcpRequestError(error)?.code === -32002,
   decide: () => ({
     id: "A6",
     surface: "T",
@@ -513,7 +535,7 @@ export const classify = (error: unknown, cause: Cause.Cause<unknown>): CliErrorD
  * a generic Russian fallback; the dispatcher logs the failure's
  * message/details to the server console so it isn't lost. Promoting an
  * unrecognized failure to a named recognizer is then a code edit
- * driven by the `[cli-error.unrecognized]` log line.
+ * driven by the `[runtime]` breadcrumb (code: "unrecognized").
  */
 export const UNRECOGNIZED_DECISION: CliErrorDecision = {
   id: "unrecognized",

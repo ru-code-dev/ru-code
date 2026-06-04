@@ -279,7 +279,7 @@ const make = Effect.gen(function* () {
   // detail → return its detail") is now `Z_CLEAN_REQUEST_ERROR` in
   // recognizers.ts. The old `Cause.pretty` fallback is replaced by
   // `UNRECOGNIZED_DECISION` — a fixed Russian fallback in UI plus the
-  // full pretty cause in the `[cli-error.unrecognized]` log line.
+  // full pretty cause in the `[runtime]` breadcrumb (code: "unrecognized").
 
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
@@ -859,7 +859,16 @@ const make = Effect.gen(function* () {
     // Russian text in the UI, full `Cause.pretty` in the server log).
     // The old `formatFailureDetail` helper has been deleted — its fast
     // path now lives as the `Z_CLEAN_REQUEST_ERROR` recognizer.
-    const handleTurnStartFailure = (cause: Cause.Cause<unknown>) =>
+    // ru-fork: PRE-TURN failures only (buildSendTurnRequestForThread fails
+    // before sendTurn ever runs — most commonly B3 spawn, or an RPC error
+    // during the initialize/session.new handshake). No `turn.started` was
+    // emitted ⇒ no `turn.completed{failed}` will come ⇒ ingestion can't help ⇒
+    // the reactor is the SOLE writer here, and there is no competing
+    // `session.exited` (nothing live to exit). This is the only place the
+    // reactor writes turn-failure projection state. A TURN failure (sendTurn
+    // itself) goes through `handleTurnFailure` below (killAcp only) — its
+    // presentation is written by ingestion off the finalizer's turn.completed.
+    const handlePreTurnFailure = (cause: Cause.Cause<unknown>) =>
       Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) return;
 
@@ -872,8 +881,7 @@ const make = Effect.gen(function* () {
             .interruptTurn({ threadId: event.payload.threadId })
             // Best-effort: if there's no live session to kill (already
             // dead, or never attached), don't fail the dispatch. The
-            // [cli-error.<id>] log line above already records the
-            // failure context.
+            // [runtime] breadcrumb above already records the failure context.
             .pipe(Effect.catch(() => Effect.void)),
           appendActivity: (detail: string) =>
             appendProviderFailureActivity({
@@ -881,7 +889,13 @@ const make = Effect.gen(function* () {
               kind: "provider.turn.start.failed",
               summary: "Provider turn start failed",
               detail,
-              turnId: null,
+              // ru-fork: bind to the PRIOR (settled) turn so the work-log
+              // filter (session-logic.ts:492 — activity.turnId === latestTurnId)
+              // keeps the row even when the thread already has turns. Falls back
+              // to null when there is no prior turn (then latestTurnId is
+              // undefined ⇒ the filter's `: true` branch shows it anyway).
+              // `latestTurn` is the settled prior turn, NOT the racy active turn.
+              turnId: thread.latestTurn?.turnId ?? null,
               createdAt: event.payload.createdAt,
             }),
           setLastError: (detail: string) =>
@@ -897,13 +911,31 @@ const make = Effect.gen(function* () {
         });
       });
 
-    const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
-      handleTurnStartFailure(cause).pipe(
-        Effect.catchCause((recoveryCause) =>
-          Effect.logWarning("provider command reactor failed to recover turn start failure", {
+    // ru-fork: TURN failures (sendTurn itself failed). The adapter's finalizer
+    // already emitted the one `turn.completed{failed}` carrying the classified
+    // text + surface + real turnId, and ingestion (single writer) has written
+    // the timeline row / banner / message-finalize from it. The reactor must
+    // NOT write any projection state here (doing so is the two-writer race this
+    // whole change removes) — its only job is to kill the session when the
+    // recognizer says so. `killAcp → stopSession` (not interruptTurn) so we
+    // don't set the adapter's cancel-intent flag on a genuine failure.
+    const handleTurnFailure = (cause: Cause.Cause<unknown>) =>
+      Effect.gen(function* () {
+        // Stop / teardown interrupts → ingestion already finalized as cancelled.
+        if (Cause.hasInterruptsOnly(cause)) return;
+        const error = cause.reasons.find(Cause.isFailReason)?.error;
+        const decision = classify(error, cause) ?? UNRECOGNIZED_DECISION;
+        if (decision.killAcp === true) {
+          yield* providerService
+            .stopSession({ threadId: event.payload.threadId })
+            .pipe(Effect.catch(() => Effect.void));
+        }
+      }).pipe(
+        Effect.catchCause((handlerCause) =>
+          Effect.logWarning("provider command reactor failed to handle turn failure", {
             eventType: event.type,
             threadId: event.payload.threadId,
-            cause: Cause.pretty(recoveryCause),
+            cause: Cause.pretty(handlerCause),
             originalCause: Cause.pretty(cause),
           }),
         ),
@@ -951,7 +983,7 @@ const make = Effect.gen(function* () {
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),
-      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+      Effect.catchCause((cause) => handlePreTurnFailure(cause).pipe(Effect.as(Option.none()))),
     );
 
     if (Option.isNone(sendTurnRequest)) {
@@ -960,7 +992,7 @@ const make = Effect.gen(function* () {
 
     yield* providerService
       .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+      .pipe(Effect.catchCause(handleTurnFailure), Effect.forkScoped);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

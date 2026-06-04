@@ -23,6 +23,11 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import {
+  McpPanel,
+  McpPanelInlineSidebar,
+  useMcpManagerStore,
+} from "../ru-fork/mcp-manage";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
@@ -168,6 +173,9 @@ function ChatThreadRouteView() {
   const serverThreadStarted = threadHasStarted(serverThread);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const diffOpen = search.diff === "1";
+  const mcpOpen = useMcpManagerStore((store) => store.panelOpen);
+  const setMcpPanelOpen = useMcpManagerStore((store) => store.setPanelOpen);
+  const closeMcp = useCallback(() => setMcpPanelOpen(false), [setMcpPanelOpen]);
   const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
@@ -204,6 +212,8 @@ function ChatThreadRouteView() {
       return;
     }
     markDiffOpened();
+    // Diff and MCP share the right-panel slot — only one open at a time.
+    setMcpPanelOpen(false);
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -212,7 +222,7 @@ function ChatThreadRouteView() {
         return { ...rest, diff: "1" };
       },
     });
-  }, [markDiffOpened, navigate, threadRef]);
+  }, [markDiffOpened, navigate, setMcpPanelOpen, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
@@ -255,6 +265,7 @@ function ChatThreadRouteView() {
           onOpenDiff={openDiff}
           renderDiffContent={shouldRenderDiffContent}
         />
+        <McpPanelInlineSidebar open={mcpOpen} onClose={closeMcp} />
       </>
     );
   }
@@ -271,6 +282,9 @@ function ChatThreadRouteView() {
       </SidebarInset>
       <RightPanelSheet open={diffOpen} onClose={closeDiff}>
         {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
+      </RightPanelSheet>
+      <RightPanelSheet open={mcpOpen} onClose={closeMcp}>
+        <McpPanel onClose={closeMcp} />
       </RightPanelSheet>
     </>
   );

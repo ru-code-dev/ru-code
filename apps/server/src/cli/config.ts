@@ -384,7 +384,11 @@ export const resolveServerConfig = (
       cwd,
       baseDir,
       // ru-fork: straight from the resolver — no dirname(baseDir) derivation.
-      cliJs: cli.cliJs,
+      // RU_FORK_CLI_JS is a DEV-ONLY override: point it at the built fake ACP
+      // server (tests/fixtures/fake-acp-server) to drive the real app against a
+      // scripted wire failure for manual UI checks. Combine with RU_FORK_FAKE_ACP
+      // (read by the fake itself) to pick which error to reproduce. See §9.5.
+      cliJs: process.env["RU_FORK_CLI_JS"] ?? cli.cliJs,
       cliConfigDir: cli.configDir,
       ...derivedPaths,
       host,

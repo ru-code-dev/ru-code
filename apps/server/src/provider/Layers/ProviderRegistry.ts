@@ -98,7 +98,13 @@ const mergeProviderModels = (
     };
   });
   const nextSlugs = new Set(nextModels.map((model) => model.slug));
-  return [...mergedModels, ...previousModels.filter((model) => !nextSlugs.has(model.slug))];
+  // ru-fork: only carry over user-added custom models that the fresh probe
+  // didn't return; built-in models come authoritatively from `nextModels`
+  // (CLI_MODELS) so removed/renamed built-ins are evicted, not preserved.
+  return [
+    ...mergedModels,
+    ...previousModels.filter((model) => model.isCustom && !nextSlugs.has(model.slug)),
+  ];
 };
 
 export const mergeProviderSnapshot = (

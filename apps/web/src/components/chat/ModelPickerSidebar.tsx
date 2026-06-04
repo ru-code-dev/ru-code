@@ -7,6 +7,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import { HIDE_EXTRA_FEATURES } from "../../ru-fork/config";
 
 /**
  * Build the hover tooltip for an instance button. Mirrors the old
@@ -67,7 +68,9 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
     props.onSelectInstance(instanceId);
   };
   const showFavorites = props.showFavorites ?? true;
-  const showComingSoon = props.showComingSoon ?? true;
+  // ru-fork: the coming-soon block is exclusively Gemini + Github Copilot,
+  // so HIDE_EXTRA_FEATURES suppresses both in the single-provider build.
+  const showComingSoon = !HIDE_EXTRA_FEATURES && (props.showComingSoon ?? true);
   const duplicateDriverCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of props.instanceEntries) {

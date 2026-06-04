@@ -27,6 +27,7 @@ import { Input } from "../ui/input";
 import { RadioGroup } from "../ui/radio-group";
 import { toastManager } from "../ui/toast";
 import { DRIVER_OPTION_BY_VALUE, DRIVER_OPTIONS } from "./providerDriverMeta";
+import { HIDE_EXTRA_FEATURES } from "../../ru-fork/config";
 import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSettingsForm";
 import { AnimatedHeight } from "../AnimatedHeight";
 
@@ -332,7 +333,13 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                       </RadioPrimitive.Root>
                     );
                   })}
-                  {COMING_SOON_DRIVER_OPTIONS.map((option) => {
+                  {COMING_SOON_DRIVER_OPTIONS.filter(
+                    // ru-fork: hide Gemini + Github Copilot in the
+                    // single-provider build; keep the other coming-soon drivers.
+                    (option) =>
+                      !HIDE_EXTRA_FEATURES ||
+                      (option.value !== "gemini" && option.value !== "githubCopilot"),
+                  ).map((option) => {
                     const IconComponent = option.icon;
                     return (
                       <RadioPrimitive.Root

@@ -14,7 +14,7 @@
     "RU_FORK_AUTH_TOKEN",
     "NODE_OPTIONS"
   ],
-  "globalPassThroughEnv": ["PATHEXT", "NODE_OPTIONS"],
+  "globalPassThroughEnv": ["PATHEXT", "NODE_OPTIONS", "RU_FORK_CLI_JS", "RU_FORK_FAKE_ACP"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

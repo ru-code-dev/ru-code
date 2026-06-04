@@ -48,19 +48,27 @@ const CLI_PRESENTATION = {
 } as const;
 
 /**
- * Single synthetic model advertised by every Cli snapshot. The actual
- * model is bundled inside Cli Code — T3 doesn't need to know or care
- * what it is. This entry exists solely to satisfy the model picker UI
- * which requires at least one model to make the provider selectable.
+ * The two models advertised by every Cli snapshot. The `slug` is sent
+ * verbatim to qwen as its model config value on each turn (see
+ * CliAdapter.sendTurn → AcpSessionRuntime.setModel). The first entry is
+ * the default selection in the picker.
  */
-const CLI_DEFAULT_MODEL: ServerProviderModel = {
-  slug: "default",
-  name: CLI_NAME,
-  isCustom: false,
-  capabilities: null,
-};
-
-const CLI_MODELS: ReadonlyArray<ServerProviderModel> = [CLI_DEFAULT_MODEL];
+const CLI_MODELS: ReadonlyArray<ServerProviderModel> = [
+  {
+    slug: "qwen3-coder-plus",
+    name: "Qwen3 Coder Plus",
+    shortName: "🐬 Plus",
+    isCustom: false,
+    capabilities: null,
+  },
+  {
+    slug: "qwen3-coder-flash",
+    name: "Qwen3 Coder Flash",
+    shortName: "🚀 Flash",
+    isCustom: false,
+    capabilities: null,
+  },
+];
 
 export interface CliVersionResult {
   readonly version: string | null;

@@ -269,6 +269,12 @@ const makeCheckpointStore = Effect.gen(function* () {
       }
 
       const diffArgs = [
+        // Emit raw UTF-8 pathnames instead of git's default octal-escaped,
+        // double-quoted form. The downstream diff parser only reads the
+        // unquoted capture groups of the `diff --git` header, so quoted
+        // (non-ASCII) paths crash it. ASCII paths are unaffected.
+        "-c",
+        "core.quotePath=false",
         "diff",
         "--patch",
         "--minimal",

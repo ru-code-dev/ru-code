@@ -87,10 +87,20 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     }),
   );
 
-  it("hydrates cached provider status while preserving current settings-derived models", () => {
+  it("hydrates cached provider status, carrying over custom models but dropping stale built-ins", () => {
+    const customCachedModel = {
+      slug: "custom-local-llm",
+      name: "Custom Local LLM",
+      isCustom: true,
+      capabilities: emptyCapabilities,
+    };
     const cachedCodex = makeProvider(CODEX_DRIVER, {
       checkedAt: "2026-04-10T12:00:00.000Z",
       models: [
+        // User-added custom model — must survive hydration.
+        customCachedModel,
+        // Stale built-in no longer in the fresh CLI_MODELS list — must be
+        // dropped so the picker never keeps showing removed/renamed built-ins.
         {
           slug: "gpt-5-mini",
           name: "GPT-5 Mini",
@@ -127,15 +137,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       }),
       {
         ...fallbackCodex,
-        models: [
-          ...fallbackCodex.models,
-          {
-            slug: "gpt-5-mini",
-            name: "GPT-5 Mini",
-            isCustom: false,
-            capabilities: emptyCapabilities,
-          },
-        ],
+        models: [...fallbackCodex.models, customCachedModel],
         installed: cachedCodex.installed,
         version: cachedCodex.version,
         status: cachedCodex.status,

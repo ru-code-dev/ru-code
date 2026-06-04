@@ -92,7 +92,8 @@ import { prependSubagentReminderIfNeeded } from "../../ru-fork/subagents/userTex
 // ru-fork: classifier for cli-side errors — routes recognized
 // failures to the right UI surface. See
 // `ru-fork-instrumental/changes/server-errors-handaling.md`.
-import { classify } from "../../ru-fork/cli-errors-handling/recognizers.ts";
+import { classify, UNRECOGNIZED_DECISION } from "../../ru-fork/cli-errors-handling/recognizers.ts";
+import { cliErrorFields } from "../../ru-fork/cli-errors-handling/dispatch.ts";
 import {
   describeRequestFailure,
   describeRequestPayload,
@@ -137,6 +138,21 @@ interface CliSessionContext {
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   activeTurnId: TurnId | undefined;
+  // ru-fork: resolved by sendTurn's finalizer the instant it offers the
+  // turn's single `turn.completed`. `abortSession` awaits this (when a turn
+  // is active) before offering `session.exited`, so `turn.completed` is
+  // always ingested first (I5: ingestion strips the per-turn assistant cache
+  // on `session.exited`; finalizing the message after that strip would leave
+  // the bubble timer stuck forever). Replaced per turn in `sendTurn`.
+  turnFinalized: Deferred.Deferred<void> | undefined;
+  // ru-fork: set true by the cancel-INTENT teardown sites (the Stop button
+  // via `interruptTurn`, and the mode-change teardown in `startSession`)
+  // BEFORE the force-kill. The finalizer reads it to label the turn
+  // `cancelled` (not a transport `failed`) — deterministic because it is set
+  // before the kill that fails the in-flight prompt. Other teardowns
+  // (maintenance/stall/probe/child-exit) leave it false so the turn keeps its
+  // real failure label. Reset to false at the start of each `sendTurn`.
+  userCancelRequested: boolean;
   stopped: boolean;
   // ru-fork: live runtimeMode mirror. Refreshed by sendTurn and
   // respondToRequest from their per-call inputs. Read by the cli-initiated
@@ -391,6 +407,13 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
     const sessions = new Map<ThreadId, CliSessionContext>();
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+    // ru-fork: the adapter-layer scope. Session-bound fibers (child-exit
+    // watcher, stall watchdog, post-answer-resume probe) fork their teardown
+    // onto THIS scope via `scheduleTeardown` so `abortSession` runs on a fresh
+    // fiber — never the watcher's own fiber. Running it inline there would
+    // self-interrupt (`abortSession` interrupts those very fibers), aborting
+    // the teardown before it offers `session.exited`.
+    const layerScope = yield* Effect.scope;
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.make(id));
@@ -546,26 +569,25 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
           yield* Fiber.interrupt(ctx.stallWatchdogFiber);
         }
 
-        // sendTurn's natural `turn.completed` emission won't run when
-        // we're killing the child mid-turn, leaving the UI's turn timer
-        // hung. Emit it ourselves so the projection marks the turn
-        // cancelled before we tear down.
-        if (ctx.activeTurnId) {
-          yield* offerRuntimeEvent({
-            type: "turn.completed",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: ctx.threadId,
-            turnId: ctx.activeTurnId,
-            payload: { state: "cancelled", stopReason: "cancelled" },
-          });
-        }
-
         if (method === "end-force") {
           // SIGKILL — kernel reaps the child unconditionally, so the
           // spawn finalizer's child.exited promise resolves immediately
           // and the subsequent Scope.close completes without waiting.
+          // It also makes any in-flight `acp.prompt()` fail (transport EOF),
+          // which drives sendTurn's finalizer below.
           yield* ctx.acp.forceKill;
+        }
+
+        // ru-fork: SINGLE-WRITER ordering barrier. If a turn is in flight, the
+        // kill above (or, for end-graceful, the `acp.cancel`) makes its prompt
+        // settle into sendTurn's finalizer, which emits THE one `turn.completed`
+        // for this turn and resolves `turnFinalized`. We must let that event be
+        // offered BEFORE our `session.exited` — ingestion strips the per-turn
+        // assistant-message cache on `session.exited`, and finalizing the
+        // message after that strip leaves the bubble timer stuck (I5). The kill
+        // guarantees the prompt settles, so this await cannot hang.
+        if (ctx.activeTurnId !== undefined && ctx.turnFinalized !== undefined) {
+          yield* Deferred.await(ctx.turnFinalized);
         }
 
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
@@ -583,6 +605,15 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
           sessionTornDown: true,
         });
       });
+
+    // ru-fork: run `abortSession` on a fresh fiber in the adapter-layer scope.
+    // Used by the session-bound fibers (child-exit watcher, stall watchdog,
+    // post-answer-resume probe), which must NOT call `abortSession` inline:
+    // `abortSession` interrupts those very fibers, so an inline call would
+    // self-interrupt and never reach `session.exited`. Forking onto the layer
+    // scope decouples the teardown from the fiber that triggered it.
+    const scheduleTeardown = (ctx: CliSessionContext, method: AbortMethod) =>
+      abortSession(ctx, method).pipe(Effect.forkIn(layerScope), Effect.asVoid);
 
     const startSession: CliAdapterShape["startSession"] = (input) =>
       withThreadLock(
@@ -606,6 +637,9 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
           const cwd = path.resolve(input.cwd.trim());
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
+            // ru-fork: a mid-turn restart (model/cwd change) is a cancel, not a
+            // failure — flag it so the old turn's finalizer labels it cancelled.
+            existing.userCancelRequested = true;
             yield* abortSession(existing, MODE_CHANGE_METHOD);
           }
 
@@ -1042,6 +1076,8 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
             pendingUserInputs,
             turns: [],
             activeTurnId: undefined,
+            turnFinalized: undefined,
+            userCancelRequested: false,
             stopped: false,
             // ru-fork: seed the live runtimeMode mirror from startSession
             // input (the orchestrator passes thread.runtimeMode here). Future
@@ -1176,11 +1212,16 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
           const childExitFiber = yield* Effect.gen(function* () {
             yield* acp.waitForExit;
             if (ctx.stopped) return;
-            yield* Effect.logWarning("[cli-adapter] ACP child exited unexpectedly", {
+            yield* Effect.logDebug("[cli-adapter] ACP child exited unexpectedly", {
               threadId: ctx.threadId,
               activeTurnId: ctx.activeTurnId ?? null,
             });
-            yield* abortSession(ctx, MAINTENANCE_METHOD);
+            // ru-fork: schedule (don't inline) — see scheduleTeardown. If a
+            // turn was active, the child's death already failed its prompt into
+            // the finalizer; abortSession awaits that turn.completed before
+            // session.exited. If idle, this is plain cleanup. Covers B1
+            // (process-exit, killAcp:false) which the reactor won't tear down.
+            yield* scheduleTeardown(ctx, MAINTENANCE_METHOD);
           }).pipe(Effect.forkChild);
           ctx.childExitFiber = childExitFiber;
 
@@ -1219,7 +1260,10 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                     killThresholdMs: ACP_WIRE_STALL_KILL_MS,
                   },
                 );
-                yield* abortSession(ctx, MAINTENANCE_METHOD);
+                // ru-fork: schedule (don't inline) — see scheduleTeardown. The
+                // force-kill inside abortSession fails the wedged prompt into
+                // the finalizer (standard mid-turn failure, classified C4).
+                yield* scheduleTeardown(ctx, MAINTENANCE_METHOD);
                 return;
               }
               if (elapsed >= ACP_WIRE_STALL_WARN_MS && !ctx.wireActivity.stallWarned) {
@@ -1267,18 +1311,86 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
 
     const sendTurn: CliAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(input.threadId);
+        // ru-fork: turnId + turn.started are the genuine FIRST acts — emitted
+        // BEFORE requireSession — so EVERY exit from this turn (a requireSession
+        // / D2 failure, a validation / D1 failure, a prompt failure, a defect,
+        // or success) is finalized into exactly one `turn.completed` by the
+        // onExit finalizer below. That finalizer is the SINGLE source of the
+        // failed-turn event: it carries the classified text + surface (so
+        // ingestion is the single writer of timeline row / banner / message-
+        // finalize) and the real turnId (never a projection read). No `ctx` is
+        // needed to emit — `finalized` is a local first-wins flag and the
+        // threadId/turnId are local.
         const turnId = TurnId.make(crypto.randomUUID());
-        ctx.activeTurnId = turnId;
-        // Reset the wire-stall baseline at the start of each turn so
-        // the watchdog measures inactivity within this turn only.
-        ctx.wireActivity.lastIncomingAt = yield* Clock.currentTimeMillis;
-        ctx.wireActivity.stallWarned = false;
-        ctx.session = {
-          ...ctx.session,
-          activeTurnId: turnId,
-          updatedAt: yield* nowIso,
-        };
+        let finalized = false;
+        let activeCtx: CliSessionContext | undefined;
+        const turnFinalized = yield* Deferred.make<void>();
+
+        const finalize = (payload: {
+          readonly state: "completed" | "cancelled" | "failed";
+          readonly stopReason: string | null;
+          readonly errorMessage?: string;
+          readonly showNotification?: boolean;
+        }) =>
+          Effect.gen(function* () {
+            if (finalized) return; // check-and-set, no yield between ⇒ atomic
+            finalized = true;
+            if (activeCtx) activeCtx.activeTurnId = undefined; // stop the stall watchdog
+            yield* offerRuntimeEvent({
+              type: "turn.completed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              turnId,
+              payload,
+            });
+            // Release abortSession's ordering barrier (I5): a `session.exited`
+            // may now safely follow this `turn.completed` on the same consumer.
+            yield* Deferred.succeed(turnFinalized, undefined);
+          });
+
+        // Cancel (user Stop / mode-change set userCancelRequested before the
+        // kill, or a genuine fiber interrupt) is NOT an error. Anything else is
+        // classified into a failed surface. The intent flag is read here, set
+        // before the kill that fails the prompt ⇒ deterministic label, no race.
+        const finalizeFromCause = (cause: Cause.Cause<unknown>) =>
+          activeCtx?.userCancelRequested === true || Cause.hasInterruptsOnly(cause)
+            ? finalize({ state: "cancelled", stopReason: "cancelled" })
+            : Effect.suspend(() => {
+                const error = cause.reasons.find(Cause.isFailReason)?.error;
+                // ru-fork: classification must NEVER gate the single-writer emit — a
+                // throw here would silence the turn AND hang teardown (turnFinalized
+                // never resolves). Fall back to the generic decision on any throw.
+                const decision = (() => {
+                  try {
+                    return classify(error, cause) ?? UNRECOGNIZED_DECISION;
+                  } catch {
+                    return UNRECOGNIZED_DECISION;
+                  }
+                })();
+                // Emit FIRST (the one critical write), THEN log the `[runtime]`
+                // breadcrumb best-effort: built lazily inside Effect.sync so a throw in
+                // describeRequestFailure can't gate the emit, and `ignore`d so a log
+                // failure can't fail the finalizer. The turn is finalized either way.
+                return finalize({
+                  state: "failed",
+                  stopReason: "failed",
+                  ...(decision.text !== undefined ? { errorMessage: decision.text } : {}),
+                  showNotification: decision.surface === "T+N",
+                }).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => ({
+                      source: "cli",
+                      where: "turn",
+                      threadId: input.threadId,
+                      ...cliErrorFields(decision, describeRequestFailure(cause)),
+                    })).pipe(
+                      Effect.flatMap((fields) => Effect.logError("[runtime]", fields)),
+                      Effect.ignore,
+                    ),
+                  ),
+                );
+              });
 
         yield* offerRuntimeEvent({
           type: "turn.started",
@@ -1286,180 +1398,219 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
           provider: PROVIDER,
           threadId: input.threadId,
           turnId,
-          payload: { model: undefined },
+          payload: { model: input.modelSelection?.model },
         });
 
-        const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-        if (input.input?.trim()) {
-          // ru-fork: prepend the subagent system-reminder when the
-          // text contains an `agent:name` chip token; see helper for why.
-          const subagentReminder = prependSubagentReminderIfNeeded(input.input.trim());
-          if (subagentReminder.applied) {
-            yield* Effect.logDebug("[cli-adapter] subagent system-reminder applied", {
-              threadId: input.threadId,
-            });
-          }
-          promptParts.push({ type: "text", text: subagentReminder.text });
-        }
-        if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of input.attachments) {
-            const attachmentPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
-            if (!attachmentPath) {
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail: `Неверный идентификатор вложения '${attachment.id}'.`,
+        return yield* Effect.gen(function* () {
+          const ctx = yield* requireSession(input.threadId);
+          activeCtx = ctx;
+          ctx.activeTurnId = turnId;
+          ctx.turnFinalized = turnFinalized;
+          ctx.userCancelRequested = false;
+          // Reset the wire-stall baseline at the start of each turn so
+          // the watchdog measures inactivity within this turn only.
+          ctx.wireActivity.lastIncomingAt = yield* Clock.currentTimeMillis;
+          ctx.wireActivity.stallWarned = false;
+          ctx.session = {
+            ...ctx.session,
+            activeTurnId: turnId,
+            updatedAt: yield* nowIso,
+          };
+
+          const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+          if (input.input?.trim()) {
+            // ru-fork: prepend the subagent system-reminder when the
+            // text contains an `agent:name` chip token; see helper for why.
+            const subagentReminder = prependSubagentReminderIfNeeded(input.input.trim());
+            if (subagentReminder.applied) {
+              yield* Effect.logDebug("[cli-adapter] subagent system-reminder applied", {
+                threadId: input.threadId,
               });
             }
-            const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "session/prompt",
-                    detail: cause.message,
-                    cause,
-                  }),
-              ),
-            );
-            promptParts.push({
-              type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
+            promptParts.push({ type: "text", text: subagentReminder.text });
+          }
+          if (input.attachments && input.attachments.length > 0) {
+            for (const attachment of input.attachments) {
+              const attachmentPath = resolveAttachmentPath({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachment,
+              });
+              if (!attachmentPath) {
+                return yield* new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "session/prompt",
+                  detail: `Неверный идентификатор вложения '${attachment.id}'.`,
+                });
+              }
+              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/prompt",
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+              promptParts.push({
+                type: "image",
+                data: Buffer.from(bytes).toString("base64"),
+                mimeType: attachment.mimeType,
+              });
+            }
+          }
+
+          if (promptParts.length === 0) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue: "Сообщение должно содержать текст или вложения.",
             });
           }
-        }
 
-        if (promptParts.length === 0) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Сообщение должно содержать текст или вложения.",
+          // ru-fork: refresh the live runtimeMode mirror so the
+          // cli-initiated requestPermission callback (plan-approval optionId,
+          // full-access short-circuit) reads the current dropdown value, not
+          // whatever was captured at session start.
+          ctx.currentRuntimeMode = input.runtimeMode;
+          // ru-fork: resolve both composer dropdowns (interactionMode +
+          // runtimeMode) to CLI's ApprovalMode and send setMode every turn.
+          // AcpSessionRuntime.setMode (AcpSessionRuntime.ts:565-575) no-ops when
+          // currentModeId already matches, so unconditional per-turn calls are
+          // free. Errors are logged + swallowed; the server-side short-circuit
+          // above is the safety net.
+          const targetMode = resolveCliMode({
+            interactionMode: input.interactionMode,
+            runtimeMode: input.runtimeMode,
           });
-        }
-
-        // ru-fork: refresh the live runtimeMode mirror so the
-        // cli-initiated requestPermission callback (plan-approval optionId,
-        // full-access short-circuit) reads the current dropdown value, not
-        // whatever was captured at session start.
-        ctx.currentRuntimeMode = input.runtimeMode;
-        // ru-fork: resolve both composer dropdowns (interactionMode +
-        // runtimeMode) to CLI's ApprovalMode and send setMode every turn.
-        // AcpSessionRuntime.setMode (AcpSessionRuntime.ts:565-575) no-ops when
-        // currentModeId already matches, so unconditional per-turn calls are
-        // free. Errors are logged + swallowed; the server-side short-circuit
-        // above is the safety net.
-        const targetMode = resolveCliMode({
-          interactionMode: input.interactionMode,
-          runtimeMode: input.runtimeMode,
-        });
-        yield* ctx.acp.setMode(targetMode).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("[cli-acp] setMode failed", {
-              threadId: input.threadId,
-              requestedMode: targetMode,
-              error: error.message,
-            }),
-          ),
-        );
-
-        const result = yield* ctx.acp
-          .prompt({
-            prompt: promptParts,
-          })
-          .pipe(
-            // ru-fork: classify CLI RPC failures through the
-            // recognizer registry. **B-surface** decisions (recoverable —
-            // rate limit, empty stream, generic -32603 with usable details)
-            // are dispatched inline: emit a content.delta with the friendly
-            // Russian text and return `{ stopReason: "end_turn" }` so the
-            // turn completes cleanly. **Other** decisions (T / T+N) — and
-            // any error the classifier doesn't recognize — fall through to
-            // `Effect.fail(error)` so `mapAcpToAdapterError` below wraps
-            // them and `handleTurnStartFailure` re-classifies + dispatches.
-            // Re-classification at site #2 is intentional: site #2 has
-            // the orchestration machinery (setLastError, appendActivity)
-            // that site #1 lacks. The cost is one extra
-            // `[cli-error.<id>]` log line per T/T+N failure — acceptable.
-            // The failed RPC is also logged once via `requestLogger` above.
-            Effect.catchTag("AcpRequestError", (error) =>
-              Effect.gen(function* () {
-                const decision = classify(error, Cause.fail(error));
-                if (decision !== null && decision.surface === "B") {
-                  yield* Effect.logError(`[cli-error.${decision.id}]`, {
-                    threadId: input.threadId,
-                    method: "session/prompt",
-                  });
-                  yield* offerRuntimeEvent(
-                    makeAcpContentDeltaEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: input.threadId,
-                      turnId,
-                      text: decision.text,
-                      rawPayload: error.data ?? null,
-                    }),
-                  );
-                  return {
-                    stopReason: "end_turn" as const,
-                  } satisfies EffectAcpSchema.PromptResponse;
-                }
-                return yield* error;
+          yield* ctx.acp.setMode(targetMode).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("[cli-acp] setMode failed", {
+                threadId: input.threadId,
+                requestedMode: targetMode,
+                error: error.message,
               }),
-            ),
-            // ru-fork: capture the CLI exit code at the boundary —
-            // see the session/start mapError above for rationale.
-            Effect.tapError((error) =>
-              isAcpProcessExitedError(error)
-                ? Effect.logError("[cli-acp.process-exited]", {
-                    threadId: input.threadId,
-                    method: "session/prompt",
-                    exitCode: error.code,
-                  })
-                : Effect.void,
-            ),
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
             ),
           );
 
-        ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
-        ctx.session = {
-          ...ctx.session,
-          activeTurnId: turnId,
-          updatedAt: yield* nowIso,
-        };
+          // ru-fork: send the picker-selected model to qwen every turn.
+          // setConfigOption is idempotent (no-ops when the value already
+          // matches), so unconditional per-turn calls are free. Errors are
+          // logged + swallowed, mirroring the setMode pattern above.
+          if (input.modelSelection?.model) {
+            yield* Effect.logDebug("[cli-acp] setModel", {
+              threadId: input.threadId,
+              requestedModel: input.modelSelection.model,
+            });
+            yield* ctx.acp.setModel(input.modelSelection.model).pipe(
+              Effect.catch((error) =>
+                Effect.logError("[cli-acp] setModel failed", {
+                  threadId: input.threadId,
+                  requestedModel: input.modelSelection?.model,
+                  error: error.message,
+                }),
+              ),
+            );
+          }
 
-        yield* offerRuntimeEvent({
-          type: "turn.completed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: input.threadId,
-          turnId,
-          payload: {
+          const result = yield* ctx.acp
+            .prompt({
+              prompt: promptParts,
+            })
+            .pipe(
+              // ru-fork: classify CLI RPC failures through the
+              // recognizer registry. **B-surface** decisions (recoverable —
+              // rate limit, empty stream, generic -32603 with usable details)
+              // are dispatched inline: emit a content.delta with the friendly
+              // Russian text and return `{ stopReason: "end_turn" }` so the
+              // turn completes cleanly (the finalizer's success arm emits
+              // turn.completed{completed}). **Other** decisions (T / T+N) — and
+              // any error the classifier doesn't recognize — fall through to
+              // `Effect.fail(error)` so `mapAcpToAdapterError` below wraps them
+              // and the onExit finalizer classifies + emits turn.completed{failed}.
+              Effect.catchTag("AcpRequestError", (error) =>
+                Effect.gen(function* () {
+                  const decision = classify(error, Cause.fail(error));
+                  if (decision !== null && decision.surface === "B") {
+                    yield* Effect.logError("[runtime]", {
+                      source: "cli",
+                      where: "prompt",
+                      threadId: input.threadId,
+                      ...cliErrorFields(decision, describeRequestFailure(Cause.fail(error))),
+                    });
+                    yield* offerRuntimeEvent(
+                      makeAcpContentDeltaEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        turnId,
+                        // ru-fork: always prepend a blank line so the friendly
+                        // B-surface text is visually separated from any assistant
+                        // text already streamed into the bubble before the error.
+                        text: `\n\n${decision.text}`,
+                        rawPayload: error.data ?? null,
+                      }),
+                    );
+                    return {
+                      stopReason: "end_turn" as const,
+                    } satisfies EffectAcpSchema.PromptResponse;
+                  }
+                  return yield* error;
+                }),
+              ),
+              // ru-fork: capture the CLI exit code at the boundary —
+              // see the session/start mapError above for rationale.
+              Effect.tapError((error) =>
+                isAcpProcessExitedError(error)
+                  ? Effect.logError("[cli-acp.process-exited]", {
+                      threadId: input.threadId,
+                      method: "session/prompt",
+                      exitCode: error.code,
+                    })
+                  : Effect.void,
+              ),
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+              ),
+            );
+
+          ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+          ctx.session = {
+            ...ctx.session,
+            activeTurnId: turnId,
+            updatedAt: yield* nowIso,
+          };
+
+          yield* finalize({
             state: result.stopReason === "cancelled" ? "cancelled" : "completed",
             stopReason: result.stopReason ?? null,
-          },
-        });
+          });
 
-        // Stop watching the wire for stalls now that the turn is
-        // settled — between turns the channel is legitimately silent
-        // and would otherwise trigger false-positive warns.
-        ctx.activeTurnId = undefined;
-
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: ctx.session.resumeCursor,
-        };
+          return {
+            threadId: input.threadId,
+            turnId,
+            resumeCursor: ctx.session.resumeCursor,
+          };
+        }).pipe(
+          // onExit covers typed failure AND defect AND interrupt; success was
+          // already finalized in the body (finalize() is idempotent anyway).
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit) ? Effect.void : finalizeFromCause(exit.cause),
+          ),
+        );
       });
 
     const interruptTurn: CliAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
+        // ru-fork: Stop is a user CANCEL, not a failure. Flag the intent before
+        // the force-kill so sendTurn's finalizer labels the in-flight turn
+        // `cancelled` (no error banner) deterministically — the flag is set
+        // before the kill that fails the prompt. abortSession runs inline here
+        // (this is the request fiber, not a session-bound fiber) and awaits the
+        // finalizer's turn.completed before session.exited.
+        ctx.userCancelRequested = true;
         yield* abortSession(ctx, STOP_BUTTON_METHOD);
       });
 
@@ -1532,7 +1683,9 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
               kind,
               reason: "post-answer-resume-timeout",
             });
-            yield* abortSession(ctx, MAINTENANCE_METHOD);
+            // ru-fork: schedule (don't inline) — this runs forked into
+            // ctx.scope, which abortSession closes; inline would self-interrupt.
+            yield* scheduleTeardown(ctx, MAINTENANCE_METHOD);
           }),
         }).pipe(Effect.forkIn(ctx.scope));
       });
@@ -1594,7 +1747,9 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
               requestId,
               reason: "post-answer-resume-timeout",
             });
-            yield* abortSession(ctx, MAINTENANCE_METHOD);
+            // ru-fork: schedule (don't inline) — this runs forked into
+            // ctx.scope, which abortSession closes; inline would self-interrupt.
+            yield* scheduleTeardown(ctx, MAINTENANCE_METHOD);
           }),
         }).pipe(Effect.forkIn(ctx.scope));
       });

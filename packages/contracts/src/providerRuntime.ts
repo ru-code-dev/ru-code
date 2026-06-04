@@ -398,6 +398,11 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  // ru-fork: on a failed turn, also raise the notification (the timeline row is
+  // always written regardless). true ⇒ T+N; false ⇒ T (row only); absent ⇒
+  // notification (legacy default). Set by the adapter from the classified surface,
+  // so the single-writer ingestion respects T vs T+N without a projection read.
+  showNotification: Schema.optional(Schema.Boolean),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

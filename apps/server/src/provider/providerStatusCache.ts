@@ -21,7 +21,15 @@ const mergeProviderModels = (
   cachedModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
   const fallbackSlugs = new Set(fallbackModels.map((model) => model.slug));
-  return [...fallbackModels, ...cachedModels.filter((model) => !fallbackSlugs.has(model.slug))];
+  // ru-fork: built-in models are authoritative from code (CliProvider's
+  // CLI_MODELS) — only carry over user-added custom models from the cache.
+  // Without the `isCustom` guard a removed/renamed built-in (e.g. the old
+  // "default" slug) would survive every boot because it isn't in the fresh
+  // list, so the picker would keep showing stale built-ins forever.
+  return [
+    ...fallbackModels,
+    ...cachedModels.filter((model) => model.isCustom && !fallbackSlugs.has(model.slug)),
+  ];
 };
 
 export const orderProviderSnapshots = (

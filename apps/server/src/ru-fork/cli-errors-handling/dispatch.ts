@@ -13,7 +13,7 @@
 // a `content.delta` and return `{ stopReason: "end_turn" }` as the
 // prompt response. Site #1 short-circuits to that path before calling
 // `dispatch`. The dispatcher's `case "B"` is a no-op (logs nothing
-// extra; the per-decision `[cli-error.<id>]` line has already fired).
+// extra; the per-decision `[runtime]` breadcrumb has already fired).
 //
 // Cross-reference: `ru-fork-instrumental/changes/server-errors-handaling.md`,
 // "Code structure" → dispatch.ts.
@@ -62,8 +62,24 @@ export interface CliErrorDispatchEnv<E, R = never> {
 }
 
 /**
- * Apply a decision. Emits one `[cli-error.<id>]` `logError` line then
- * does surface-specific routing.
+ * Shared `[runtime]` triage breadcrumb fields, identical across every classify
+ * site (B-inline at the adapter, the turn finalizer, this dispatcher): `code` =
+ * recognizer id, `surface` = B/T/T+N (or "silent"), `info` = the stack-free
+ * failure description. Call sites add their own context (`source`, `where`,
+ * `threadId`) alongside, then log under the fixed `[runtime]` tag.
+ */
+export const cliErrorFields = (
+  decision: CliErrorDecision,
+  info: Record<string, unknown>,
+): Record<string, unknown> => ({
+  code: decision.id,
+  surface: decision.surface ?? "silent",
+  info,
+});
+
+/**
+ * Apply a decision. Emits one `[runtime]` `logError` breadcrumb then does
+ * surface-specific routing.
  *
  * @param decision       the classifier output (or `UNRECOGNIZED_DECISION`).
  * @param failureFields  log fields describing the failure (code/message/details
@@ -76,7 +92,11 @@ export const dispatch = <E, R = never>(
   env: CliErrorDispatchEnv<E, R>,
 ): Effect.Effect<void, E, R> =>
   Effect.gen(function* () {
-    yield* Effect.logError(`[cli-error.${decision.id}]`, failureFields);
+    yield* Effect.logError("[runtime]", {
+      source: "cli",
+      where: "pre-turn",
+      ...cliErrorFields(decision, failureFields),
+    });
 
     if (decision.killAcp === true && env.killAcp !== undefined) {
       yield* env.killAcp;

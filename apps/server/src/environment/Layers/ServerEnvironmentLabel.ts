@@ -4,7 +4,7 @@ import * as OS from "node:os";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-import { runProcess } from "../../processRunner.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 
 interface ResolveServerEnvironmentLabelInput {
   readonly cwdBaseName: string;
@@ -53,19 +53,16 @@ const runFriendlyLabelCommand = Effect.fn("runFriendlyLabelCommand")(function* (
   command: string,
   args: readonly string[],
 ) {
-  const result = yield* Effect.tryPromise({
-    try: () =>
-      runProcess(command, args, {
-        allowNonZeroExit: true,
-      }),
-    catch: () => null,
-  }).pipe(Effect.orElseSucceed(() => null));
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const result = yield* processRunner
+    .run({ command, args: [...args], timeoutBehavior: "timedOutResult" })
+    .pipe(Effect.option);
 
-  if (!result || result.code !== 0) {
+  if (result._tag === "None" || result.value.code !== 0) {
     return null;
   }
 
-  return normalizeLabel(result.stdout);
+  return normalizeLabel(result.value.stdout);
 });
 
 const resolveFriendlyHostLabel = Effect.fn("resolveFriendlyHostLabel")(function* (

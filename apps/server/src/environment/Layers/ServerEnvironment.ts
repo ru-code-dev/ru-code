@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 
+import * as ProcessRunner from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment.ts";
 import packageJson from "../../../package.json" with { type: "json" };
@@ -93,4 +94,7 @@ export const makeServerEnvironment = Effect.fn("makeServerEnvironment")(function
   } satisfies ServerEnvironmentShape;
 });
 
-export const ServerEnvironmentLive = Layer.effect(ServerEnvironment, makeServerEnvironment());
+export const ServerEnvironmentLive = Layer.effect(
+  ServerEnvironment,
+  makeServerEnvironment(),
+).pipe(Layer.provide(ProcessRunner.layer));

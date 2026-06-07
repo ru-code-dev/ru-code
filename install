@@ -375,16 +375,32 @@ to_msys_path() {
   fi
 }
 
+# When NO shell rc file exists, this is the one we create and write PATH into.
+# Chosen by the user's login shell so the line actually gets sourced: Git Bash
+# (Windows) and bash use .bash_profile; zsh uses .zshrc.
+default_shell_rc() {
+  if [ "$OS" = "windows" ]; then
+    printf '%s' "$HOME/.bash_profile"
+  else
+    case "${SHELL:-}" in
+      */zsh) printf '%s' "$HOME/.zshrc" ;;
+      *)     printf '%s' "$HOME/.bash_profile" ;;
+    esac
+  fi
+}
+
 # Append a fresh PATH line. clean_rc already removed any prior ones, so it can
-# never duplicate.
+# never duplicate. Non-fatal: if no rc file can be written we only WARN — the bin
+# still runs via its full path (shown in the summary), so we never abort here.
 add_path() {
   # Git Bash PATH is colon-separated, so a Windows "C:/..." entry splits at the
   # drive colon. Use MSYS form "/c/..." on Windows; pass-through elsewhere.
   local bin_for_path="$BIN_DIR"
   [ "$OS" = "windows" ] && bin_for_path="$(to_msys_path "$BIN_DIR")"
-  local line="export PATH=\"${bin_for_path}:\$PATH\"" rc added=false
+  local line="export PATH=\"${bin_for_path}:\$PATH\"" rc added=false existed=false
   while IFS= read -r rc; do
     [ -f "$rc" ] || continue
+    existed=true
     # A read-only rc (e.g. a managed/locked .bash_profile) must NOT abort the install
     # under `set -e`: catch the failed redirect, warn, and try the next file.
     if printf '%s\n' "$line" >> "$rc" 2>/dev/null; then
@@ -394,7 +410,23 @@ add_path() {
       warn "Нет прав на запись $rc — пропущен"
     fi
   done < <(rc_files)
-  [ "$added" = true ] || die "Не удалось записать PATH ни в один файл оболочки. Добавьте вручную: $line"
+
+  if [ "$added" = false ]; then
+    if [ "$existed" = false ]; then
+      # No shell rc file exists at all: create the default one for this shell and
+      # write PATH there (same set -e-safe guarded redirect).
+      local default_rc; default_rc="$(default_shell_rc)"
+      if printf '%s\n' "$line" >> "$default_rc" 2>/dev/null; then
+        warn "Файлы оболочки не найдены — создан $default_rc, PATH добавлен"
+      else
+        warn "Не удалось создать $default_rc. Добавьте PATH вручную: $line"
+      fi
+    else
+      # Every existing rc was read-only — nothing we can do but tell the user.
+      warn "Не удалось записать PATH ни в один файл оболочки (нет прав). Добавьте вручную: $line"
+    fi
+  fi
+
   export PATH="$bin_for_path:$PATH"
 }
 

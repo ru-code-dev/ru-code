@@ -1,4 +1,4 @@
-import { APP_SHORT_NAME } from "@ru-fork/branding";
+import { APP_SHORT_NAME, CLI_DISPLAY_NAME } from "@ru-fork/branding";
 import {
   ArchiveIcon,
   ArrowUpDownIcon,
@@ -45,7 +45,6 @@ import {
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
   type ThreadEnvMode,
-  ThreadId,
 } from "@t3tools/contracts";
 import {
   parseScopedThreadKey,
@@ -66,7 +65,12 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform, newCommandId } from "../lib/utils";
+import {
+  isMacPlatform,
+  newCommandId,
+  cliSessionIdFromAssistantMessageId,
+  cliSessionIdFromMessageIds,
+} from "../lib/utils";
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
@@ -969,20 +973,23 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const removeFromSelection = useThreadSelectionStore((state) => state.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
-    threadId: ThreadId;
+    value: string;
+    isCliSession: boolean;
   }>({
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
-        title: "ID диалога скопирован",
-        description: ctx.threadId,
+        title: ctx.isCliSession
+          ? `ID сессии ${CLI_DISPLAY_NAME} скопирован`
+          : "ID диалога скопирован",
+        description: ctx.value,
       });
     },
     onError: (error) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Не удалось скопировать ID диалога",
+          title: "Не удалось скопировать ID",
           description: error instanceof Error ? error.message : "Произошла ошибка.",
         }),
       );
@@ -1933,7 +1940,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "rename", label: "Переименовать диалог" },
           { id: "mark-unread", label: "Отметить непрочитанным" },
           { id: "copy-path", label: "Копировать путь" },
-          { id: "copy-thread-id", label: "Копировать ID диалога" },
+          { id: "copy-thread-id", label: `Копировать ID сессии ${CLI_DISPLAY_NAME}` },
           { id: "delete", label: "Удалить", destructive: true },
         ],
         position,
@@ -1965,7 +1972,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
       if (clicked === "copy-thread-id") {
-        copyThreadIdToClipboard(thread.id, { threadId: thread.id });
+        const environmentState =
+          useStore.getState().environmentStateById[thread.environmentId];
+        // Scan loaded messages newest→oldest for an embedded CLI session id;
+        // fall back to latestTurn (present on every sidebar row), then to our
+        // internal thread id when the thread only has user/error messages.
+        const cliSessionId =
+          cliSessionIdFromMessageIds(environmentState?.messageIdsByThreadId[thread.id]) ??
+          cliSessionIdFromAssistantMessageId(thread.latestTurn?.assistantMessageId);
+        if (cliSessionId) {
+          copyThreadIdToClipboard(cliSessionId, { value: cliSessionId, isCliSession: true });
+        } else {
+          copyThreadIdToClipboard(thread.id, { value: thread.id, isCliSession: false });
+        }
         return;
       }
       if (clicked !== "delete") return;

@@ -1,0 +1,13 @@
+{
+  "name": "mcp-probe",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Throwaway probe validating qwen MCP overlay/allowlist/per-tool/trust + monitor reprobe.",
+  "scripts": {
+    "test": "node ./test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "catalog:"
+  }
+}

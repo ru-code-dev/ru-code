@@ -22,6 +22,20 @@ import type { CliResolution, PlatformKey, ResolveOptions } from "./types.ts";
 const toPlatformKey = (platform: NodeJS.Platform): PlatformKey =>
   platform === "darwin" ? "darwin" : platform === "win32" ? "win32" : "linux";
 
+// Canonicalize a Windows path that may arrive native (C:\..), MSYS/Git-Bash
+// (/c/.. or \c\..), or mixed-slash, to native form with an uppercase drive
+// letter. The CLI installer, run under Git Bash, can record an MSYS path in
+// .install-dir; node's path.normalize turns "/c/" into "\c\" (a rooted dir
+// literally named "c"), NOT drive "C:", so without this the recorded path would
+// never match the native home-bin path. Inverse of the bash installer's
+// to_msys_path. Applied only when platformKey === "win32".
+const toWindowsNative = (p: string): string => {
+  let s = p.replace(/\//g, "\\"); // forward → back slashes
+  s = s.replace(/^\\([A-Za-z])\\/, "$1:\\"); // \c\… → c:\…  (MSYS drive prefix)
+  s = s.replace(/^[a-z]:/, (drive) => drive.toUpperCase()); // c: → C:
+  return s;
+};
+
 // Linux OUR_ROOT placement. When /home/<LINUX_SAFE_DIR>/<user> exists, the app
 // root goes there; otherwise it stays in the home dir. <user> = the real account
 // name (os.userInfo) — matches /home/work/<user> even when the home FOLDER name
@@ -90,9 +104,19 @@ export const resolveCli = (options: ResolveOptions = {}): CliResolution => {
   const pickRoot = (nonLinux: string): string => (roots ? roots.ourRoot : nonLinux);
   const legacyRoot = roots?.legacyRoot;
 
-  // STEP 2 — gather the two authoritative sources.
+  // Path equality: case-insensitive on Windows (NTFS), exact elsewhere.
+  const samePath = (a: string, b: string): boolean =>
+    platformKey === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+  // STEP 2 — gather the two authoritative sources. On Windows the recorded path
+  // may be in MSYS/Git-Bash form (/c/Users/...); canonicalize it to native form
+  // so it both compares against and is usable as a real path.
   const homeBinCli = path.join(configDir, "bin", "cli.js");
-  const recordedBinDir = readInstallRecord(configDir);
+  const rawRecordedBinDir = readInstallRecord(configDir);
+  const recordedBinDir =
+    rawRecordedBinDir && platformKey === "win32"
+      ? toWindowsNative(rawRecordedBinDir)
+      : rawRecordedBinDir;
   const recordedCli = recordedBinDir ? path.join(recordedBinDir, "cli.js") : "";
 
   // STEP 3 + 4 — resolve cli.js, derive OUR_ROOT (exec-capable by deduction).
@@ -159,7 +183,7 @@ export const resolveCli = (options: ResolveOptions = {}): CliResolution => {
 
   // A = home bin exists → standard (must agree with .install-dir if present).
   if (isFile(homeBinCli)) {
-    if (recordedCli && path.normalize(recordedCli) !== path.normalize(homeBinCli)) {
+    if (recordedCli && !samePath(recordedCli, homeBinCli)) {
       return {
         ok: false,
         reason: MESSAGES.SOURCES_DISAGREE,
@@ -181,8 +205,8 @@ export const resolveCli = (options: ResolveOptions = {}): CliResolution => {
       };
     }
     const looksLikeStandardLayout =
-      path.basename(recordedBinDir) === "bin" &&
-      path.basename(path.dirname(recordedBinDir)) === CLI_DIR;
+      samePath(path.basename(recordedBinDir), "bin") &&
+      samePath(path.basename(path.dirname(recordedBinDir)), CLI_DIR);
     return looksLikeStandardLayout ? resolveFromInstallRecord() : resolveFromFallback();
   }
 

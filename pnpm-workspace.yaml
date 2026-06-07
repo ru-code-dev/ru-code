@@ -3,8 +3,12 @@ packages:
   - "packages/*"
   - "oxlint-plugin-t3code"
   - "scripts"
+  - "mcp-probe"
 
 catalog:
+  # MCP client SDK — used by the probe now and the server-side MCP supervisor
+  # (plan §6.10). Pinned to match qwen-code 0.13.1's @modelcontextprotocol/sdk.
+  "@modelcontextprotocol/sdk": 1.25.1
   effect: 4.0.0-beta.59
   "@effect/atom-react": 4.0.0-beta.59
   "@effect/openapi-generator": 4.0.0-beta.59

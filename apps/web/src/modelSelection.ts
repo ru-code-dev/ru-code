@@ -74,6 +74,8 @@ export interface AppModelOption {
   shortName?: string;
   subProvider?: string;
   isCustom: boolean;
+  // ru-fork: per-model context window (tokens) carried from the snapshot.
+  contextWindowTokens?: number;
 }
 
 function toAppModelOption(model: ServerProvider["models"][number]): AppModelOption {
@@ -84,6 +86,7 @@ function toAppModelOption(model: ServerProvider["models"][number]): AppModelOpti
   };
   if (model.shortName) option.shortName = model.shortName;
   if (model.subProvider) option.subProvider = model.subProvider;
+  if (model.contextWindowTokens != null) option.contextWindowTokens = model.contextWindowTokens;
   return option;
 }
 

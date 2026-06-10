@@ -5,6 +5,7 @@ import { ServerAuthDescriptor } from "./auth.ts";
 import {
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -66,6 +67,9 @@ export const ServerProviderModel = Schema.Struct({
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
   capabilities: Schema.NullOr(ModelCapabilities),
+  // ru-fork: per-model context-window size (tokens). Single source of truth;
+  // the web reads it for the meter denominator + dropdown capacity gating.
+  contextWindowTokens: Schema.optional(PositiveInt),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
 

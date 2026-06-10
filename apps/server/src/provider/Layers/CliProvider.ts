@@ -60,6 +60,8 @@ const CLI_MODELS: ReadonlyArray<ServerProviderModel> = [
     shortName: "🐬 Plus",
     isCustom: false,
     capabilities: null,
+    // ru-fork: context window (tokens). Adjust to real model limits.
+    contextWindowTokens: 100_000,
   },
   {
     slug: "qwen3-coder-flash",
@@ -67,6 +69,8 @@ const CLI_MODELS: ReadonlyArray<ServerProviderModel> = [
     shortName: "🚀 Flash",
     isCustom: false,
     capabilities: null,
+    // ru-fork: context window (tokens). Adjust to real model limits.
+    contextWindowTokens: 20_000,
   },
 ];
 

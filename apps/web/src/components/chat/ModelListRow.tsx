@@ -32,6 +32,8 @@ export const ModelListRow = memo(function ModelListRow(props: {
   useTriggerLabel?: boolean;
   showNewBadge?: boolean;
   jumpLabel?: string | null;
+  /** ru-fork: model can't hold the current context — render non-selectable. */
+  disabled?: boolean;
   onToggleFavorite: () => void;
 }) {
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
@@ -44,6 +46,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
       hideIndicator
       index={props.index}
       value={`${props.instanceId}:${props.model.slug}`}
+      disabled={props.disabled}
       contentClassName="flex w-full items-start gap-2"
       className={cn(
         "w-full cursor-pointer rounded px-3 py-2 transition-colors group",
@@ -93,6 +96,11 @@ export const ModelListRow = memo(function ModelListRow(props: {
                 aria-label="New model"
               >
                 New
+              </span>
+            ) : null}
+            {props.disabled ? (
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                контекст превышен
               </span>
             ) : null}
           </div>

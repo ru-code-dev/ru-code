@@ -127,6 +127,7 @@ import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
+import { modelContextWindow } from "~/ru-fork/tokens-usage/usage";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -347,6 +348,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  // ru-fork: selected model's context window (tokens) for the meter.
+  contextWindowTokens: number;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -372,7 +375,12 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.activeContextWindow ? <ContextWindowMeter usage={props.activeContextWindow} /> : null}
+      {props.activeContextWindow ? (
+        <ContextWindowMeter
+          usage={props.activeContextWindow}
+          contextWindowTokens={props.contextWindowTokens}
+        />
+      ) : null}
       {props.isPreparingWorktree ? (
         <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
       ) : null}
@@ -852,6 +860,16 @@ export const ChatComposer = memo(
         ? selectedModelForPicker
         : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
     }, [modelOptionsByInstance, selectedInstanceId, selectedModelForPicker, selectedProvider]);
+
+    // ru-fork: selected model's context window drives the meter denominator +
+    // color. Resolved from the model snapshot; 0 when undeclared (unknown).
+    const selectedContextWindowTokens = useMemo(() => {
+      const options = modelOptionsByInstance.get(selectedInstanceId) ?? [];
+      const option = options.find(
+        (candidate) => candidate.slug === selectedModelForPickerWithCustomFallback,
+      );
+      return modelContextWindow(option ?? {});
+    }, [modelOptionsByInstance, selectedInstanceId, selectedModelForPickerWithCustomFallback]);
 
     // ------------------------------------------------------------------
     // Context window
@@ -2536,6 +2554,10 @@ export const ChatComposer = memo(
                       instanceEntries={providerInstanceEntries}
                       keybindings={keybindings}
                       modelOptionsByInstance={modelOptionsByInstance}
+                      usedTokens={activeContextWindow?.usedTokens ?? null}
+                      // ru-fork: lock model switching mid-turn, same predicate as
+                      // the interaction-mode dropdown (isModeChangeLocked).
+                      disabled={isStreamingActive || isParkedOnUser}
                       terminalOpen={terminalOpen}
                       open={isComposerModelPickerOpen}
                       {...(composerProviderState.modelPickerIconClassName
@@ -2607,6 +2629,7 @@ export const ChatComposer = memo(
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
                     activeContextWindow={activeContextWindow}
+                    contextWindowTokens={selectedContextWindowTokens}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     isParkedOnUser={isParkedOnUser}

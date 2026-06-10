@@ -489,15 +489,20 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
-      // Cli attaches end-of-turn token usage on the final empty
-      // agent_message_chunk via `_meta.usage.totalTokens`.
+      // ru-fork: read inputTokens (= promptTokenCount), NOT totalTokens.
+      // totalTokens = prompt + output, which overcounts the context window by
+      // the last response's output (~4-5k) and makes the meter bounce up after
+      // every turn. qwen's own context counter (uiTelemetryService
+      // .lastPromptTokenCount — what /compress reports and what its 70% compaction
+      // trigger uses) is promptTokenCount-based, so inputTokens matches qwen's
+      // footer AND the compaction numbers, and is the true "context used".
       const metaUsage = isRecord(upd._meta) ? (upd._meta as { usage?: unknown }).usage : undefined;
       if (isRecord(metaUsage)) {
-        const total = Number((metaUsage as { totalTokens?: unknown }).totalTokens);
-        if (Number.isFinite(total) && total >= 0) {
+        const input = Number((metaUsage as { inputTokens?: unknown }).inputTokens);
+        if (Number.isFinite(input) && input >= 0) {
           events.push({
             _tag: "UsageUpdated",
-            used: total,
+            used: input,
             rawPayload: params,
           });
         }

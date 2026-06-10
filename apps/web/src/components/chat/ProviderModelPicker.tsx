@@ -33,6 +33,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  // ru-fork: current chat context usage for capacity gating. Optional — the
+  // settings/git picker has no chat context and omits it (→ no gating).
+  usedTokens?: number | null;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -177,6 +180,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           instanceEntries={props.instanceEntries}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}
           modelOptionsByInstance={props.modelOptionsByInstance}
+          usedTokens={props.usedTokens ?? null}
           terminalOpen={props.terminalOpen ?? false}
           onRequestClose={() => setIsMenuOpen(false)}
           onInstanceModelChange={handleInstanceModelChange}

@@ -23,6 +23,8 @@ export type ModelEsque = {
   name: string;
   shortName?: string | undefined;
   subProvider?: string | undefined;
+  // ru-fork: window (tokens) for capacity gating in the model list.
+  contextWindowTokens?: number | undefined;
 };
 
 export function getDisplayModelName(

@@ -18,10 +18,11 @@ type NullableContextWindowUsage = {
     : ThreadTokenUsageSnapshot[Key];
 };
 
-export type ContextWindowSnapshot = NullableContextWindowUsage & {
-  readonly remainingTokens: number | null;
-  readonly usedPercentage: number | null;
-  readonly remainingPercentage: number | null;
+// ru-fork: raw usage only. The context window is a per-model fact resolved on
+// the client (ru-fork/tokens-usage); the meter computes %/color against the
+// selected model, so no window-derived fields live on the snapshot. The
+// server-sent `maxTokens` is intentionally dropped here.
+export type ContextWindowSnapshot = Omit<NullableContextWindowUsage, "maxTokens"> & {
   readonly updatedAt: string;
 };
 
@@ -40,20 +41,9 @@ export function deriveLatestContextWindowSnapshot(
       continue;
     }
 
-    const maxTokens = asFiniteNumber(payload?.maxTokens);
-    const usedPercentage =
-      maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
-    const remainingTokens =
-      maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
-    const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
-
     return {
       usedTokens,
       totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
-      maxTokens,
-      remainingTokens,
-      usedPercentage,
-      remainingPercentage,
       inputTokens: asFiniteNumber(payload?.inputTokens),
       cachedInputTokens: asFiniteNumber(payload?.cachedInputTokens),
       outputTokens: asFiniteNumber(payload?.outputTokens),

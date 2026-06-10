@@ -7,6 +7,7 @@ import { resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { SearchIcon } from "lucide-react";
 import { ModelListRow } from "./ModelListRow";
+import { canHoldContext } from "~/ru-fork/tokens-usage/usage";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
 import { isModelPickerNewModel } from "./modelPickerModelHighlights";
 import { buildModelPickerSearchText, scoreModelPickerSearch } from "./modelPickerSearch";
@@ -29,6 +30,7 @@ type ModelPickerItem = {
   name: string;
   shortName?: string;
   subProvider?: string;
+  contextWindowTokens?: number | undefined;
   instanceId: ProviderInstanceId;
   driverKind: ProviderDriverKind;
   instanceDisplayName: string;
@@ -80,6 +82,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    */
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   terminalOpen: boolean;
+  // ru-fork: current chat context usage; gates models that can't hold it.
+  usedTokens: number | null;
   onRequestClose?: () => void;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
 }) {
@@ -198,6 +202,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           name: model.name,
           ...(model.shortName ? { shortName: model.shortName } : {}),
           ...(model.subProvider ? { subProvider: model.subProvider } : {}),
+          ...(model.contextWindowTokens != null
+            ? { contextWindowTokens: model.contextWindowTokens }
+            : {}),
           instanceId,
           driverKind: entry.driverKind,
           instanceDisplayName: entry.displayName,
@@ -328,6 +335,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     selectedInstanceId,
   ]);
 
+  // ru-fork: single "is this the current selection" predicate, reused by the
+  // capacity gate in the row list and the select guard below.
+  const isSelectedModel = useCallback(
+    (slug: string, instanceId: ProviderInstanceId) =>
+      slug === props.model && instanceId === props.activeInstanceId,
+    [props.model, props.activeInstanceId],
+  );
+
   const handleModelSelect = useCallback(
     (modelSlug: string, instanceId: ProviderInstanceId) => {
       const options = modelOptionsByInstance.get(instanceId);
@@ -343,10 +358,20 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       // normalization rules, so pass the driver kind here.
       const resolvedModel = resolveSelectableModel(entry.driverKind, modelSlug, options);
       if (resolvedModel) {
+        // ru-fork: block switching to a model that can't hold the current
+        // context; the already-selected model is always allowed through.
+        const option = options.find((candidate) => candidate.slug === resolvedModel);
+        if (
+          !isSelectedModel(resolvedModel, instanceId) &&
+          option &&
+          !canHoldContext(option, props.usedTokens)
+        ) {
+          return;
+        }
         onInstanceModelChange(instanceId, resolvedModel);
       }
     },
-    [entryByInstanceId, modelOptionsByInstance, onInstanceModelChange],
+    [entryByInstanceId, modelOptionsByInstance, onInstanceModelChange, props.usedTokens, isSelectedModel],
   );
 
   const toggleFavorite = useCallback(
@@ -617,11 +642,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   if (!model) {
                     return null;
                   }
+                  // ru-fork: disable models that can't hold the current context;
+                  // never disable the currently-selected model.
+                  const disabled =
+                    !isSelectedModel(model.slug, model.instanceId) &&
+                    !canHoldContext(model, props.usedTokens);
                   return (
                     <ModelListRow
                       key={modelKey}
                       index={index}
                       model={model}
+                      disabled={disabled}
                       instanceId={model.instanceId}
                       driverKind={model.driverKind}
                       providerDisplayName={model.instanceDisplayName}

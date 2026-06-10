@@ -747,12 +747,32 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
 
                 if (!SLASH_COMMAND_NOTIFICATION_METHODS.includes(method)) return;
 
-                const rawMessage = (params as { message?: unknown })?.message;
+                const record = isRecord(params) ? params : undefined;
+                const rawMessage = record?.message;
                 const message = typeof rawMessage === "string" ? rawMessage : "";
                 if (message.length === 0) return;
 
-                const messageType = (params as { messageType?: unknown })?.messageType;
-                const text = messageType === "error" ? `❌ ${message}\n` : `${message}\n`;
+                const messageType = record?.messageType;
+
+                // ru-fork: qwen streams the /compress flow as English text only
+                // ("Compressing context..." then "Context compressed (X -> Y).")
+                // with no _meta.usage (its ACP slash path returns end_turn before
+                // emitUsageMetadata — Session.ts). Localize the bubble text and,
+                // on success, emit a token-usage update so the context meter
+                // snaps to the post-compaction size. Format is a raw,
+                // non-localized string in cli 0.13.1 (compressCommand.ts).
+                const compaction = /Context compressed \((\d+)\s*->\s*(\d+)\)/.exec(message);
+
+                let text: string;
+                if (messageType === "error") {
+                  text = `❌ ${message}\n`;
+                } else if (message.startsWith("Compressing context")) {
+                  text = "Идет сжатие контекста, подождите...\n";
+                } else if (compaction) {
+                  text = `\nСжатие выполнено успешно (${compaction[1]} -> ${compaction[2]}).\n`;
+                } else {
+                  text = `${message}\n`;
+                }
 
                 yield* offerRuntimeEvent(
                   makeAcpContentDeltaEvent({
@@ -764,6 +784,26 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                     rawPayload: params,
                   }),
                 );
+
+                // ru-fork: emit the post-compaction size so the meter updates.
+                if (compaction && messageType !== "error") {
+                  const newTokenCount = Number(compaction[2]);
+                  if (Number.isFinite(newTokenCount) && newTokenCount >= 0) {
+                    yield* offerRuntimeEvent({
+                      type: "thread.token-usage.updated",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      ...(ctx?.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                      payload: {
+                        usage: {
+                          usedTokens: newTokenCount,
+                          maxTokens: CONTEXT_WINDOW_TOKENS,
+                        },
+                      },
+                    });
+                  }
+                }
               }),
             );
             yield* acp.handleRequestPermission((params) =>
@@ -1190,6 +1230,9 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                       payload: {
                         usage: {
                           usedTokens: event.used,
+                          // ru-fork: intentionally retained for future server-side
+                          // use. The web ignores it and derives the context window
+                          // per-model from the provider snapshot (ru-fork/tokens-usage).
                           maxTokens: CONTEXT_WINDOW_TOKENS,
                         },
                       },

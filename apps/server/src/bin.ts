@@ -14,6 +14,7 @@ import {
   devUrlFlag,
   sharedServerCommandFlags,
 } from "./cli/config.ts";
+import { probeTtyCommand } from "./cli/probeTty.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { runDaemonLauncher, runStopCommand } from "./daemonLauncher.ts";
@@ -114,7 +115,14 @@ export const cli = Command.make("ru-fork", { ...sharedServerCommandFlags }).pipe
       "Use `ru-fork start` to run in the foreground.",
   ),
   Command.withHandler((flags) => runDaemonLauncherCommand(flags)),
-  Command.withSubcommands([startCommand, serveCommand, stopCommand, authCommand, projectCommand]),
+  Command.withSubcommands([
+    startCommand,
+    serveCommand,
+    stopCommand,
+    authCommand,
+    projectCommand,
+    probeTtyCommand,
+  ]),
 );
 
 // ru-fork: `import.meta.main` is Node 22.18+; engines floor is 22.6 for

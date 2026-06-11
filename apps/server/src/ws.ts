@@ -320,7 +320,16 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
-            return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
+            // ru-fork: instrument the project shell-stream build so an add that
+            // fails (DB SQLITE_BUSY/IOERR, row decode, or a defect) is VISIBLE in
+            // the log instead of being silently swallowed to Option.none().
+            return Effect.logDebug("shell-stream: building project shell", {
+              projectId: event.payload.projectId,
+              eventType: event.type,
+            }).pipe(
+              Effect.flatMap(() =>
+                projectionSnapshotQuery.getProjectShellById(event.payload.projectId),
+              ),
               Effect.map((project) =>
                 Option.map(project, (nextProject) => ({
                   kind: "project-upserted" as const,
@@ -328,7 +337,19 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                   project: nextProject,
                 })),
               ),
-              Effect.catch(() => Effect.succeed(Option.none())),
+              Effect.tap((result) =>
+                Effect.logDebug("shell-stream: project shell resolved", {
+                  projectId: event.payload.projectId,
+                  found: Option.isSome(result),
+                }),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logError("shell-stream: failed to build project shell", {
+                  projectId: event.payload.projectId,
+                  eventType: event.type,
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as(Option.none())),
+              ),
             );
           case "project.deleted":
             return Effect.succeed(

@@ -33,7 +33,7 @@ const writeError = (line: string): void =>
 
 const exitFailure = (): never => process.exit(1);
 
-const main = (): void => {
+const main = async (): Promise<void> => {
   // Diagnostics first — so even an early STOP carries the full environment.
   writeInfo("Диагностика:");
   for (const line of collectDiagnostics()) writeInfo(`  ${line}`);
@@ -81,7 +81,7 @@ const main = (): void => {
   // the failure reads as "node", not a confusing cli error. (nodeCheck computed
   // above for NODE_OK.)
   const cliCheck: CheckResult = nodeCheck.ok
-    ? checkCli(cliJs)
+    ? await checkCli(cliJs)
     : { ok: false, line: "CLI: пропущено — Node.js не соответствует требованиям" };
   const gitCheck = checkGit();
 
@@ -98,4 +98,4 @@ const main = (): void => {
   }
 };
 
-main();
+void main();

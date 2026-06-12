@@ -29,9 +29,10 @@ import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 // bash-route on opt-in. See ru-fork/spawn/policy.ts.
 import { resolveSpawn } from "../ru-fork/spawn/policy.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import { haltOnExit } from "../ru-fork/spawn/haltOnExit.ts";
+import { PROVIDER_UPDATE_TIMEOUT_MS } from "../timeouts.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
-const UPDATE_TIMEOUT_MS = 5 * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 
 export interface ProviderMaintenanceCommandResult {
@@ -103,11 +104,11 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [
             collectUint8StreamText({
-              stream: child.stdout,
+              stream: child.stdout.pipe(haltOnExit(child.exitCode)),
               maxBytes: UPDATE_OUTPUT_MAX_BYTES,
             }),
             collectUint8StreamText({
-              stream: child.stderr,
+              stream: child.stderr.pipe(haltOnExit(child.exitCode)),
               maxBytes: UPDATE_OUTPUT_MAX_BYTES,
             }),
             child.exitCode,
@@ -136,7 +137,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
 
     return yield* collectCommandResult().pipe(
       Effect.scoped,
-      Effect.timeoutOption(Duration.millis(UPDATE_TIMEOUT_MS)),
+      Effect.timeoutOption(Duration.millis(PROVIDER_UPDATE_TIMEOUT_MS)),
       Effect.map((result) =>
         Option.match(result, {
           onSome: (value) => value,

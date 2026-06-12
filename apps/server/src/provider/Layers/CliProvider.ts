@@ -31,6 +31,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { buildCliSpawn } from "../../ru-fork/spawn/policy.ts";
 import { APP_NAME } from "@ru-fork/branding";
 import { CLI_BINARY_NAME, CLI_NAME } from "../../config.ts";
+import { CLI_VERSION_PROBE_TIMEOUT_MS } from "../../timeouts.ts";
+import { haltOnExit } from "../../ru-fork/spawn/haltOnExit.ts";
 import {
   buildServerProvider,
   collectStreamAsString,
@@ -39,8 +41,6 @@ import {
   type CommandResult,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-
-const VERSION_TIMEOUT_MS = 8_000;
 
 const CLI_PRESENTATION = {
   displayName: CLI_NAME,
@@ -157,8 +157,8 @@ const runCliVersionCommand = (
     const child = yield* spawner.spawn(command);
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
+        collectStreamAsString(child.stdout.pipe(haltOnExit(child.exitCode))),
+        collectStreamAsString(child.stderr.pipe(haltOnExit(child.exitCode))),
         child.exitCode.pipe(Effect.map(Number)),
       ],
       { concurrency: "unbounded" },
@@ -191,7 +191,7 @@ export const checkCliProviderStatus = Effect.fn("checkCliProviderStatus")(functi
   }
 
   const versionProbe = yield* runCliVersionCommand(cliJs, environment).pipe(
-    Effect.timeoutOption(VERSION_TIMEOUT_MS),
+    Effect.timeoutOption(CLI_VERSION_PROBE_TIMEOUT_MS),
     Effect.result,
   );
 
@@ -216,13 +216,13 @@ export const checkCliProviderStatus = Effect.fn("checkCliProviderStatus")(functi
 
   if (Option.isNone(versionProbe.success)) {
     // ru-fork: cold-start of cli-code (Node ESM + heavy import graph)
-    // regularly approaches the 8 s budget. Treat a slow `--version` as a
+    // regularly approaches the 3 s budget. Treat a slow `--version` as a
     // soft signal — the binary is installed (spawn succeeded), only the
     // version string is unknown. Log to server, keep the provider usable.
     // The previous `status: "error"` + UI message are commented below in
     // case we want to surface this again later.
     yield* Effect.logWarning("cli-version-probe-timeout", {
-      timeoutMs: VERSION_TIMEOUT_MS,
+      timeoutMs: CLI_VERSION_PROBE_TIMEOUT_MS,
     });
     return buildServerProvider({
       presentation: CLI_PRESENTATION,

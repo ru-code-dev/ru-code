@@ -27,6 +27,8 @@ import { TextGenerationError } from "@t3tools/contracts";
 // ru-fork: CLI is launched as `node <cliJs> …` directly. See
 // ru-fork/spawn/policy.ts buildCliSpawn.
 import { buildCliSpawn } from "../ru-fork/spawn/policy.ts";
+import { CLI_TEXT_GENERATION_TIMEOUT_MS } from "../timeouts.ts";
+import { haltOnExit } from "../ru-fork/spawn/haltOnExit.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import { type TextGenerationShape } from "./TextGeneration.ts";
 import {
@@ -66,8 +68,6 @@ const buildCliSingleStringPrompt = (input: {
   }
   return sections.join("\n");
 };
-
-const CLI_TIMEOUT_MS = 180_000;
 
 // Precompiled JSON decoders for Cli's structured-output operations. Hoisted to
 // module scope so neither the schema literal nor the compiled decoder is
@@ -173,8 +173,8 @@ export const makeCliTextGeneration = Effect.fn("makeCliTextGeneration")(function
 
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
-        readStreamAsString(input.operation, child.stdout),
-        readStreamAsString(input.operation, child.stderr),
+        readStreamAsString(input.operation, child.stdout.pipe(haltOnExit(child.exitCode))),
+        readStreamAsString(input.operation, child.stderr.pipe(haltOnExit(child.exitCode))),
         child.exitCode.pipe(
           Effect.mapError((cause) =>
             normalizeCliError(CLI_NAME, input.operation, cause, "Failed to read Cli CLI exit code"),
@@ -203,7 +203,7 @@ export const makeCliTextGeneration = Effect.fn("makeCliTextGeneration")(function
   const runCliWithTimeout = (input: { operation: CliOperation; cwd: string; prompt: string }) =>
     runCliCommand(input).pipe(
       Effect.scoped,
-      Effect.timeoutOption(CLI_TIMEOUT_MS),
+      Effect.timeoutOption(CLI_TEXT_GENERATION_TIMEOUT_MS),
       Effect.flatMap(
         Option.match({
           onNone: () =>

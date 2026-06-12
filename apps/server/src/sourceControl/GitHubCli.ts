@@ -13,8 +13,7 @@ import {
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubPullRequests from "./gitHubPullRequests.ts";
-
-const DEFAULT_TIMEOUT_MS = 30_000;
+import { SOURCE_CONTROL_DEFAULT_TIMEOUT_MS } from "../timeouts.ts";
 
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
   operation: Schema.String,
@@ -236,7 +235,7 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
         command: "gh",
         args: input.args,
         cwd: input.cwd,
-        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMs: input.timeoutMs ?? SOURCE_CONTROL_DEFAULT_TIMEOUT_MS,
       })
       .pipe(Effect.mapError((error) => normalizeGitHubCliError("execute", error)));
 

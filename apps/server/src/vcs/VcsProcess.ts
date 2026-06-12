@@ -20,6 +20,8 @@ import {
 // --windows-use-bash-for. See ru-fork/spawn/policy.ts.
 import { resolveSpawn } from "../ru-fork/spawn/policy.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import { haltOnExit } from "../ru-fork/spawn/haltOnExit.ts";
+import { GIT_TIMEOUT_DEFAULT_MS } from "../timeouts.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -68,7 +70,6 @@ export class VcsProcess extends Context.Service<VcsProcess, VcsProcessShape>()(
   "t3/vcs/VcsProcess",
 ) {}
 
-const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 
@@ -168,7 +169,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
     Effect.scoped(spawn(input).pipe(Effect.flatMap(use)));
 
   const run = Effect.fn("VcsProcess.run")(function* (input: VcsProcessInput) {
-    const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = input.timeoutMs ?? GIT_TIMEOUT_DEFAULT_MS;
     const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
     const label = commandLabel(input.command, input.args);
 
@@ -180,7 +181,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
               operation: input.operation,
               command: label,
               cwd: input.cwd,
-              stream: child.stdout,
+              stream: child.stdout.pipe(haltOnExit(child.exitCode)),
               maxOutputBytes,
               truncateOutputAtMaxBytes: input.truncateOutputAtMaxBytes ?? false,
             }),
@@ -188,7 +189,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
               operation: input.operation,
               command: label,
               cwd: input.cwd,
-              stream: child.stderr,
+              stream: child.stderr.pipe(haltOnExit(child.exitCode)),
               maxOutputBytes,
               truncateOutputAtMaxBytes: input.truncateOutputAtMaxBytes ?? false,
             }),

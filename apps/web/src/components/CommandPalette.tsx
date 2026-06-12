@@ -35,6 +35,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { readEnvironmentApi } from "../environmentApi";
+import { wsDebug } from "../ru-fork/debugging";
 import { readPrimaryEnvironmentDescriptor, usePrimaryEnvironmentId } from "../environments/primary";
 import {
   useSavedEnvironmentRegistryStore,
@@ -727,9 +728,16 @@ function OpenCommandPaletteDialog() {
 
   const handleAddProject = useCallback(
     async (rawCwd: string) => {
-      if (!browseEnvironmentId) return;
+      wsDebug("addProject: click", { rawCwd, browseEnvironmentId });
+      if (!browseEnvironmentId) {
+        wsDebug("addProject: abort no-env");
+        return;
+      }
       const api = readEnvironmentApi(browseEnvironmentId);
-      if (!api) return;
+      if (!api) {
+        wsDebug("addProject: abort no-api");
+        return;
+      }
 
       if (isUnsupportedWindowsProjectPath(rawCwd.trim(), browseEnvironmentPlatform)) {
         toastManager.add(
@@ -754,7 +762,10 @@ function OpenCommandPaletteDialog() {
       }
 
       const cwd = resolveProjectPathForDispatch(rawCwd, currentProjectCwdForBrowse);
-      if (cwd.length === 0) return;
+      if (cwd.length === 0) {
+        wsDebug("addProject: abort empty-cwd");
+        return;
+      }
 
       const existing = findProjectByPath(
         projects.filter((project) => project.environmentId === browseEnvironmentId),
@@ -784,6 +795,7 @@ function OpenCommandPaletteDialog() {
 
       try {
         const projectId = newProjectId();
+        wsDebug("addProject: dispatching project.create", { projectId, cwd });
         await api.orchestration.dispatchCommand({
           type: "project.create",
           commandId: newCommandId(),
@@ -797,11 +809,15 @@ function OpenCommandPaletteDialog() {
           },
           createdAt: new Date().toISOString(),
         });
+        wsDebug("addProject: dispatch RESOLVED", { projectId });
         await handleNewThread(scopeProjectRef(browseEnvironmentId, projectId), {
           envMode: settings.defaultThreadEnvMode,
         }).catch(() => undefined);
         setOpen(false);
       } catch (error) {
+        wsDebug("addProject: dispatch REJECTED", {
+          error: error instanceof Error ? error.message : String(error),
+        });
         toastManager.add(
           stackedThreadToast({
             type: "error",

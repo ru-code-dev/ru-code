@@ -25,6 +25,11 @@ import {
 import * as GitVcsDriverCore from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import {
+  GIT_TIMEOUT_FAST_MS,
+  GIT_TIMEOUT_NETWORK_MS,
+  GIT_TIMEOUT_STANDARD_MS,
+} from "../timeouts.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -357,7 +362,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ["rev-parse", "--is-inside-work-tree"],
       {
         allowNonZeroExit: true,
-        timeoutMs: 5_000,
+        timeoutMs: GIT_TIMEOUT_FAST_MS,
         maxOutputBytes: 4_096,
       },
     ).pipe(Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"));
@@ -415,7 +420,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ],
       {
         allowNonZeroExit: true,
-        timeoutMs: 20_000,
+        timeoutMs: GIT_TIMEOUT_NETWORK_MS,
         maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
         truncateOutputAtMaxBytes: true,
       },
@@ -446,7 +451,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     function* (cwd) {
       const result = yield* gitCommand(process, "GitVcsDriver.listRemotes", cwd, ["remote", "-v"], {
         allowNonZeroExit: true,
-        timeoutMs: 5_000,
+        timeoutMs: GIT_TIMEOUT_FAST_MS,
         maxOutputBytes: 64 * 1024,
       });
 
@@ -501,7 +506,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         {
           stdin: `${chunk.join("\0")}\0`,
           allowNonZeroExit: true,
-          timeoutMs: 20_000,
+          timeoutMs: GIT_TIMEOUT_NETWORK_MS,
           maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
           truncateOutputAtMaxBytes: true,
         },
@@ -531,7 +536,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
   const initRepository: VcsDriver.VcsDriverShape["initRepository"] = (input) =>
     gitCommand(process, "GitVcsDriver.initRepository", input.cwd, ["init"], {
-      timeoutMs: 10_000,
+      timeoutMs: GIT_TIMEOUT_STANDARD_MS,
       maxOutputBytes: 64 * 1024,
     }).pipe(Effect.asVoid);
 

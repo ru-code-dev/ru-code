@@ -15,6 +15,7 @@ import { resolveStartupCli, runStartupChecks } from "./ru-fork/preflight/preflig
 import { ARROW_DIM, ARROW_OK, ARROW_WARN, paint } from "./ru-fork/local-startup/cliPaint.ts";
 import { printDaemonReadyBanner } from "./ru-fork/local-startup/daemonReadyBanner.ts";
 import { deriveServerPaths } from "./config.ts";
+import { DAEMON_HEALTH_PROBE_TIMEOUT_MS, DAEMON_SPAWN_TIMEOUT_MS } from "./timeouts.ts";
 import { expandHomePath, resolveBaseDir } from "./os-jank.ts";
 import { readPersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import { Open } from "./open.ts";
@@ -51,12 +52,10 @@ const lineKV = (key: string, value: string): string =>
   `    ${paint.dim(key.padEnd(6))}  ${paint.bold(paint.magenta(value))}`;
 const headline = (arrow: string, text: string): string => `  ${arrow} ${paint.bold(text)}`;
 
-const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 const SPAWN_HEALTH_POLL_INTERVAL_MS = 200;
 // `Effect.retry({ times: N })` means 1 initial attempt + N retries.
 // 75 retries × 200ms = 15s of additional polling on top of the first try.
 const SPAWN_HEALTH_POLL_RETRIES = 75;
-const SPAWN_TIMEOUT_MS = 5_000;
 const STOP_DRAIN_INTERVAL_MS = 100;
 const STOP_DRAIN_RETRIES = 50; // ~5s drain budget after POST /shutdown
 
@@ -64,7 +63,7 @@ const probeHealth = (origin: string) =>
   Effect.tryPromise({
     try: async () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), DAEMON_HEALTH_PROBE_TIMEOUT_MS);
       try {
         const response = await fetch(`${origin}/health`, {
           signal: controller.signal,
@@ -195,10 +194,10 @@ const spawnDetachedServer = (input: {
 }) =>
   spawnDetachedServerCallback(input).pipe(
     Effect.timeoutOrElse({
-      duration: Duration.millis(SPAWN_TIMEOUT_MS),
+      duration: Duration.millis(DAEMON_SPAWN_TIMEOUT_MS),
       orElse: () =>
         Effect.fail(
-          new Error(`spawn did not signal 'spawn' or 'error' within ${SPAWN_TIMEOUT_MS}ms`),
+          new Error(`spawn did not signal 'spawn' or 'error' within ${DAEMON_SPAWN_TIMEOUT_MS}ms`),
         ),
     }),
   );
@@ -215,7 +214,7 @@ const fetchPairingStartupUrl = (origin: string) =>
   Effect.tryPromise({
     try: async () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), DAEMON_HEALTH_PROBE_TIMEOUT_MS);
       try {
         const response = await fetch(`${origin}/pair/startup`, {
           method: "POST",
@@ -362,7 +361,7 @@ export const runStopCommand = (input: StopCommandInput) =>
     const sent = yield* Effect.tryPromise({
       try: async () => {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+        const timer = setTimeout(() => controller.abort(), DAEMON_HEALTH_PROBE_TIMEOUT_MS);
         try {
           const response = await fetch(`${state.value.origin}/shutdown`, {
             method: "POST",

@@ -11,15 +11,16 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Data from "effect/Data";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+// ru-fork: only used by the commented-out spawnAndCollect below.
+// import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import { isWindowsCommandNotFound } from "../processRunner.ts";
+// import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { createProviderVersionAdvisory } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
-export const DEFAULT_TIMEOUT_MS = 4_000;
-// Auth status checks involve disk/network lookups and can be slow on first run (especially Windows)
-export const AUTH_PROBE_TIMEOUT_MS = 10_000;
+// ru-fork: dead — no consumers in the repo. Not relocated to timeouts.ts.
+// export const DEFAULT_TIMEOUT_MS = 4_000;
+// export const AUTH_PROBE_TIMEOUT_MS = 10_000;
 
 export interface CommandResult {
   readonly stdout: string;
@@ -60,25 +61,26 @@ export function isCommandMissingCause(error: { readonly message: string }): bool
   return lower.includes("enoent") || lower.includes("notfound");
 }
 
-export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Command) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const child = yield* spawner.spawn(command);
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    const result: CommandResult = { stdout, stderr, code: exitCode };
-    if (isWindowsCommandNotFound(exitCode, stderr)) {
-      return yield* new ProviderCommandExecutionError({ message: `spawn ${binaryPath} ENOENT` });
-    }
-    return result;
-  }).pipe(Effect.scoped);
+// ru-fork: no callers in the repo; kept for reference, not exit-gated.
+// export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Command) =>
+//   Effect.gen(function* () {
+//     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+//     const child = yield* spawner.spawn(command);
+//     const [stdout, stderr, exitCode] = yield* Effect.all(
+//       [
+//         collectStreamAsString(child.stdout),
+//         collectStreamAsString(child.stderr),
+//         child.exitCode.pipe(Effect.map(Number)),
+//       ],
+//       { concurrency: "unbounded" },
+//     );
+//
+//     const result: CommandResult = { stdout, stderr, code: exitCode };
+//     if (isWindowsCommandNotFound(exitCode, stderr)) {
+//       return yield* new ProviderCommandExecutionError({ message: `spawn ${binaryPath} ENOENT` });
+//     }
+//     return result;
+//   }).pipe(Effect.scoped);
 
 export function detailFromResult(
   result: CommandResult & { readonly timedOut?: boolean },

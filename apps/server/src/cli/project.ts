@@ -28,6 +28,7 @@ import { AuthControlPlaneRuntimeLive } from "../auth/Layers/AuthControlPlane.ts"
 import { AuthControlPlane } from "../auth/Services/AuthControlPlane.ts";
 import type { AuthControlPlaneShape } from "../auth/Services/AuthControlPlane.ts";
 import { ServerConfig, type ServerConfigShape } from "../config.ts";
+import { PROJECT_CLI_LIVE_SERVER_TIMEOUT_MS } from "../timeouts.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationLayerLive } from "../orchestration/runtimeLayer.ts";
@@ -66,7 +67,6 @@ const ProjectCliRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const PROJECT_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(1);
 const OrchestrationHttpErrorResponse = Schema.Struct({
   error: Schema.String,
 });
@@ -85,7 +85,7 @@ const withProjectCliSessionToken = <A, E, R>(
   );
 
 const withProjectCliLiveServerTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.timeout(PROJECT_CLI_LIVE_SERVER_TIMEOUT));
+  effect.pipe(Effect.timeout(Duration.millis(PROJECT_CLI_LIVE_SERVER_TIMEOUT_MS)));
 
 const runLiveServerRequest = <A, E extends Error, R>(
   request: HttpClientRequest.HttpClientRequest,

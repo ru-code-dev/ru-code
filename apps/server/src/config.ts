@@ -106,39 +106,6 @@ export const MODE_CHANGE_METHOD: AbortMethod = "end-force";
 export const MAINTENANCE_METHOD: AbortMethod = "end-force";
 
 /**
- * ACP_WIRE_STALL_WARN_MS — soft threshold for "CLI seems stuck"
- * detection. While a turn is active, the adapter watches incoming
- * JSON-RPC frames on the ACP wire (every notification, response, or
- * frame from CLI). If no frame arrives for this many milliseconds,
- * a WARN log is emitted once per stall. No teardown — just visibility.
- */
-export const ACP_WIRE_STALL_WARN_MS = 3_600_000;
-
-/**
- * ACP_WIRE_STALL_KILL_MS — hard threshold. After this much wire
- * silence during an active turn the adapter declares the session
- * stuck and runs `abortSession(ctx, "end-force")`. The next user
- * message starts a fresh CLI child and `session/load`s the prior
- * transcript via the persisted resumeCursor. Backstop so a stuck
- * agent can never strand the chat indefinitely.
- */
-export const ACP_WIRE_STALL_KILL_MS = 7_200_000;
-
-/**
- * POST_ANSWER_RESUME_TIMEOUT_MS — one-shot timeout used by the
- * post-answer resume probe (`armPostAnswerResumeProbe` in
- * `AcpPendingRequests.ts`). After the adapter resolves a pending
- * user-input / approval / plan-approval Deferred, a fiber sleeps this
- * long and then checks `ctx.wireActivity.lastIncomingAt`. If CLI has
- * not produced a single inbound frame in that window, the session is
- * declared wedged and `abortSession(ctx, MAINTENANCE_METHOD)` is
- * called. Probe measurement showed the typical resume latency is
- * ~4 ms, so 10 s is ~2500× margin — generous but tight enough to
- * recover snappily.
- */
-export const POST_ANSWER_RESUME_TIMEOUT_MS = 3_600_000;
-
-/**
  * CONTEXT_WINDOW_TOKENS — total context window size advertised to the
  * UI for the current CLI binary. Hardcoded rather than extracted from
  * the ACP session response: the CLI CLI reports a model-config limit

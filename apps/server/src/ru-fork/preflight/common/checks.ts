@@ -8,7 +8,7 @@ import {
   NODE_ENGINE_RANGE,
 } from "./constants.ts";
 import { MESSAGES } from "./messages.ts";
-import { probeVersion } from "./probe.ts";
+import { probeVersion, probeVersionByExit } from "./probe.ts";
 import { render } from "./render.ts";
 import type { CheckResult } from "./types.ts";
 import { isAtLeast, satisfiesRange } from "./version.ts";
@@ -35,11 +35,23 @@ export const checkGit = (): CheckResult => {
 };
 
 /** Probe the resolved cli.js directly with the running node interpreter. */
-export const checkCli = (cliJs: string): CheckResult => {
-  const cliProbe = probeVersion(process.execPath, [cliJs, "--version"], CLI_PROBE_TIMEOUT_MS);
-  if (!cliProbe.ok) return { ok: false, line: MESSAGES.CLI_BROKEN };
-  if (CLI_MIN_VERSION && !isAtLeast(cliProbe.version, CLI_MIN_VERSION)) {
-    return { ok: false, line: render(MESSAGES.CLI_LOW, { found: cliProbe.version }) };
+export const checkCli = async (cliJs: string): Promise<CheckResult> => {
+  const cliProbe = await probeVersionByExit(
+    process.execPath,
+    [cliJs, "--version"],
+    CLI_PROBE_TIMEOUT_MS,
+  );
+  if (cliProbe.ok) {
+    if (CLI_MIN_VERSION && !isAtLeast(cliProbe.version, CLI_MIN_VERSION)) {
+      return { ok: false, line: render(MESSAGES.CLI_LOW, { found: cliProbe.version }) };
+    }
+    return { ok: true, line: render(MESSAGES.CLI_OK, { found: cliProbe.version }) };
   }
-  return { ok: true, line: render(MESSAGES.CLI_OK, { found: cliProbe.version }) };
+  if (cliProbe.reason !== "timeout") {
+    return { ok: false, line: MESSAGES.CLI_BROKEN };
+  }
+  // ru-fork: timeout = the process is too slow to EXIT. Held-pipe machines exit
+  // fast (probeVersionByExit measures the "exit" event) and pass; only genuinely
+  // slow-to-exit hardware reaches here. Gate the app off it.
+  return { ok: false, line: MESSAGES.CLI_TOO_SLOW };
 };

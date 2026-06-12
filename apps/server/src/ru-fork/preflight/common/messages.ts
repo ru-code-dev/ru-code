@@ -1,6 +1,6 @@
 // User-facing Russian strings. `{x}` placeholders are filled via render.ts.
 
-import { CLI_NPM_PACKAGE } from "@ru-fork/branding";
+import { CLI_NAME, CLI_NPM_PACKAGE } from "@ru-fork/branding";
 import { CLI_MIN_VERSION, NODE_ENGINE_RANGE } from "./constants.ts";
 
 export const MESSAGES = {
@@ -17,7 +17,8 @@ export const MESSAGES = {
   CLI_OK: "CLI {found} ✓",
   CLI_BROKEN: "CLI установлен, но `cli.js --version` завершилась с ошибкой или превысила тайм-аут.",
   CLI_LOW: `CLI {found} установлен, требуется ≥ ${CLI_MIN_VERSION}. Обновите: npm install -g ${CLI_NPM_PACKAGE}@latest`,
-  FOOTER_FAIL: "Установите недостающие компоненты и перезапустите.",
+  CLI_TOO_SLOW: `${CLI_NAME} работает слишком медленно на данном оборудовании, приложение будет работать не стабильно.`,
+  FOOTER_FAIL: "Устраните указанные выше проблемы и перезапустите.",
   USING_BACKUP_PRIORITY:
     "Используется резервный CLI (TRY_TO_FIND_CLI имеет приоритет над основным).",
 } as const;

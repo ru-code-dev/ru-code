@@ -14,6 +14,8 @@ import {
 } from "./stream/collectUint8StreamText.ts";
 // ru-fork: shared spawn policy (shell:false default for exe + bash-routing).
 import { resolveSpawn } from "./ru-fork/spawn/policy.ts";
+import { haltOnExit } from "./ru-fork/spawn/haltOnExit.ts";
+import { PROCESS_RUNNER_DEFAULT_TIMEOUT_MS } from "./timeouts.ts";
 
 export interface ProcessRunInput {
   readonly command: string;
@@ -95,7 +97,6 @@ export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerS
   "t3/processRunner",
 ) {}
 
-const DEFAULT_TIMEOUT = "60 seconds";
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 const WINDOWS_COMMAND_NOT_FOUND_PATTERNS = [
@@ -194,7 +195,7 @@ function finalizeRunProcess<R>(
   effect: Effect.Effect<ProcessRunOutput, ProcessRunError, R | Scope.Scope>,
   input: ProcessRunInput,
 ): Effect.Effect<ProcessRunOutput, ProcessRunError, Exclude<R, Scope.Scope>> {
-  const timeout = Duration.fromInputUnsafe(input.timeout ?? DEFAULT_TIMEOUT);
+  const timeout = Duration.fromInputUnsafe(input.timeout ?? PROCESS_RUNNER_DEFAULT_TIMEOUT_MS);
   const timeoutBehavior = input.timeoutBehavior ?? "error";
 
   return effect.pipe(
@@ -289,7 +290,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         args: input.args,
         cwd: input.cwd,
         streamName: "stdout",
-        stream: child.stdout,
+        stream: child.stdout.pipe(haltOnExit(child.exitCode)),
         maxOutputBytes,
         outputMode,
         truncatedMarker,
@@ -299,7 +300,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         args: input.args,
         cwd: input.cwd,
         streamName: "stderr",
-        stream: child.stderr,
+        stream: child.stderr.pipe(haltOnExit(child.exitCode)),
         maxOutputBytes,
         outputMode,
         truncatedMarker,

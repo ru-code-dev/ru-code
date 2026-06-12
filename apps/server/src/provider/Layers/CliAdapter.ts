@@ -47,16 +47,18 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
-  ACP_WIRE_STALL_KILL_MS,
-  ACP_WIRE_STALL_WARN_MS,
   CONTEXT_WINDOW_TOKENS,
   MAINTENANCE_METHOD,
   MODE_CHANGE_METHOD,
-  POST_ANSWER_RESUME_TIMEOUT_MS,
   ServerConfig,
   SLASH_COMMAND_NOTIFICATION_METHODS,
   STOP_BUTTON_METHOD,
 } from "../../config.ts";
+import {
+  ACP_WIRE_STALL_KILL_MS,
+  ACP_WIRE_STALL_WARN_MS,
+  POST_ANSWER_RESUME_TIMEOUT_MS,
+} from "../../timeouts.ts";
 import {
   buildPostAnswerResumeProbe,
   settleAndDelete,

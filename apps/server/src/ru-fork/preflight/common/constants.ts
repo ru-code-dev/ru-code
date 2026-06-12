@@ -17,6 +17,10 @@ export const NODE_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
 /** Minimum CLI version; "" disables the version check (presence only). */
 export const CLI_MIN_VERSION = "0.13.1";
 
-export const NODE_PROBE_TIMEOUT_MS = 5_000;
-export const CLI_PROBE_TIMEOUT_MS = 15_000;
-export const GIT_PROBE_TIMEOUT_MS = 5_000;
+// ru-fork: this is a standalone, import-free preflight bundle — it CANNOT import
+// apps/server/src/timeouts.ts, so these probe budgets are DUPLICATED there and
+// must be kept in sync by hand:
+//   CLI_PROBE_TIMEOUT_MS ↔ timeouts.ts CLI_VERSION_PROBE_TIMEOUT_MS
+//   GIT_PROBE_TIMEOUT_MS ↔ timeouts.ts SOURCE_CONTROL_VERSION_PROBE_TIMEOUT_MS
+export const CLI_PROBE_TIMEOUT_MS = 3_000;
+export const GIT_PROBE_TIMEOUT_MS = 2_000;

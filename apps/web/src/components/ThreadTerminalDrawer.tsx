@@ -4,6 +4,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type TerminalEvent,
+  terminalErrorMessage,
   type TerminalSessionSnapshot,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -702,10 +703,14 @@ export function TerminalViewport({
         }
       } catch (err) {
         if (disposed) return;
-        writeSystemMessage(
-          terminal,
-          err instanceof Error ? err.message : "Failed to open terminal",
-        );
+        // ru-fork: rebuild the real reason from the wire-decoded terminal error
+        // (the tagged error's `message` getter is lost over the RPC boundary),
+        // falling back to a plain Error message, then a generic string.
+        const detail =
+          terminalErrorMessage(err as { _tag?: string }) ??
+          (err instanceof Error ? err.message : undefined) ??
+          "Не удалось открыть терминал.";
+        writeSystemMessage(terminal, detail);
       }
     };
 

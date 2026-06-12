@@ -21,3 +21,10 @@ catalog:
   typescript: 5.9.3
   vitest: 3.2.4
   "@vitest/coverage-v8": 3.2.4
+
+# ru-fork: restored (removed in c36945d8). Patches effect's RpcClient to expose
+# ConnectionHooks ping/pong/timeout hooks used by the WS transport heartbeat.
+# Functionally identical to t3code's patches/effect@4.0.0-beta.78.patch, pinned
+# to our beta.59. Recovered from 8fc31793.
+patchedDependencies:
+  effect@4.0.0-beta.59: patches/effect@4.0.0-beta.59.patch

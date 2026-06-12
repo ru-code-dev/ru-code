@@ -13,6 +13,10 @@ import * as Option from "effect/Option";
 
 import { ServerConfig } from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import {
+  SOURCE_CONTROL_AUTH_PROBE_TIMEOUT_MS,
+  SOURCE_CONTROL_VERSION_PROBE_TIMEOUT_MS,
+} from "../timeouts.ts";
 
 interface DiscoveryProbe {
   readonly label: string;
@@ -324,7 +328,7 @@ export const layer = Layer.effect(
           command: input.executable,
           args: input.versionArgs,
           cwd: config.cwd,
-          timeoutMs: 5_000,
+          timeoutMs: SOURCE_CONTROL_VERSION_PROBE_TIMEOUT_MS,
           maxOutputBytes: 8_000,
           truncateOutputAtMaxBytes: true,
         })
@@ -375,7 +379,7 @@ export const layer = Layer.effect(
               args: input.authArgs,
               cwd: config.cwd,
               allowNonZeroExit: true,
-              timeoutMs: 5_000,
+              timeoutMs: SOURCE_CONTROL_AUTH_PROBE_TIMEOUT_MS,
               maxOutputBytes: 8_000,
               truncateOutputAtMaxBytes: true,
             })

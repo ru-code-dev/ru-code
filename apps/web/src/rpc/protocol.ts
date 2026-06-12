@@ -19,13 +19,31 @@ import {
   recordWsConnectionOpened,
   WS_RECONNECT_MAX_RETRIES,
 } from "./wsConnectionState";
+import { wsDebug } from "../ru-fork/debugging";
+
+// ru-fork: connection-robustness restored from 8fc31793 (it was removed by
+// c36945d8 "…+ cleanup"). The intentional-close flag lets the transport mark
+// deliberate reconnect/dispose closes so they are NOT recorded as a disconnect
+// (a deliberate close being misread re-triggered the retry and leaked a zombie
+// socket). The telemetry/metadata that the cleanup also removed (connection
+// label, version-mismatch hint, client tracing) is intentionally NOT restored.
+export interface WsProtocolCloseContext {
+  readonly intentional: boolean;
+}
 
 export interface WsProtocolLifecycleHandlers {
   readonly isActive?: () => boolean;
+  readonly isCloseIntentional?: () => boolean;
   readonly onAttempt?: (socketUrl: string) => void;
   readonly onOpen?: () => void;
+  readonly onHeartbeatPing?: () => void;
+  readonly onHeartbeatPong?: () => void;
+  readonly onHeartbeatTimeout?: () => void;
   readonly onError?: (message: string) => void;
-  readonly onClose?: (details: { readonly code: number; readonly reason: string }) => void;
+  readonly onClose?: (
+    details: { readonly code: number; readonly reason: string },
+    context: WsProtocolCloseContext,
+  ) => void;
 }
 
 export const makeWsRpcProtocolClient = RpcClient.make(WsRpcGroup);
@@ -56,7 +74,11 @@ function resolveWsRpcSocketUrl(rawUrl: string): string {
   return resolved.toString();
 }
 
-function defaultLifecycleHandlers(): Required<WsProtocolLifecycleHandlers> {
+type ComposedWsProtocolLifecycleHandlers = Required<
+  Pick<WsProtocolLifecycleHandlers, "isActive" | "onAttempt" | "onOpen" | "onError" | "onClose">
+>;
+
+function defaultLifecycleHandlers(): ComposedWsProtocolLifecycleHandlers {
   return {
     isActive: () => true,
     onAttempt: recordWsConnectionAttempt,
@@ -65,8 +87,13 @@ function defaultLifecycleHandlers(): Required<WsProtocolLifecycleHandlers> {
       clearAllTrackedRpcRequests();
       recordWsConnectionErrored(message);
     },
-    onClose: (details) => {
+    onClose: (details, context) => {
       clearAllTrackedRpcRequests();
+      // ru-fork: a deliberate close (reconnect/dispose) is not a disconnect —
+      // don't record it (else it feeds the retry and leaves a zombie socket).
+      if (context.intentional) {
+        return;
+      }
       recordWsConnectionClosed(details);
     },
   };
@@ -74,7 +101,7 @@ function defaultLifecycleHandlers(): Required<WsProtocolLifecycleHandlers> {
 
 function composeLifecycleHandlers(
   handlers?: WsProtocolLifecycleHandlers,
-): Required<WsProtocolLifecycleHandlers> {
+): ComposedWsProtocolLifecycleHandlers {
   const defaults = defaultLifecycleHandlers();
   const isActive = handlers?.isActive ?? (() => true);
 
@@ -101,12 +128,12 @@ function composeLifecycleHandlers(
       defaults.onError(message);
       handlers?.onError?.(message);
     },
-    onClose: (details) => {
+    onClose: (details, context) => {
       if (!isActive()) {
         return;
       }
-      defaults.onClose(details);
-      handlers?.onClose?.(details);
+      defaults.onClose(details, context);
+      handlers?.onClose?.(details, context);
     },
   };
 }
@@ -132,12 +159,14 @@ export function createWsRpcProtocolLayer(
   const trackingWebSocketConstructorLayer = Layer.succeed(
     Socket.WebSocketConstructor,
     (socketUrl, protocols) => {
+      wsDebug("ws attempt", { socketUrl });
       lifecycle.onAttempt(socketUrl);
       const socket = new globalThis.WebSocket(socketUrl, protocols);
 
       socket.addEventListener(
         "open",
         () => {
+          wsDebug("ws open", { socketUrl });
           lifecycle.onOpen();
         },
         { once: true },
@@ -145,6 +174,7 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "error",
         () => {
+          wsDebug("ws error", { socketUrl });
           lifecycle.onError("Unable to connect to the T3 server WebSocket.");
         },
         { once: true },
@@ -152,10 +182,17 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "close",
         (event) => {
-          lifecycle.onClose({
-            code: event.code,
-            reason: event.reason,
-          });
+          const intentional = handlers?.isCloseIntentional?.() ?? false;
+          wsDebug("ws close", { code: event.code, reason: event.reason, intentional });
+          lifecycle.onClose(
+            {
+              code: event.code,
+              reason: event.reason,
+            },
+            {
+              intentional,
+            },
+          );
         },
         { once: true },
       );
@@ -181,14 +218,17 @@ export function createWsRpcProtocolLayer(
         run: (clientId, writeResponse) =>
           protocol.run(clientId, (response) => {
             if (response._tag === "Chunk" || response._tag === "Exit") {
+              wsDebug("rpc ←", { tag: response._tag, requestId: response.requestId });
               acknowledgeRpcRequest(response.requestId);
             } else if (response._tag === "ClientProtocolError" || response._tag === "Defect") {
+              wsDebug("rpc ← error", { tag: response._tag });
               clearAllTrackedRpcRequests();
             }
             return writeResponse(response);
           }),
         send: (clientId, request, transferables) => {
           if (request._tag === "Request") {
+            wsDebug("rpc →", { id: request.id, tag: request.tag });
             trackRpcRequestSent(request.id, request.tag);
           }
           return protocol.send(clientId, request, transferables);
@@ -196,6 +236,39 @@ export function createWsRpcProtocolLayer(
       }),
     ),
   );
+  // ru-fork: heartbeat hooks restored from 8fc31793. The RPC client pings the
+  // server every ~5s; on a missed pong it fires onPingTimeout. We surface
+  // ping/pong so the transport can track heartbeat freshness (used to skip
+  // needless reconnects) and clear in-flight requests on a real timeout.
+  const connectionHooksLayer = Layer.succeed(
+    RpcClient.ConnectionHooks,
+    RpcClient.ConnectionHooks.of({
+      onConnect: Effect.void,
+      onDisconnect: Effect.void,
+      onPing: Effect.sync(() => {
+        wsDebug("hb ping", { active: lifecycle.isActive() });
+        if (lifecycle.isActive()) {
+          handlers?.onHeartbeatPing?.();
+        }
+      }),
+      onPong: Effect.sync(() => {
+        wsDebug("hb pong", { active: lifecycle.isActive() });
+        if (lifecycle.isActive()) {
+          handlers?.onHeartbeatPong?.();
+        }
+      }),
+      onPingTimeout: Effect.sync(() => {
+        wsDebug("hb TIMEOUT", { active: lifecycle.isActive() });
+        if (lifecycle.isActive()) {
+          clearAllTrackedRpcRequests();
+          recordWsConnectionErrored("WebSocket heartbeat timed out.");
+          handlers?.onHeartbeatTimeout?.();
+        }
+      }),
+    }),
+  );
 
-  return protocolLayer.pipe(Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)));
+  return protocolLayer.pipe(
+    Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson, connectionHooksLayer)),
+  );
 }

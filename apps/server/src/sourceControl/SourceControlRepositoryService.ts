@@ -20,6 +20,7 @@ import {
 } from "@t3tools/contracts";
 
 import { ServerConfig } from "../config.ts";
+import { SOURCE_CONTROL_REPO_OP_TIMEOUT_MS } from "../timeouts.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 const isSourceControlRepositoryError = Schema.is(SourceControlRepositoryError);
@@ -235,7 +236,7 @@ export const make = Effect.fn("makeSourceControlRepositoryService")(function* ()
       operation: "SourceControlRepositoryService.cloneRepository",
       cwd: preparedDestination.parentPath,
       args: ["clone", remoteUrl, preparedDestination.directoryName],
-      timeoutMs: 120_000,
+      timeoutMs: SOURCE_CONTROL_REPO_OP_TIMEOUT_MS,
       maxOutputBytes: 256 * 1024,
     });
 

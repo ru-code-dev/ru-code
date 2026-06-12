@@ -7,6 +7,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
+import {
+  SOURCE_CONTROL_AUTH_PROBE_TIMEOUT_MS,
+  SOURCE_CONTROL_VERSION_PROBE_TIMEOUT_MS,
+} from "../timeouts.ts";
 
 export interface SourceControlAuthProbeInput {
   readonly stdout: string;
@@ -137,7 +141,7 @@ function probeCli(input: {
       command: input.spec.executable,
       args: input.spec.versionArgs,
       cwd: input.cwd,
-      timeoutMs: 5_000,
+      timeoutMs: SOURCE_CONTROL_VERSION_PROBE_TIMEOUT_MS,
       maxOutputBytes: 8_000,
       truncateOutputAtMaxBytes: true,
     })
@@ -214,7 +218,7 @@ export function probeSourceControlProvider(input: {
           args: spec.authArgs,
           cwd: input.cwd,
           allowNonZeroExit: true,
-          timeoutMs: 5_000,
+          timeoutMs: SOURCE_CONTROL_AUTH_PROBE_TIMEOUT_MS,
           maxOutputBytes: 8_000,
           truncateOutputAtMaxBytes: true,
         })

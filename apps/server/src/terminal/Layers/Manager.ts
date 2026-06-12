@@ -21,12 +21,20 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import { ServerConfig } from "../../config.ts";
+// ru-fork: log terminal start failures to the server (the RPC observability
+// seam is a no-op since telemetry was removed). See the module for details.
+import { logTerminalStartFailure } from "../../ru-fork/terminal/logTerminalStartFailure.ts";
 import {
   increment,
   terminalRestartsTotal,
   terminalSessionsTotal,
 } from "../../observability/Metrics.ts";
 import * as ProcessRunner from "../../processRunner.ts";
+import {
+  TERMINAL_BUSY_CHECK_TIMEOUT_MS,
+  TERMINAL_KILL_GRACE_MS,
+  TERMINAL_SUBPROCESS_CHECK_TIMEOUT_MS,
+} from "../../timeouts.ts";
 import {
   TerminalCwdError,
   TerminalHistoryError,
@@ -46,7 +54,6 @@ import {
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
-const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
@@ -397,7 +404,7 @@ const checkWindowsSubprocessActivity = Effect.fn("terminal.checkWindowsSubproces
       .run({
         command: "powershell.exe",
         args: ["-NoProfile", "-NonInteractive", "-Command", command],
-        timeout: 1_500,
+        timeout: TERMINAL_BUSY_CHECK_TIMEOUT_MS,
         maxOutputBytes: 32_768,
         outputMode: "truncate",
         timeoutBehavior: "timedOutResult",
@@ -425,7 +432,7 @@ const checkPosixSubprocessActivity = Effect.fn("terminal.checkPosixSubprocessAct
     .run({
       command: "pgrep",
       args: ["-P", String(terminalPid)],
-      timeout: 1_000,
+      timeout: TERMINAL_SUBPROCESS_CHECK_TIMEOUT_MS,
       maxOutputBytes: 32_768,
       outputMode: "truncate",
       timeoutBehavior: "timedOutResult",
@@ -446,7 +453,7 @@ const checkPosixSubprocessActivity = Effect.fn("terminal.checkPosixSubprocessAct
     .run({
       command: "ps",
       args: ["-eo", "pid=,ppid="],
-      timeout: 1_000,
+      timeout: TERMINAL_SUBPROCESS_CHECK_TIMEOUT_MS,
       maxOutputBytes: 262_144,
       outputMode: "truncate",
       timeoutBehavior: "timedOutResult",
@@ -780,7 +787,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
     const subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
     const subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
-    const processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
+    const processKillGraceMs = options.processKillGraceMs ?? TERMINAL_KILL_GRACE_MS;
     const maxRetainedInactiveSessions =
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
 
@@ -1803,7 +1810,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           }
 
           return snapshot(liveSession);
-        }),
+        }).pipe(logTerminalStartFailure(input)),
       );
 
     const write: TerminalManagerShape["write"] = Effect.fn("terminal.write")(function* (input) {
@@ -1935,7 +1942,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             "restarted",
           );
           return snapshot(session);
-        }),
+        }).pipe(logTerminalStartFailure(input)),
       );
 
     const close: TerminalManagerShape["close"] = (input) =>

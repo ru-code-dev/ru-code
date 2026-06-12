@@ -17,6 +17,7 @@ import {
   type WsRpcProtocolSocketUrlProvider,
 } from "./protocol";
 import { isTransportConnectionErrorMessage } from "./transportError";
+import { wsDebug } from "../ru-fork/debugging";
 
 interface SubscribeOptions {
   readonly retryDelay?: Duration.Input;
@@ -52,6 +53,11 @@ export class WsTransport {
   private reconnectChain: Promise<void> = Promise.resolve();
   private nextSessionId = 0;
   private activeSessionId = 0;
+  // ru-fork: restored from 8fc31793 (removed in c36945d8). intentionalCloseDepth
+  // marks a deliberate close (reconnect/dispose) so it isn't misread as a
+  // disconnect; lastHeartbeatPongAt powers isHeartbeatFresh.
+  private intentionalCloseDepth = 0;
+  private lastHeartbeatPongAt = 0;
   private session: TransportSession;
 
   constructor(
@@ -131,6 +137,10 @@ export class WsTransport {
             }
           }
 
+          wsDebug("subscribe: stream start", {
+            tag: options?.tag,
+            sessionId: this.activeSessionId,
+          });
           const runningStream = this.runStreamOnSession(
             session,
             connect,
@@ -144,13 +154,20 @@ export class WsTransport {
           cancelCurrentStream = runningStream.cancel;
           await runningStream.completed;
           cancelCurrentStream = NOOP;
+          wsDebug("subscribe: stream completed", { tag: options?.tag });
         } catch (error) {
           cancelCurrentStream = NOOP;
           if (!active || this.disposed) {
             return;
           }
 
+          wsDebug("subscribe: stream ended", {
+            tag: options?.tag,
+            error: formatErrorMessage(error),
+          });
+
           if (session !== this.session) {
+            wsDebug("subscribe: RE-ATTACH", { tag: options?.tag, to: this.activeSessionId });
             continue;
           }
 
@@ -168,6 +185,10 @@ export class WsTransport {
             });
           }
           this.hasReportedTransportDisconnect = true;
+          wsDebug("subscribe: retry same session", {
+            tag: options?.tag,
+            sessionId: this.activeSessionId,
+          });
           await sleep(retryDelayMs);
         }
       }
@@ -190,8 +211,11 @@ export class WsTransport {
       }
 
       clearAllTrackedRpcRequests();
+      this.lastHeartbeatPongAt = 0;
       const previousSession = this.session;
+      const previousSessionId = this.activeSessionId;
       this.session = this.createSession();
+      wsDebug("transport.reconnect", { from: previousSessionId, to: this.activeSessionId });
       await this.closeSession(previousSession);
     });
 
@@ -207,8 +231,17 @@ export class WsTransport {
     await this.closeSession(this.session);
   }
 
+  isHeartbeatFresh(maxAgeMs = 15_000): boolean {
+    return this.lastHeartbeatPongAt > 0 && Date.now() - this.lastHeartbeatPongAt <= maxAgeMs;
+  }
+
   private closeSession(session: TransportSession) {
+    // ru-fork: mark this teardown intentional so the socket's close event is
+    // not recorded as a disconnect (which would re-trigger the retry / leak).
+    this.intentionalCloseDepth += 1;
+    wsDebug("closeSession", { intentionalCloseDepth: this.intentionalCloseDepth });
     return session.runtime.runPromise(Scope.close(session.clientScope, Exit.void)).finally(() => {
+      this.intentionalCloseDepth = Math.max(0, this.intentionalCloseDepth - 1);
       session.runtime.dispose();
     });
   }
@@ -217,10 +250,21 @@ export class WsTransport {
     const sessionId = this.nextSessionId + 1;
     this.nextSessionId = sessionId;
     this.activeSessionId = sessionId;
+    wsDebug("session created", { sessionId });
     const runtime = ManagedRuntime.make(
       createWsRpcProtocolLayer(this.url, {
         ...this.lifecycleHandlers,
         isActive: () => !this.disposed && this.activeSessionId === sessionId,
+        // ru-fork: a close is intentional if we're disposing, mid-reconnect
+        // teardown, or the caller says so — restored from 8fc31793.
+        isCloseIntentional: () =>
+          this.disposed ||
+          this.intentionalCloseDepth > 0 ||
+          this.lifecycleHandlers?.isCloseIntentional?.() === true,
+        onHeartbeatPong: () => {
+          this.lastHeartbeatPongAt = Date.now();
+          this.lifecycleHandlers?.onHeartbeatPong?.();
+        },
       }),
     );
     const clientScope = runtime.runSync(Scope.make());

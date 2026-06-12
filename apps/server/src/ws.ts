@@ -46,27 +46,39 @@ import { Open, resolveAvailableEditors } from "./open.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
-// Telemetry/observability removed: keep the call shape but pass through.
-// `observeRpcStreamEffect` MUST `Stream.unwrap` the effect — the RPC
-// handler signature for streaming methods expects a `Stream`, not an
-// `Effect<Stream>`. Returning the Effect raw breaks every stream
-// subscription (subscribeServerConfig, orchestration shell, etc.).
+// ru-fork: telemetry/observability (spans + metrics) was removed, and the
+// per-RPC FAILURE CAPTURE that lived in this wrapper went with it — so every
+// RPC failed silently server-side. These wrappers restore just the failure
+// log (no OTel): a real bug (defect/die) → ERROR; an expected typed failure
+// or a cancellation → DEBUG, so the error log stays signal-rich. `_attributes`
+// is kept for call-shape compatibility. See changes/rpc-failure-logging.md.
+// `observeRpcStreamEffect` MUST `Stream.unwrap` the effect — the RPC handler
+// signature for streaming methods expects a `Stream`, not an `Effect<Stream>`.
+const logRpcCause = (method: string, cause: Cause.Cause<unknown>): Effect.Effect<void> =>
+  Cause.hasInterruptsOnly(cause)
+    ? Effect.logDebug("RPC прерван", { method })
+    : Cause.hasDies(cause)
+      ? Effect.logError("Сбой RPC (defect)", { method, cause: Cause.pretty(cause) })
+      : Effect.logDebug("Сбой RPC", { method, cause: Cause.pretty(cause) });
+
 const observeRpcEffect = <A, E, R>(
-  _method: string,
+  method: string,
   effect: Effect.Effect<A, E, R>,
   _attributes?: Readonly<Record<string, unknown>>,
-): Effect.Effect<A, E, R> => effect;
+): Effect.Effect<A, E, R> => effect.pipe(Effect.tapCause((cause) => logRpcCause(method, cause)));
 const observeRpcStream = <A, E, R>(
-  _method: string,
+  method: string,
   stream: Stream.Stream<A, E, R>,
   _attributes?: Readonly<Record<string, unknown>>,
-): Stream.Stream<A, E, R> => stream;
+): Stream.Stream<A, E, R> => stream.pipe(Stream.tapCause((cause) => logRpcCause(method, cause)));
 const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
-  _method: string,
+  method: string,
   effect: Effect.Effect<Stream.Stream<A, StreamError, StreamContext>, EffectError, EffectContext>,
   _attributes?: Readonly<Record<string, unknown>>,
 ): Stream.Stream<A, StreamError | EffectError, StreamContext | EffectContext> =>
-  Stream.unwrap(effect);
+  Stream.unwrap(effect.pipe(Effect.tapCause((cause) => logRpcCause(method, cause)))).pipe(
+    Stream.tapCause((cause) => logRpcCause(method, cause)),
+  );
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 // ru-fork: filesystem skill scanner — owned RPCs (server.listSkillsForCwd,

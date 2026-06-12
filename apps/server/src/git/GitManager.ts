@@ -51,6 +51,7 @@ import type { GitManagerServiceError } from "@t3tools/contracts";
 import { GitVcsDriver, type GitStatusDetails } from "../vcs/GitVcsDriver.ts";
 import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
+import { GIT_COMMIT_TIMEOUT_MS } from "../timeouts.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -90,7 +91,6 @@ export class GitManager extends Context.Service<GitManager, GitManagerShape>()(
   "t3/git/GitManager",
 ) {}
 
-const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
@@ -1224,7 +1224,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
           }
         : null;
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-      timeoutMs: COMMIT_TIMEOUT_MS,
+      timeoutMs: GIT_COMMIT_TIMEOUT_MS,
       ...(commitProgress ? { progress: commitProgress } : {}),
     });
     if (currentHookName !== null) {

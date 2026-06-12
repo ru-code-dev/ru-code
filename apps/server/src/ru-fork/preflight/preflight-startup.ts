@@ -94,7 +94,7 @@ export const resolveStartupCli: Effect.Effect<PreflightResolution, PreflightFail
  */
 export const runStartupChecks = (cliJs: string): Effect.Effect<void, PreflightFailedError> =>
   Effect.gen(function* () {
-    const results = [checkNodeEngine(), checkGit(), checkCli(cliJs)];
+    const results = [checkNodeEngine(), checkGit(), yield* Effect.promise(() => checkCli(cliJs))];
     for (const result of results) {
       if (result.ok) yield* Effect.logInfo(result.line);
       else yield* Effect.logError(result.line);

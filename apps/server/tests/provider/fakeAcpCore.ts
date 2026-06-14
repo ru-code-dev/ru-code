@@ -54,6 +54,14 @@ export interface PromptSteps {
 export interface FakeAcpScript {
   /** Called once per `session/prompt`; build the response with the step DSL. */
   readonly onPrompt: (steps: PromptSteps) => void;
+  /**
+   * ru-fork #4: how the fake answers the START handshake (`session/new` + `session/load`).
+   *   - "ok" (default) → reply with FAKE_SESSION_ID (a real session establishes).
+   *   - "hang"         → never respond (simulates a wedged `cli --acp` boot; the
+   *                      adapter's start timeout must convert this into an error).
+   *   - "error"        → reply with a JSON-RPC error (start fails cleanly).
+   */
+  readonly startBehavior?: "ok" | "hang" | "error";
 }
 
 type FakeStep =
@@ -114,8 +122,16 @@ export const runFakeAcpAgent = (
       }),
     );
     yield* agent.handleAuthenticate(() => Effect.succeed({}));
-    yield* agent.handleCreateSession(() => Effect.succeed({ sessionId: FAKE_SESSION_ID }));
-    yield* agent.handleLoadSession(() => Effect.succeed({ sessionId: FAKE_SESSION_ID }));
+    // ru-fork #4: the START handshake honours `script.startBehavior` so tests can drive
+    // a wedged ("hang") or failing ("error") `cli --acp` boot, not just the happy path.
+    const startResponse = () =>
+      script.startBehavior === "hang"
+        ? Effect.never
+        : script.startBehavior === "error"
+          ? new AcpErrors.AcpRequestError({ code: -32000, errorMessage: "start handshake failed (fake)" })
+          : Effect.succeed({ sessionId: FAKE_SESSION_ID });
+    yield* agent.handleCreateSession(startResponse);
+    yield* agent.handleLoadSession(startResponse);
     yield* agent.handleSetSessionConfigOption(() => Effect.succeed({ configOptions: [] }));
     yield* agent.handleSetSessionModel(() => Effect.succeed({}));
     yield* agent.handleCancel(() =>

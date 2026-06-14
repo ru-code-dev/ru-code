@@ -41,6 +41,7 @@ import {
   useServerConfigUpdatedSubscription,
   useServerWelcomeSubscription,
 } from "../rpc/serverState";
+import { startMcpStateSync } from "../rpc/mcpState";
 import { useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
@@ -105,6 +106,7 @@ function RootRouteView() {
     <ToastProvider>
       <AnchoredToastProvider>
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
+        {primaryEnvironmentAuthenticated ? <McpStateBootstrap /> : null}
         <EnvironmentConnectionManagerBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
@@ -198,6 +200,19 @@ function ServerStateBootstrap() {
     }
 
     return startServerStateSync(getPrimaryEnvironmentConnection().client.server);
+  }, []);
+
+  return null;
+}
+
+// ru-fork: keeps the MCP catalog/bindings/runtime atoms in sync with the backend.
+function McpStateBootstrap() {
+  useEffect(() => {
+    if (!getPrimaryKnownEnvironment()) {
+      return;
+    }
+
+    return startMcpStateSync(getPrimaryEnvironmentConnection().client.mcp);
   }, []);
 
   return null;

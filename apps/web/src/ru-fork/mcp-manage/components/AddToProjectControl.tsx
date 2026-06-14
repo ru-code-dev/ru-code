@@ -1,19 +1,17 @@
 import { CheckIcon, FolderPlusIcon, PlusIcon } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
-import {
-  selectProjectsForServer,
-  useMcpManagerStore,
-} from "../store";
+import { selectProjectsForServer, useMcpManagerStore } from "../store";
+import { useMcpMutations, useMcpProjectBindings, useMcpProjects } from "../useMcp";
 
 /**
  * "Add to project ▾" dropdown shown on a catalog server. Lists every project; projects the
  * server is already bound to are shown with a check and disabled.
  */
 export function AddToProjectControl({ serverId }: { serverId: string }) {
-  const projects = useMcpManagerStore((state) => state.projects);
-  const bindings = useMcpManagerStore((state) => state.bindings);
-  const addBindingToProject = useMcpManagerStore((state) => state.addBindingToProject);
+  const projects = useMcpProjects();
+  const bindings = useMcpProjectBindings();
+  const { addBindingToProject } = useMcpMutations();
   const selectProject = useMcpManagerStore((state) => state.selectProject);
   const setActiveTab = useMcpManagerStore((state) => state.setActiveTab);
 

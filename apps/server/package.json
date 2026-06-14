@@ -34,6 +34,7 @@
     "@effect/vitest": "catalog:",
     "@pierre/diffs": "1.1.20",
     "@ru-fork/branding": "workspace:*",
+    "@ru-fork/mcp-core": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/web": "workspace:*",

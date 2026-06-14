@@ -32,6 +32,9 @@ import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
+import { McpOverlay } from "./ru-fork/mcp/McpOverlay.ts";
+import { McpReactor } from "./ru-fork/mcp/McpReactor.ts";
+import { McpSupervisor } from "./ru-fork/mcp/McpSupervisor.ts";
 import {
   formatHeadlessServeOutput,
   issueHeadlessServeAccessInfo,
@@ -236,6 +239,9 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const keybindings = yield* Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper;
+  const mcpSupervisor = yield* McpSupervisor;
+  const mcpReactor = yield* McpReactor;
+  const mcpOverlay = yield* McpOverlay;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment;
@@ -277,12 +283,23 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       ),
     );
 
+    // ru-fork #4: wipe stale per-project overlay files (plaintext secrets) left by a
+    // prior run that exited hard (SIGKILL / power-loss) before its ensuring/shutdown
+    // sweep could run. Done before reactors so nothing reads a stale file. Best-effort.
+    yield* Effect.logDebug("startup phase: sweeping stale MCP overlays");
+    yield* runStartupPhase("mcp.overlay.sweep", mcpOverlay.removeAllOverlays);
+
     yield* Effect.logDebug("startup phase: starting orchestration reactors");
     yield* runStartupPhase(
       "reactors.start",
       Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+        // ru-fork: MCP monitoring + desired-set reconciliation. The supervisor
+        // owns the health-sweep loop; the reactor seeds builtins on first run
+        // and keeps the supervisor reconciled to authored catalog/bindings.
+        yield* mcpSupervisor.start().pipe(Scope.provide(reactorScope));
+        yield* mcpReactor.start().pipe(Scope.provide(reactorScope));
       }),
     );
 

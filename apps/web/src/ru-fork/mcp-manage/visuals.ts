@@ -17,6 +17,18 @@ export interface StatusVisual {
 }
 
 const STATUS_VISUALS: Record<McpStatus, StatusVisual> = {
+  unchecked: {
+    label: "Не проверено",
+    textClass: "text-muted-foreground",
+    dotClass: "bg-zinc-300 dark:bg-zinc-600",
+    pulse: false,
+  },
+  checking: {
+    label: "Проверка…",
+    textClass: "text-sky-600 dark:text-sky-300/90",
+    dotClass: "bg-sky-500",
+    pulse: true,
+  },
   connected: {
     label: "Подключён",
     textClass: "text-emerald-600 dark:text-emerald-300/90",

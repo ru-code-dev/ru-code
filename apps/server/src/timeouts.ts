@@ -79,3 +79,16 @@ export const ACP_WIRE_STALL_KILL_MS = 7_200_000;
  * recover snappily.
  */
 export const POST_ANSWER_RESUME_TIMEOUT_MS = 3_600_000;
+
+/**
+ * ACP_SESSION_START_TIMEOUT_MS — hard ceiling on the ACP start handshake
+ * (`initialize` + `authenticate` + `session/new`|`session/load`). Unlike the
+ * wire-stall thresholds above (which only apply DURING an active turn), nothing
+ * else bounds the start: if a freshly-spawned `cli --acp` child hangs at boot
+ * and never answers `initialize`, `startSession` would otherwise hang forever.
+ * On timeout the adapter fails the start with a typed ProviderAdapterProcessError
+ * (the session scope then closes and SIGKILLs the child). 60s is generous for a
+ * cold node boot + qwen init (typically <10s) yet short enough to surface a wedge
+ * and — for ru-fork MCP — release the ephemeral overlay promptly. Tunable.
+ */
+export const ACP_SESSION_START_TIMEOUT_MS = 60_000;

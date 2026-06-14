@@ -151,6 +151,15 @@ export interface WsRpcClient {
     readonly subscribeShell: RpcStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeShell>;
     readonly subscribeThread: RpcInputStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeThread>;
   };
+  // ru-fork: MCP catalog/bindings reads + runtime status. Mutations go through
+  // `orchestration.dispatchCommand` (the 5 mcp.* commands).
+  readonly mcp: {
+    readonly getSnapshot: RpcUnaryMethod<typeof WS_METHODS.mcpGetSnapshot>;
+    readonly subscribeProjection: RpcStreamMethod<typeof WS_METHODS.subscribeMcpProjection>;
+    readonly subscribeRuntime: RpcStreamMethod<typeof WS_METHODS.subscribeMcpRuntime>;
+    readonly setActiveProject: RpcUnaryMethod<typeof WS_METHODS.mcpSetActiveProject>;
+    readonly recheck: RpcUnaryMethod<typeof WS_METHODS.mcpRecheck>;
+  };
 }
 
 export function createWsRpcClient(transport: WsTransport): WsRpcClient {
@@ -308,6 +317,25 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           listener,
           { ...options, tag: ORCHESTRATION_WS_METHODS.subscribeThread },
         ),
+    },
+    mcp: {
+      getSnapshot: (input) =>
+        transport.request((client) => client[WS_METHODS.mcpGetSnapshot](input)),
+      subscribeProjection: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeMcpProjection]({}),
+          listener,
+          { ...options, tag: WS_METHODS.subscribeMcpProjection },
+        ),
+      subscribeRuntime: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeMcpRuntime]({}),
+          listener,
+          { ...options, tag: WS_METHODS.subscribeMcpRuntime },
+        ),
+      setActiveProject: (input) =>
+        transport.request((client) => client[WS_METHODS.mcpSetActiveProject](input)),
+      recheck: (input) => transport.request((client) => client[WS_METHODS.mcpRecheck](input)),
     },
   };
 }

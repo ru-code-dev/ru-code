@@ -400,6 +400,35 @@ async function D5_perToolInclude() {
 
 // ───────────────── transport + expansion + fallback cases ───────────────────
 
+// ru-fork (improvements-branch-3 §3b): a NEGATIVE case — an allow-listed name with no matching
+// overlay server must register NOTHING for that name (proves the probe can detect a non-load: a bad
+// name is silently dropped, never conjures tools, and never blocks the real server's load).
+async function D6_allowlistGhostNameNoOp() {
+  const cwd = freshDir(join(runRoot, "D6"));
+  const overlay = join(cwd, "overlay.json");
+  writeOverlay(overlay, { alpha: serverEntry("alpha", join(cwd, "alpha.log")) });
+  const { registry } = await captureRegistry(cwd, overlay, { allowedServerNames: "alpha,ghost" });
+  const ok = hasTool(registry, "mcp__alpha__echo") && !mcpTools(registry).some((n) => n.startsWith("mcp__ghost__"));
+  record("D6", "allow-listed name with no server registers nothing", ok ? "PASS" : "FAIL", ok ? "alpha active; ghost produced no tools" : `registry=${JSON.stringify(mcpTools(registry))}`);
+}
+
+// ru-fork (improvements-branch-3 §3b): explicit per-project ISOLATION — two projects, two overlays,
+// two sessions. Each project's registry must contain ONLY its own server's tools, never the other's.
+async function D7_perProjectIsolation() {
+  const cwdA = freshDir(join(runRoot, "D7a"));
+  const overlayA = join(cwdA, "overlay.json");
+  writeOverlay(overlayA, { alpha: serverEntry("alpha", join(cwdA, "alpha.log")) });
+  const { registry: regA } = await captureRegistry(cwdA, overlayA, { allowedServerNames: "alpha" });
+  const cwdB = freshDir(join(runRoot, "D7b"));
+  const overlayB = join(cwdB, "overlay.json");
+  writeOverlay(overlayB, { beta: serverEntry("beta", join(cwdB, "beta.log")) });
+  const { registry: regB } = await captureRegistry(cwdB, overlayB, { allowedServerNames: "beta" });
+  const ok =
+    hasTool(regA, "mcp__alpha__echo") && !mcpTools(regA).some((n) => n.startsWith("mcp__beta__")) &&
+    hasTool(regB, "mcp__beta__add") && !mcpTools(regB).some((n) => n.startsWith("mcp__alpha__"));
+  record("D7", "per-project overlay isolation", ok ? "PASS" : "FAIL", ok ? "project A sees only alpha; project B sees only beta" : `regA=${JSON.stringify(mcpTools(regA))} regB=${JSON.stringify(mcpTools(regB))}`);
+}
+
 async function H1_httpViaOverlay() {
   if (!sdkAvailable) return record("H1", "remote (http) server via overlay", "SKIP", "MCP SDK not installed — run `pnpm install`");
   const cwd = freshDir(join(runRoot, "H1"));
@@ -592,6 +621,8 @@ async function main() {
   await D3_ignorePreexisting();
   await D4_perToolExclude();
   await D5_perToolInclude();
+  await D6_allowlistGhostNameNoOp();
+  await D7_perProjectIsolation();
 
   console.log("\nTransport, env-expansion, and fallback:");
   await H1_httpViaOverlay();

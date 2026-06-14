@@ -69,6 +69,16 @@ export const SLASH_COMMAND_NOTIFICATION_METHODS: readonly string[] =
 export const ACP_SERVER_NO_SSL = true;
 
 /**
+ * MCP_ENGINE_USE_OVERLAY — ru-fork kill-switch for the MCP overlay engine. When
+ * true (default), starting a qwen ACP session injects the per-project settings
+ * overlay (`QWEN_CODE_SYSTEM_SETTINGS_PATH`) + server allowlist
+ * (`--allowed-mcp-server-names`), and the reactor restarts live sessions on
+ * fingerprint change. When false, spawns are byte-for-byte identical to today
+ * (no overlay, no allowlist) — qwen falls back to the user's own ~/.qwen config.
+ */
+export const MCP_ENGINE_USE_OVERLAY = true;
+
+/**
  * STOP_BUTTON_METHOD — what the Stop button (`thread.turn.interrupt`)
  * does. "end-force" because CLI builds we ship against can ignore
  * both `acp.cancel` and SIGTERM, hanging `Scope.close` indefinitely
@@ -171,6 +181,14 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+  // ru-fork: per-project MCP overlay files consumed by qwen via QWEN_CODE_SYSTEM_SETTINGS_PATH.
+  readonly mcpOverlayDir: string;
+  // ru-fork: neutral working directory for MCP probes. Probes only verify
+  // install/reachability + discover tools (cwd-independent), so `${PROJECT_CWD}`
+  // resolves here instead of any project dir — one probe (and one cache row) per
+  // authored config, shared across all projects. qwen still gets the REAL project
+  // cwd at overlay-write time; this dir is never handed to a live session.
+  readonly mcpProbeCwd: string;
 }
 
 /**
@@ -233,6 +251,8 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
+    mcpOverlayDir: join(stateDir, "mcp", "overlays"),
+    mcpProbeCwd: join(stateDir, "mcp", "probe-cwd"),
   };
 });
 
@@ -252,6 +272,8 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true }),
       fs.makeDirectory(derivedPaths.providerStatusCacheDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.serverRuntimeStatePath), { recursive: true }),
+      fs.makeDirectory(derivedPaths.mcpOverlayDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.mcpProbeCwd, { recursive: true }),
     ],
     { concurrency: "unbounded" },
   );

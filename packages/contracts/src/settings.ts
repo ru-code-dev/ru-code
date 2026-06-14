@@ -227,6 +227,23 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+
+  // ru-fork: MCP management settings. `autobindDefaults` auto-attaches built-in
+  // servers to new projects. Auto-recheck cadence is driven entirely by the two
+  // interval fields (0 = that transport never auto re-checks), so there is no
+  // separate on/off toggle — set both to 0 to disable recurring probing entirely
+  // (the first probe then comes only from a manual recheck or a config change).
+  mcp: Schema.Struct({
+    autobindDefaults: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+    // ru-fork: auto-recheck intervals (minutes; 0 = that transport never auto
+    // re-checks). Per transport — local stdio re-spawns are heavier than remote calls.
+    recheckLocalMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+      Schema.withDecodingDefault(Effect.succeed(30)),
+    ),
+    recheckRemoteMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+      Schema.withDecodingDefault(Effect.succeed(30)),
+    ),
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -286,6 +303,14 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // ru-fork: MCP management toggles.
+  mcp: Schema.optionalKey(
+    Schema.Struct({
+      autobindDefaults: Schema.optionalKey(Schema.Boolean),
+      recheckLocalMinutes: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+      recheckRemoteMinutes: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    }),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

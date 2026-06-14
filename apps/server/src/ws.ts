@@ -45,6 +45,9 @@ import { Keybindings } from "./keybindings.ts";
 import { Open, resolveAvailableEditors } from "./open.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
+import { McpProjectionQuery } from "./ru-fork/mcp/McpProjectionQuery.ts";
+import { McpRuntime } from "./ru-fork/mcp/McpRuntime.ts";
+import { McpSupervisor } from "./ru-fork/mcp/McpSupervisor.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 // ru-fork: telemetry/observability (spans + metrics) was removed, and the
 // per-RPC FAILURE CAPTURE that lived in this wrapper went with it — so every
@@ -227,6 +230,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const sourceControlRepositories = yield* SourceControlRepositoryService;
       const bootstrapCredentials = yield* BootstrapCredentialService;
       const sessions = yield* SessionCredentialService;
+      // ru-fork: MCP management read model + live runtime.
+      const mcpProjectionQuery = yield* McpProjectionQuery;
+      const mcpRuntime = yield* McpRuntime;
+      const mcpSupervisor = yield* McpSupervisor;
       const serverCommandId = (tag: string) =>
         CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -954,6 +961,43 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             {
               "rpc.aggregate": "server",
             },
+          ),
+        // ru-fork: MCP reads + subscriptions. Stream construction lives in the
+        // ru-fork/mcp services so this seam stays a thin delegation.
+        [WS_METHODS.mcpGetSnapshot]: ({ projectId }) =>
+          observeRpcEffect(WS_METHODS.mcpGetSnapshot, mcpProjectionQuery.getSnapshot(projectId), {
+            "rpc.aggregate": "mcp",
+          }),
+        [WS_METHODS.subscribeMcpProjection]: (_input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.subscribeMcpProjection,
+            Effect.succeed(mcpProjectionQuery.subscriptionStream),
+            { "rpc.aggregate": "mcp" },
+          ),
+        [WS_METHODS.subscribeMcpRuntime]: (_input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.subscribeMcpRuntime,
+            Effect.succeed(mcpRuntime.subscriptionStream),
+            { "rpc.aggregate": "mcp" },
+          ),
+        // ru-fork: the client signals which project it's viewing; the supervisor
+        // scopes auto-probing to it (null ⇒ clear → probe nothing until re-set).
+        [WS_METHODS.mcpSetActiveProject]: ({ projectId }) =>
+          observeRpcEffect(
+            WS_METHODS.mcpSetActiveProject,
+            mcpSupervisor.setWatchedProjects(projectId !== null ? [projectId] : []),
+            { "rpc.aggregate": "mcp" },
+          ),
+        // ru-fork: manual recheck — force-probe the matching live instances now.
+        [WS_METHODS.mcpRecheck]: ({ projectId, serverId, transport }) =>
+          observeRpcEffect(
+            WS_METHODS.mcpRecheck,
+            mcpSupervisor.recheck({
+              ...(projectId !== undefined ? { projectId } : {}),
+              ...(serverId !== undefined ? { serverId } : {}),
+              ...(transport !== undefined ? { transport } : {}),
+            }),
+            { "rpc.aggregate": "mcp" },
           ),
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(

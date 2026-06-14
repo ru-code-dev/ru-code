@@ -13,9 +13,11 @@ function FieldCaption({ children }: { children: React.ReactNode }) {
 function TransportSegmented({
   value,
   onChange,
+  disabled = false,
 }: {
   value: McpTransport;
   onChange: (value: McpTransport) => void;
+  disabled?: boolean;
 }) {
   const options: ReadonlyArray<{ value: McpTransport; label: string; hint: string }> = [
     { value: "stdio", label: "Локальный (stdio)", hint: "Запускает команду как процесс" },
@@ -27,9 +29,11 @@ function TransportSegmented({
         <button
           key={option.value}
           type="button"
+          disabled={disabled}
           onClick={() => onChange(option.value)}
           className={cn(
             "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
+            disabled && "cursor-not-allowed opacity-60",
             value === option.value
               ? "border-primary bg-primary/5 text-foreground"
               : "border-border text-muted-foreground hover:border-border/80 hover:text-foreground",
@@ -44,23 +48,36 @@ function TransportSegmented({
 }
 
 /**
- * Controlled transport-config fields shared by the catalog dialog and the per-project
- * override dialog. `idPrefix` keeps field ids unique when two instances co-exist.
+ * Controlled transport-TEMPLATE fields for the catalog dialog. command/args/url/headers
+ * may contain `${NAME}` holes — secrets and per-project params are declared in the
+ * separate vars block, not here. `idPrefix` keeps field ids unique across instances.
  */
 export function ServerConfigFields({
   value,
   onChange,
   idPrefix,
+  disabled = false,
+  hideTransport = false,
 }: {
   value: ServerConfigDraft;
   onChange: (next: ServerConfigDraft) => void;
   idPrefix: string;
+  /** Template mode: the command/args/url/headers are read-only (the template owns them). */
+  disabled?: boolean;
+  /** ⑯ Template mode: hide the transport switch entirely (it has zero value for a built-in). */
+  hideTransport?: boolean;
 }) {
   const patch = (partial: Partial<ServerConfigDraft>) => onChange({ ...value, ...partial });
 
   return (
     <div className="space-y-4">
-      <TransportSegmented value={value.transport} onChange={(transport) => patch({ transport })} />
+      {!hideTransport && (
+        <TransportSegmented
+          value={value.transport}
+          onChange={(transport) => patch({ transport })}
+          disabled={disabled}
+        />
+      )}
 
       {value.transport === "stdio" ? (
         <>
@@ -71,6 +88,7 @@ export function ServerConfigFields({
               value={value.command}
               onChange={(event) => patch({ command: event.target.value })}
               placeholder="npx"
+              disabled={disabled}
               className="mt-1.5 font-mono"
             />
             <FieldCaption>Исполняемый файл, который запускает MCP-сервер.</FieldCaption>
@@ -81,24 +99,13 @@ export function ServerConfigFields({
               id={`${idPrefix}-args`}
               value={value.argsText}
               onChange={(event) => patch({ argsText: event.target.value })}
-              placeholder="-y @modelcontextprotocol/server-filesystem"
-              className="mt-1.5 font-mono"
-            />
-            <FieldCaption>Через пробел. Передаются команде при запуске.</FieldCaption>
-          </div>
-          <div>
-            <Label htmlFor={`${idPrefix}-env`}>Переменные окружения</Label>
-            <Textarea
-              id={`${idPrefix}-env`}
-              value={value.envText}
-              onChange={(event) => patch({ envText: event.target.value })}
-              placeholder={"API_KEY=${MY_TOKEN}"}
-              rows={2}
+              placeholder={"-y @modelcontextprotocol/server-filesystem ${PROJECT_CWD}"}
+              disabled={disabled}
               className="mt-1.5 font-mono"
             />
             <FieldCaption>
-              По одной на строку: <code>KEY=value</code>. Поддерживаются плейсхолдеры{" "}
-              <code>${"{VAR}"}</code> — секреты не хранятся в открытом виде.
+              Через пробел. Можно подставлять <code>${"{NAME}"}</code> из переменных ниже и{" "}
+              <code>${"{PROJECT_CWD}"}</code>.
             </FieldCaption>
           </div>
         </>
@@ -111,6 +118,7 @@ export function ServerConfigFields({
               value={value.httpUrl}
               onChange={(event) => patch({ httpUrl: event.target.value })}
               placeholder="https://mcp.example.com/mcp"
+              disabled={disabled}
               className="mt-1.5 font-mono"
             />
             <FieldCaption>Адрес streamable-HTTP эндпоинта сервера.</FieldCaption>
@@ -121,13 +129,14 @@ export function ServerConfigFields({
               id={`${idPrefix}-headers`}
               value={value.headersText}
               onChange={(event) => patch({ headersText: event.target.value })}
-              placeholder={"Authorization: Bearer ${MY_TOKEN}"}
+              placeholder={"Authorization: Bearer ${TOKEN}"}
               rows={2}
+              disabled={disabled}
               className="mt-1.5 font-mono"
             />
             <FieldCaption>
-              По одному на строку: <code>Key: value</code>. Для токенов используйте{" "}
-              <code>${"{VAR}"}</code>.
+              По одному на строку: <code>Key: value</code>. Для токенов подставляйте{" "}
+              <code>${"{NAME}"}</code> из переменных ниже.
             </FieldCaption>
           </div>
         </>

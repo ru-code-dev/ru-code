@@ -16,6 +16,10 @@ import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../per
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
+import { McpCatalogRepository } from "../../persistence/Services/McpCatalog.ts";
+import { McpBindingRepository } from "../../persistence/Services/McpBinding.ts";
+import { makeMcpBindingProjector, makeMcpCatalogProjector } from "../../ru-fork/mcp/McpProjectors.ts";
+import { McpRepositoriesLive } from "../../ru-fork/mcp/McpLayers.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
@@ -64,6 +68,8 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  mcpCatalog: "projection.mcp-catalog",
+  mcpBindings: "projection.mcp-bindings",
 } as const;
 
 type ProjectorName =
@@ -514,6 +520,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+    // ru-fork: MCP catalog + binding SQL projections.
+    const mcpCatalogRepository = yield* McpCatalogRepository;
+    const mcpBindingRepository = yield* McpBindingRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1425,10 +1434,26 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    // ru-fork: MCP catalog/binding SQL projectors (bodies in ru-fork/mcp).
+    const applyMcpCatalogProjection: ProjectorDefinition["apply"] = makeMcpCatalogProjector(
+      mcpCatalogRepository,
+      mcpBindingRepository,
+    );
+    const applyMcpBindingProjection: ProjectorDefinition["apply"] =
+      makeMcpBindingProjector(mcpBindingRepository);
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.mcpCatalog,
+        apply: applyMcpCatalogProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.mcpBindings,
+        apply: applyMcpBindingProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
@@ -1565,4 +1590,6 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  // ru-fork: MCP catalog + binding repos (memoized → shared with snapshot query).
+  Layer.provideMerge(McpRepositoriesLive),
 );

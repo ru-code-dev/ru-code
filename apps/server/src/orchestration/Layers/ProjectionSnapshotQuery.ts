@@ -45,6 +45,9 @@ import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionTh
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
+import { McpCatalogRepository } from "../../persistence/Services/McpCatalog.ts";
+import { McpBindingRepository } from "../../persistence/Services/McpBinding.ts";
+import { McpRepositoriesLive } from "../../ru-fork/mcp/McpLayers.ts";
 import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
@@ -247,6 +250,9 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
+  // ru-fork: MCP catalog + bindings feed the decider's in-memory read model.
+  const mcpCatalogRepository = yield* McpCatalogRepository;
+  const mcpBindingRepository = yield* McpBindingRepository;
   const repositoryIdentityResolutionConcurrency = 4;
   const resolveRepositoryIdentitiesForProjects = Effect.fn(
     "ProjectionSnapshotQuery.resolveRepositoryIdentitiesForProjects",
@@ -1232,7 +1238,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       .pipe(
         Effect.flatMap(
           ([projectRows, threadRows, proposedPlanRows, sessionRows, latestTurnRows, stateRows]) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               let updatedAt: string | null = null;
               const projects: OrchestrationProject[] = [];
               const threads: OrchestrationThread[] = [];
@@ -1352,10 +1358,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 });
               }
 
+              const mcpCatalog = yield* mcpCatalogRepository.listAll();
+              const mcpBindings = yield* mcpBindingRepository.listAll();
+
               return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
+                mcpCatalog,
+                mcpBindings,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
@@ -1985,4 +1996,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 export const OrchestrationProjectionSnapshotQueryLive = Layer.effect(
   ProjectionSnapshotQuery,
   makeProjectionSnapshotQuery,
+).pipe(
+  // ru-fork: MCP repos to rebuild the command read model (memoized → shared).
+  Layer.provideMerge(McpRepositoriesLive),
 );

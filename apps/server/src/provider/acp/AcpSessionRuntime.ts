@@ -432,6 +432,10 @@ const makeAcpSessionRuntime = (
         const loadPayload = {
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
+          // ru-fork: MCP servers come from the settings overlay
+          // (QWEN_CODE_SYSTEM_SETTINGS_PATH), not this ACP array — the overlay
+          // is the single source and the only path that carries http + per-tool
+          // filters. See ru-fork/mcp/McpOverlay.ts.
           mcpServers: [],
         } satisfies EffectAcpSchema.LoadSessionRequest;
         yield* Ref.set(suppressUpdatesRef, true);
@@ -446,6 +450,9 @@ const makeAcpSessionRuntime = (
         } else {
           const createPayload = {
             cwd: options.cwd,
+            // ru-fork: empty by design — MCP servers come from the settings
+            // overlay (QWEN_CODE_SYSTEM_SETTINGS_PATH), not this ACP array.
+            // See ru-fork/mcp/McpOverlay.ts.
             mcpServers: [],
           } satisfies EffectAcpSchema.NewSessionRequest;
           const created = yield* runLoggedRequest(
@@ -459,6 +466,9 @@ const makeAcpSessionRuntime = (
       } else {
         const createPayload = {
           cwd: options.cwd,
+          // ru-fork: empty by design — MCP servers come from the settings
+          // overlay (QWEN_CODE_SYSTEM_SETTINGS_PATH), not this ACP array.
+          // See ru-fork/mcp/McpOverlay.ts.
           mcpServers: [],
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(

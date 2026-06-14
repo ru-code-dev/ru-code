@@ -84,6 +84,7 @@ import {
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import { McpRuntimeServicesLive } from "./ru-fork/mcp/McpLayers.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -216,6 +217,10 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
+  // ru-fork: MCP supervisor + runtime + projection query (singleton supervisor
+  // shared with the reactor + startup). Its repo/engine/settings requirements are
+  // satisfied by the orchestration + settings layers provided below.
+  Layer.provideMerge(McpRuntimeServicesLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),

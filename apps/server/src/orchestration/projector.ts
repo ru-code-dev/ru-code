@@ -8,6 +8,14 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import {
+  removeMcpBinding,
+  removeMcpBindingsByProject,
+  removeMcpBindingsByServer,
+  removeMcpServer,
+  upsertMcpBinding,
+  upsertMcpServer,
+} from "../ru-fork/mcp/McpReadModel.ts";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
@@ -160,6 +168,8 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    mcpCatalog: [],
+    mcpBindings: [],
     updatedAt: nowIso,
   };
 }
@@ -237,6 +247,8 @@ export function projectEvent(
                 }
               : project,
           ),
+          // ru-fork: cascade — a deleted project's MCP bindings die with it.
+          mcpBindings: removeMcpBindingsByProject(nextBase.mcpBindings, payload.projectId),
         })),
       );
 
@@ -653,6 +665,38 @@ export function projectEvent(
           };
         }),
       );
+
+    // ru-fork: MCP catalog + bindings folds. event.payload is already validated
+    // by the event union discriminant, so no defensive decode is needed here.
+    case "mcp.server-added":
+    case "mcp.server-updated":
+      return Effect.succeed({
+        ...nextBase,
+        mcpCatalog: upsertMcpServer(nextBase.mcpCatalog, event.payload.server),
+      });
+
+    case "mcp.server-removed":
+      return Effect.succeed({
+        ...nextBase,
+        mcpCatalog: removeMcpServer(nextBase.mcpCatalog, event.payload.serverId),
+        mcpBindings: removeMcpBindingsByServer(nextBase.mcpBindings, event.payload.serverId),
+      });
+
+    case "mcp.binding-set":
+      return Effect.succeed({
+        ...nextBase,
+        mcpBindings: upsertMcpBinding(nextBase.mcpBindings, event.payload.binding),
+      });
+
+    case "mcp.binding-removed":
+      return Effect.succeed({
+        ...nextBase,
+        mcpBindings: removeMcpBinding(
+          nextBase.mcpBindings,
+          event.payload.projectId,
+          event.payload.serverId,
+        ),
+      });
 
     default:
       return Effect.succeed(nextBase);

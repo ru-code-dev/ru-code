@@ -5,7 +5,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
+import * as References from "effect/References";
 import * as PlatformError from "effect/PlatformError";
 
 import { ServerConfig } from "../../../src/config.ts";
@@ -268,4 +270,48 @@ it.layer(NodeServices.layer)("ServerSecretStoreLive", (it) => {
       expect((error.cause as PlatformError.PlatformError).reason._tag).toBe("PermissionDenied");
     }).pipe(Effect.provide(makeRemoveFailureSecretStoreLayer())),
   );
+
+  // ru-fork: pruneByPrefix is the MCP secret GC primitive (gcOrphanedSecrets calls it). Below: its
+  // correctness (untested until now), then its error path — which the language-service flagged as a
+  // dead `Effect.catch` because the body swallows `remove` failures via `Effect.ignore`.
+  it.effect("pruneByPrefix removes orphaned secrets but keeps the keep-set and other prefixes", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore;
+      yield* secretStore.getOrCreateRandom("mcp-secret-keep", 16);
+      yield* secretStore.getOrCreateRandom("mcp-secret-orphan", 16);
+      yield* secretStore.getOrCreateRandom("other-prefix-survivor", 16);
+
+      yield* secretStore.pruneByPrefix("mcp-secret-", new Set(["mcp-secret-keep"]));
+
+      expect(yield* secretStore.get("mcp-secret-orphan")).toBeNull(); // pruned
+      expect(yield* secretStore.get("mcp-secret-keep")).not.toBeNull(); // in keep-set
+      expect(yield* secretStore.get("other-prefix-survivor")).not.toBeNull(); // different prefix
+    }).pipe(Effect.provide(makeServerSecretStoreLayer())),
+  );
+
+  it.effect("pruneByPrefix logs (and does not fail) when a secret file cannot be removed", () => {
+    const captured: Array<{ readonly level: string; readonly message: string }> = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      captured.push({ level: String(logLevel), message: String(message) });
+    });
+    return Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore;
+      yield* secretStore.getOrCreateRandom("mcp-secret-stuck", 16); // write ok (only `remove` fails)
+
+      // Best-effort: pruning must SUCCEED even though a remove fails (it must not crash the caller)...
+      yield* secretStore.pruneByPrefix("mcp-secret-", new Set());
+
+      // ...AND the failure must be observable at debug level. Current code swallows it silently via
+      // `Effect.ignore` ⇒ no log ⇒ this is RED until the swallow becomes a logDebug.
+      const debugLog = captured.find(
+        (entry) =>
+          entry.level.toUpperCase().includes("DEBUG") && entry.message.toLowerCase().includes("remove"),
+      );
+      expect(debugLog).toBeDefined();
+    }).pipe(
+      Effect.provide(makeRemoveFailureSecretStoreLayer()),
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      Effect.provide(Layer.succeed(References.MinimumLogLevel, "Debug")),
+    );
+  });
 });

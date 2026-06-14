@@ -25,6 +25,17 @@ import {
 
 type CliAcpRuntimeSettings = Pick<CliSettings, "launchArgs" | "homePath">;
 
+/**
+ * ru-fork: opaque spawn-time settings the adapter forwards verbatim. Produced by
+ * the MCP overlay engine (see ru-fork/mcp/McpOverlay.ts) but kept provider-neutral
+ * here: `settingsOverlayPath` is any highest-precedence settings file;
+ * `allowedMcpServers` is the qwen MCP server allowlist. Both independent + optional.
+ */
+export interface CliAcpSettingsOverlay {
+  readonly settingsOverlayPath?: string;
+  readonly allowedMcpServers?: ReadonlyArray<string>;
+}
+
 export interface CliAcpRuntimeInput extends Omit<
   AcpSessionRuntimeOptions,
   "authMethodId" | "clientCapabilities" | "spawn"
@@ -34,6 +45,8 @@ export interface CliAcpRuntimeInput extends Omit<
   readonly environment?: NodeJS.ProcessEnv;
   // ru-fork: resolved cli.js (ServerConfig.cliJs). Spawned as `node <cliJs> --acp`.
   readonly cliJs: string;
+  // ru-fork: forwarded verbatim into the spawn (env + launch arg). Absent ⇒ today's behaviour.
+  readonly settingsOverlay?: CliAcpSettingsOverlay;
 }
 
 /**
@@ -53,6 +66,7 @@ export function buildCliAcpSpawnInput(
   cliSettings: CliAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
+  settingsOverlay?: CliAcpSettingsOverlay,
 ): AcpSpawnInput {
   const env: NodeJS.ProcessEnv = { ...environment };
   const homePath = cliSettings?.homePath?.trim();
@@ -62,8 +76,23 @@ export function buildCliAcpSpawnInput(
   if (ACP_SERVER_NO_SSL) {
     env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  // ru-fork: `node <cliJs> [launchArgs] --acp` directly — no shell, no PATH lookup.
-  const spawn = buildCliSpawn(cliJs, [...parseLaunchArgs(cliSettings?.launchArgs), "--acp"]);
+  // ru-fork: a highest-precedence settings file overlaid onto qwen's own config.
+  if (settingsOverlay?.settingsOverlayPath) {
+    env.QWEN_CODE_SYSTEM_SETTINGS_PATH = settingsOverlay.settingsOverlayPath;
+  }
+  // ru-fork: restrict qwen to exactly the overlay's MCP servers (omit ⇒ no filter).
+  const allowedMcpServers = settingsOverlay?.allowedMcpServers ?? [];
+  const allowMcpArgs =
+    allowedMcpServers.length > 0
+      ? ["--allowed-mcp-server-names", allowedMcpServers.join(",")]
+      : [];
+  // ru-fork: `node <cliJs> [launchArgs] [--allowed-mcp-server-names …] --acp`
+  // directly — no shell, no PATH lookup.
+  const spawn = buildCliSpawn(cliJs, [
+    ...parseLaunchArgs(cliSettings?.launchArgs),
+    ...allowMcpArgs,
+    "--acp",
+  ]);
   return {
     command: spawn.command,
     args: [...spawn.args],
@@ -79,7 +108,13 @@ export const makeCliAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildCliAcpSpawnInput(input.cliJs, input.cliSettings, input.cwd, input.environment),
+        spawn: buildCliAcpSpawnInput(
+          input.cliJs,
+          input.cliSettings,
+          input.cwd,
+          input.environment,
+          input.settingsOverlay,
+        ),
         authMethodId: CLI_AUTH_METHOD_ID,
       }).pipe(
         Layer.provide(

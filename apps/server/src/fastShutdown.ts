@@ -8,6 +8,8 @@
  *   2. SIGKILL every PTY (`terminalManager.killAll`).
  *   3. Remove the persisted runtime-state file so the next launcher run
  *      doesn't see a stale pid.
+ *   4. ru-fork #4: sweep the MCP overlay dir (plaintext-secret files) — SYNC,
+ *      since this runs in the SIGINT/SIGTERM handler under Effect.runSync.
  *
  * Step ordering matters: kill child processes first (those are what
  * blocks the node process from exiting fast) then drop bookkeeping.
@@ -40,6 +42,17 @@ export const runFastShutdownCleanup = Effect.gen(function* () {
       nodeFs.unlinkSync(config.serverRuntimeStatePath);
     } catch {
       // Already absent or another writer touched it — fine.
+    }
+  });
+  // ru-fork #4: drop every per-project overlay (plaintext secrets) on graceful stop,
+  // shrinking the on-disk window. SYNC (rmSync) because this runs in the SIGINT/SIGTERM
+  // handler under Effect.runSync — an async FileSystem.remove would throw here.
+  // Best-effort; the next start's sweep is the backstop for anything left.
+  yield* Effect.sync(() => {
+    try {
+      nodeFs.rmSync(config.mcpOverlayDir, { recursive: true, force: true });
+    } catch {
+      // Missing or racing writer — fine; start-sweep nets it.
     }
   });
 });

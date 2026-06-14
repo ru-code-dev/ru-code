@@ -15,6 +15,7 @@ export * from "./server.ts";
 export * from "./ru-fork/skills.ts";
 export * from "./ru-fork/subagents.ts";
 export * from "./ru-fork/terminalErrors.ts";
+export * from "./ru-fork/mcp.ts";
 export * from "./settings.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";

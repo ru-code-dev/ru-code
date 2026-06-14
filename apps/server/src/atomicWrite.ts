@@ -6,6 +6,10 @@ import * as Random from "effect/Random";
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string;
+  // ru-fork: optional owner-only perms for secret-bearing files (e.g. the MCP
+  // overlay). Omitted ⇒ the process umask default (unchanged behaviour).
+  readonly mode?: number;
+  readonly dirMode?: number;
 }) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -15,6 +19,9 @@ export const writeFileStringAtomically = (input: {
       const targetDirectory = path.dirname(input.filePath);
 
       yield* fs.makeDirectory(targetDirectory, { recursive: true });
+      if (input.dirMode !== undefined) {
+        yield* fs.chmod(targetDirectory, input.dirMode);
+      }
       const tempDirectory = yield* fs.makeTempDirectoryScoped({
         directory: targetDirectory,
         prefix: `${path.basename(input.filePath)}.`,
@@ -22,6 +29,9 @@ export const writeFileStringAtomically = (input: {
       const tempPath = path.join(tempDirectory, `${tempFileId}.tmp`);
 
       yield* fs.writeFileString(tempPath, input.contents);
+      if (input.mode !== undefined) {
+        yield* fs.chmod(tempPath, input.mode);
+      }
       yield* fs.rename(tempPath, input.filePath);
     }),
   );

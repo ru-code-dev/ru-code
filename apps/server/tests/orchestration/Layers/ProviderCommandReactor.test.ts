@@ -61,6 +61,7 @@ import { ProjectionSnapshotQuery } from "../../../src/orchestration/Services/Pro
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../../../src/serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../../src/vcs/VcsStatusBroadcaster.ts";
+import { McpOverlay } from "../../../src/ru-fork/mcp/McpOverlay.ts";
 import {
   GitWorkflowService,
   type GitWorkflowServiceShape,
@@ -337,6 +338,22 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      // ru-fork: the reactor resolves a spawn-time MCP overlay; stub it so this
+      // provider-reactor test stays free of the MCP repo/secret graph.
+      Layer.provideMerge(
+        Layer.succeed(McpOverlay, {
+          writeOverlay: () =>
+            Effect.succeed({
+              overlayPath: "/tmp/mcp-test-overlay.json",
+              allowedServerNames: [],
+              fingerprint: "test-overlay",
+            }),
+          removeOverlay: () => Effect.void,
+          // ru-fork #4: the reactor now deletes the ephemeral overlay after each spawn.
+          deleteOverlayFile: () => Effect.void,
+          removeAllOverlays: Effect.void,
+        }),
+      ),
       Layer.provideMerge(
         Layer.mock(GitWorkflowService)({
           renameBranch,

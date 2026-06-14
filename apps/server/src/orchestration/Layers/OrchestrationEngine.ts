@@ -1,10 +1,11 @@
 import type {
+  McpCatalogAggregateId,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+import { MCP_CATALOG_AGGREGATE_ID, OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -30,6 +31,8 @@ import {
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
+import { ServerSecretStoreLive } from "../../auth/Layers/ServerSecretStore.ts";
 import {
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
@@ -56,13 +59,29 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "thread" | "mcp-catalog";
+  readonly aggregateId: ProjectId | ThreadId | McpCatalogAggregateId;
 } {
   switch (command.type) {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+      return {
+        aggregateKind: "project",
+        aggregateId: command.projectId,
+      };
+    // ru-fork: MCP catalog commands target the singleton catalog aggregate.
+    case "mcp.server-add":
+    case "mcp.server-update":
+    case "mcp.server-remove":
+    case "mcp.builtin-sync":
+      return {
+        aggregateKind: "mcp-catalog",
+        aggregateId: MCP_CATALOG_AGGREGATE_ID,
+      };
+    // ru-fork: MCP binding commands are project-scoped (cascade with project.deleted).
+    case "mcp.binding-set":
+    case "mcp.binding-remove":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
@@ -81,6 +100,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  // ru-fork: the decider splits MCP draft secrets into the secret store.
+  const serverSecretStore = yield* ServerSecretStore;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
@@ -151,7 +172,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
           readModel: commandReadModel,
-        });
+        }).pipe(Effect.provideService(ServerSecretStore, serverSecretStore));
         const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
         const committedCommand = yield* sql
           .withTransaction(
@@ -275,6 +296,22 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   error: error.message,
                 })
                 .pipe(Effect.catch(() => Effect.void));
+              // ru-fork: surface the rejection in the terminal too — DEBUG, because an invariant
+              // failure is an EXPECTED user-input rejection (e.g. a duplicate-config add), not a
+              // system fault. The same message also reaches the UI (cleaned) and the rejected receipt.
+              yield* Effect.logDebug("orchestration command rejected", {
+                commandType: envelope.command.type,
+                commandId: envelope.command.commandId,
+                detail: error.message,
+              });
+            } else {
+              // ru-fork: a genuine, blocking failure (SQL, projection, defect) — log FULL details as
+              // an ERROR; this is something significantly broken, not expected user input.
+              yield* Effect.logError("orchestration command failed", {
+                commandType: envelope.command.type,
+                commandId: envelope.command.commandId,
+                cause: Cause.pretty(exit.cause),
+              });
             }
           }
 
@@ -322,4 +359,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 export const OrchestrationEngineLive = Layer.effect(
   OrchestrationEngineService,
   makeOrchestrationEngine,
+).pipe(
+  // ru-fork: the decider splits MCP draft secrets; memoized → shared with auth.
+  Layer.provideMerge(ServerSecretStoreLive),
 );

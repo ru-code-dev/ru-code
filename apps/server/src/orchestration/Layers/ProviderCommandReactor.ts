@@ -41,6 +41,9 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 // `ru-fork-instrumental/changes/server-errors-handaling.md`.
 import { classify, UNRECOGNIZED_DECISION } from "../../ru-fork/cli-errors-handling/recognizers.ts";
 import { dispatchCause } from "../../ru-fork/cli-errors-handling/dispatch.ts";
+// ru-fork: per-project MCP overlay resolved at spawn (gated by the kill-switch).
+import { MCP_ENGINE_USE_OVERLAY } from "../../config.ts";
+import { McpOverlay } from "../../ru-fork/mcp/McpOverlay.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -88,6 +91,8 @@ const serverCommandId = (tag: string): CommandId =>
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
+const SESSION_OVERLAY_FINGERPRINT_MAX = 10_000;
+const SESSION_OVERLAY_FINGERPRINT_TTL = Duration.minutes(30);
 const DEFAULT_THREAD_TITLE = "Новый диалог";
 
 export function providerErrorLabel(value: string | undefined): string {
@@ -225,6 +230,16 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const mcpOverlay = yield* McpOverlay;
+  // ru-fork: per-thread MCP overlay fingerprint the live session spawned with. At turn-start we
+  // re-write the overlay and, if its fingerprint differs from what this thread's session spawned
+  // with, re-spawn (overlayChanged → restart on next turn, history preserved via resume). Bounded
+  // (capacity + TTL) so it can't grow unbounded; an evicted entry ⇒ a safe respawn on the next turn.
+  const sessionOverlayFingerprints = yield* Cache.make<string, string>({
+    capacity: SESSION_OVERLAY_FINGERPRINT_MAX,
+    timeToLive: SESSION_OVERLAY_FINGERPRINT_TTL,
+    lookup: () => Effect.succeed(""), // unused — access is via getOption + set (mirrors handledTurnStartKeys)
+  });
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -510,11 +525,26 @@ const make = Effect.gen(function* () {
       projects: project ? [project] : [],
     });
 
+    // ru-fork: write the per-project MCP overlay ONCE at turn-start (idempotent), so qwen sees the
+    // current servers + tool policy AND we can compare its fingerprint against what this thread's
+    // live session spawned with. Best-effort — an overlay failure must not block the turn.
+    const mcpOverlayResult = MCP_ENGINE_USE_OVERLAY
+      ? yield* mcpOverlay.writeOverlay(thread.projectId).pipe(
+          Effect.catch((cause) =>
+            Effect.logError("[mcp] overlay write failed — spawning without MCP overlay", {
+              threadId,
+              cause,
+            }).pipe(Effect.as(null)),
+          ),
+        )
+      : null;
+    const currentOverlayFingerprint = mcpOverlayResult?.fingerprint;
+
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
-    }) => {
-      return providerService.startSession(threadId, {
+    }) =>
+      providerService.startSession(threadId, {
         threadId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
@@ -522,8 +552,13 @@ const make = Effect.gen(function* () {
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
+        ...(mcpOverlayResult
+          ? {
+              settingsOverlayPath: mcpOverlayResult.overlayPath,
+              allowedMcpServers: mcpOverlayResult.allowedServerNames,
+            }
+          : {}),
       });
-    };
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -549,69 +584,103 @@ const make = Effect.gen(function* () {
           },
           createdAt,
         });
+        // ru-fork: record the overlay fingerprint this (re)spawn was based on, so the next turn's
+        // `overlayChanged` check compares against it.
+        if (currentOverlayFingerprint !== undefined) {
+          yield* Cache.set(sessionOverlayFingerprints, threadId, currentOverlayFingerprint);
+        }
       });
 
-    const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
-    if (existingSessionThreadId) {
-      // ru-fork: runtimeModeChanged removed from restart triggers — the
-      // adapter receives live runtimeMode on every sendTurn / respondToRequest
-      // input (see ProviderSendTurnInput / ProviderRespondToRequestInput),
-      // so dropdown changes no longer require a session restart. Restart still
-      // fires for cwd / provider-instance / model changes.
-      const cwdChanged = effectiveCwd !== activeSession?.cwd;
-      const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
-        .sessionModelSwitch;
-      const modelChanged =
-        requestedModelSelection !== undefined &&
-        requestedModelSelection.model !== activeSession?.model;
-      const instanceChanged =
-        requestedModelSelection !== undefined &&
-        activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
-      const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
+    // ru-fork #4: the spawn-decision region — respawn, reuse, or fresh spawn. The overlay
+    // file (plaintext secrets) is only needed until a freshly-spawned child boots and reads
+    // it; on a reuse turn nothing reads it at all. So the moment this region settles —
+    // success, a (now timeout-bounded) start failure, or interrupt — delete the file. The
+    // restart DECISION uses the in-memory fingerprint, never the file, so deleting it can't
+    // trigger a spurious respawn next turn (test G1).
+    const decideAndSpawn = Effect.gen(function* () {
+      const existingSessionThreadId =
+        thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
+      if (existingSessionThreadId) {
+        // ru-fork: runtimeModeChanged removed from restart triggers — the
+        // adapter receives live runtimeMode on every sendTurn / respondToRequest
+        // input (see ProviderSendTurnInput / ProviderRespondToRequestInput),
+        // so dropdown changes no longer require a session restart. Restart still
+        // fires for cwd / provider-instance / model changes.
+        const cwdChanged = effectiveCwd !== activeSession?.cwd;
+        const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
+          .sessionModelSwitch;
+        const modelChanged =
+          requestedModelSelection !== undefined &&
+          requestedModelSelection.model !== activeSession?.model;
+        const instanceChanged =
+          requestedModelSelection !== undefined &&
+          activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
+        const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
+        // ru-fork: the MCP overlay this thread's live session spawned with vs. the current one. A
+        // changed overlay (server edited / bound / unbound / extraArgs / tool policy) re-spawns on the
+        // next turn with resumeCursor — qwen only reads the overlay at spawn. The fingerprint subsumes
+        // the allow-list (removing an MCP changes it). Items 8 & 9 dissolve: a stale first spawn
+        // self-heals on the next turn.
+        const spawnFingerprint = Option.getOrUndefined(
+          yield* Cache.getOption(sessionOverlayFingerprints, threadId),
+        );
+        const overlayChanged =
+          currentOverlayFingerprint !== undefined && spawnFingerprint !== currentOverlayFingerprint;
 
-      if (!cwdChanged && !instanceChanged && !shouldRestartForModelChange) {
-        return existingSessionThreadId;
+        if (!cwdChanged && !instanceChanged && !shouldRestartForModelChange && !overlayChanged) {
+          return existingSessionThreadId;
+        }
+
+        const resumeCursor = shouldRestartForModelChange
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
+        yield* Effect.logInfo("provider command reactor restarting provider session", {
+          threadId,
+          existingSessionThreadId,
+          currentProvider: activeSession?.provider,
+          currentInstanceId,
+          desiredInstanceId,
+          desiredProvider: desiredModelSelection.instanceId,
+          currentRuntimeMode: activeSession?.runtimeMode,
+          desiredRuntimeMode: thread.runtimeMode,
+          previousCwd: activeSession?.cwd,
+          desiredCwd: effectiveCwd,
+          cwdChanged,
+          modelChanged,
+          instanceChanged,
+          shouldRestartForModelChange,
+          // ru-fork: the MCP overlay trigger — a changed overlay fingerprint re-spawns the session so qwen
+          // re-reads the overlay. Logged here so a restart caused by an MCP config change is visible.
+          overlayChanged,
+          spawnOverlayFingerprint: spawnFingerprint,
+          currentOverlayFingerprint,
+          hasResumeCursor: resumeCursor !== undefined,
+        });
+        const restartedSession = yield* startProviderSession(
+          resumeCursor !== undefined ? { resumeCursor } : undefined,
+        );
+        yield* Effect.logInfo("provider command reactor restarted provider session", {
+          threadId,
+          previousSessionId: existingSessionThreadId,
+          restartedSessionThreadId: restartedSession.threadId,
+          provider: restartedSession.provider,
+          runtimeMode: restartedSession.runtimeMode,
+          cwd: restartedSession.cwd,
+        });
+        yield* bindSessionToThread(restartedSession);
+        return restartedSession.threadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
-      yield* Effect.logInfo("provider command reactor restarting provider session", {
-        threadId,
-        existingSessionThreadId,
-        currentProvider: activeSession?.provider,
-        currentInstanceId,
-        desiredInstanceId,
-        desiredProvider: desiredModelSelection.instanceId,
-        currentRuntimeMode: activeSession?.runtimeMode,
-        desiredRuntimeMode: thread.runtimeMode,
-        previousCwd: activeSession?.cwd,
-        desiredCwd: effectiveCwd,
-        cwdChanged,
-        modelChanged,
-        instanceChanged,
-        shouldRestartForModelChange,
-        hasResumeCursor: resumeCursor !== undefined,
-      });
-      const restartedSession = yield* startProviderSession(
-        resumeCursor !== undefined ? { resumeCursor } : undefined,
-      );
-      yield* Effect.logInfo("provider command reactor restarted provider session", {
-        threadId,
-        previousSessionId: existingSessionThreadId,
-        restartedSessionThreadId: restartedSession.threadId,
-        provider: restartedSession.provider,
-        runtimeMode: restartedSession.runtimeMode,
-        cwd: restartedSession.cwd,
-      });
-      yield* bindSessionToThread(restartedSession);
-      return restartedSession.threadId;
-    }
+      const startedSession = yield* startProviderSession(undefined);
+      yield* bindSessionToThread(startedSession);
+      return startedSession.threadId;
+    });
 
-    const startedSession = yield* startProviderSession(undefined);
-    yield* bindSessionToThread(startedSession);
-    return startedSession.threadId;
+    return yield* (mcpOverlayResult === null
+      ? decideAndSpawn
+      : decideAndSpawn.pipe(
+          Effect.ensuring(mcpOverlay.deleteOverlayFile(mcpOverlayResult.overlayPath)),
+        ));
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {

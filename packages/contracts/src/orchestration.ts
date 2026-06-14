@@ -21,6 +21,23 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+// ru-fork: MCP command/event payload schemas.
+import {
+  McpBinding,
+  McpBindingPatch,
+  McpBindingRemovedPayload,
+  McpBindingSetPayload,
+  McpCatalogAggregateId,
+  McpCatalogServer,
+  McpServerAddedPayload,
+  McpServerConfig,
+  McpServerDraft,
+  McpServerDraftPatch,
+  McpServerId,
+  McpServerRemovedPayload,
+  McpServerUpdatedPayload,
+  McpServerVar,
+} from "./ru-fork/mcp.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -363,6 +380,11 @@ export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  // ru-fork: MCP catalog + bindings, folded in-memory so the decider can
+  // validate add/bind invariants (mirrors the SQL projections in ProjectionPipeline).
+  // Decoding defaults keep older snapshots (without these arrays) decodable.
+  mcpCatalog: Schema.Array(McpCatalogServer).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  mcpBindings: Schema.Array(McpBinding).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -650,6 +672,59 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ru-fork: MCP commands. Drafts/patches carry plaintext secrets inbound; the
+// decider splits them into ServerSecretStore and emits events with refs only.
+const McpServerAddCommand = Schema.Struct({
+  type: Schema.Literal("mcp.server-add"),
+  commandId: CommandId,
+  serverId: McpServerId,
+  draft: McpServerDraft,
+  createdAt: IsoDateTime,
+});
+const McpServerUpdateCommand = Schema.Struct({
+  type: Schema.Literal("mcp.server-update"),
+  commandId: CommandId,
+  serverId: McpServerId,
+  patch: McpServerDraftPatch,
+});
+const McpServerRemoveCommand = Schema.Struct({
+  type: Schema.Literal("mcp.server-remove"),
+  commandId: CommandId,
+  serverId: McpServerId,
+});
+const McpBindingSetCommand = Schema.Struct({
+  type: Schema.Literal("mcp.binding-set"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  serverId: McpServerId,
+  patch: McpBindingPatch,
+});
+const McpBindingRemoveCommand = Schema.Struct({
+  type: Schema.Literal("mcp.binding-remove"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  serverId: McpServerId,
+});
+// ru-fork: migrator → catalog. Reactor-dispatched only (internal — not client-forgeable): syncs a
+// managed built-in's shipped definition (platform-resolved, command LOCKED). shippedVars carry
+// origin:"shipped" with value:null for secrets (no plaintext shipped). The decider's branch builds
+// the full McpCatalogServer (3-way merge over any existing row) and emits the existing
+// mcp.server-added / mcp.server-updated event — no new event/projection.
+const McpBuiltinSyncCommand = Schema.Struct({
+  type: Schema.Literal("mcp.builtin-sync"),
+  commandId: CommandId,
+  serverId: McpServerId,
+  builtinId: TrimmedNonEmptyString,
+  builtinHash: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  description: Schema.NullOr(TrimmedNonEmptyString),
+  // ru-fork: shipped docs link (B3 ②) — wins over the probe-reported one; null when none shipped.
+  websiteUrl: Schema.NullOr(Schema.String),
+  config: McpServerConfig,
+  shippedVars: Schema.Array(McpServerVar),
+  timeoutMs: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))),
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -667,6 +742,11 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  McpServerAddCommand,
+  McpServerUpdateCommand,
+  McpServerRemoveCommand,
+  McpBindingSetCommand,
+  McpBindingRemoveCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -688,6 +768,11 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  McpServerAddCommand,
+  McpServerUpdateCommand,
+  McpServerRemoveCommand,
+  McpBindingSetCommand,
+  McpBindingRemoveCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -764,6 +849,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  McpBuiltinSyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -796,10 +882,15 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "mcp.server-added",
+  "mcp.server-updated",
+  "mcp.server-removed",
+  "mcp.binding-set",
+  "mcp.binding-removed",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "thread", "mcp-catalog"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -983,7 +1074,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId, McpCatalogAggregateId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -1101,6 +1192,33 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  // ru-fork: MCP catalog events (aggregate = mcp-catalog) + binding events
+  // (aggregate = project, so they cascade & order with project.deleted).
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("mcp.server-added"),
+    payload: McpServerAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("mcp.server-updated"),
+    payload: McpServerUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("mcp.server-removed"),
+    payload: McpServerRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("mcp.binding-set"),
+    payload: McpBindingSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("mcp.binding-removed"),
+    payload: McpBindingRemovedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

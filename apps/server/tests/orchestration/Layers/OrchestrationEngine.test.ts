@@ -210,6 +210,9 @@ describe("OrchestrationEngine", () => {
       Layer.provide(Layer.succeed(OrchestrationEventStore, eventStore)),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-fork: the engine's decider depends on ServerSecretStore (filesystem-backed).
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-engine-test-" })),
+      Layer.provideMerge(NodeServices.layer),
     );
 
     const runtime = ManagedRuntime.make(layer);
@@ -785,6 +788,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-engine-test-" })),
         Layer.provide(NodeServices.layer),
       ),
     );
@@ -928,6 +932,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-engine-test-" })),
         Layer.provide(NodeServices.layer),
       ),
     );

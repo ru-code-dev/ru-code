@@ -29,6 +29,7 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { DEFAULT_THEME_NAME, THEME_NAMES, THEME_NAME_LABELS, useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { useServerSettings } from "../../rpc/serverState";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   setDesktopUpdateStateQueryData,
@@ -49,6 +50,7 @@ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -385,6 +387,17 @@ export function GeneralSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const serverProviders = useServerProviders();
+  // ru-fork: MCP auto-recheck intervals (minutes; 0 = only the first probe).
+  const mcpSettings = useServerSettings().mcp;
+  const setMcpRecheckMinutes = (
+    field: "recheckLocalMinutes" | "recheckRemoteMinutes",
+    raw: string,
+  ) => {
+    const minutes = Number(raw);
+    if (Number.isFinite(minutes) && minutes >= 0) {
+      updateSettings({ mcp: { ...mcpSettings, [field]: Math.round(minutes) } });
+    }
+  };
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
@@ -411,6 +424,37 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection title="MCP-серверы">
+        <SettingsRow
+          title="Перепроверка локальных (мин)"
+          description="Как часто перепроверять статус локальных (stdio) MCP-серверов активного проекта. 0 — проверять только один раз."
+          control={
+            <Input
+              type="number"
+              min={0}
+              className="w-full sm:w-28"
+              aria-label="Интервал перепроверки локальных MCP (минуты)"
+              value={String(mcpSettings.recheckLocalMinutes)}
+              onChange={(event) => setMcpRecheckMinutes("recheckLocalMinutes", event.target.value)}
+            />
+          }
+        />
+        <SettingsRow
+          title="Перепроверка удалённых (мин)"
+          description="Как часто перепроверять статус удалённых (HTTP) MCP-серверов активного проекта. 0 — проверять только один раз."
+          control={
+            <Input
+              type="number"
+              min={0}
+              className="w-full sm:w-28"
+              aria-label="Интервал перепроверки удалённых MCP (минуты)"
+              value={String(mcpSettings.recheckRemoteMinutes)}
+              onChange={(event) => setMcpRecheckMinutes("recheckRemoteMinutes", event.target.value)}
+            />
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection title="Общие">
         <SettingsRow
           title="Тема"

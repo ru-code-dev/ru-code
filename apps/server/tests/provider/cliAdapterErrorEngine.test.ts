@@ -26,8 +26,10 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { CLI_NAME } from "@ru-fork/branding";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -122,14 +124,25 @@ afterEach(async () => {
   }
 });
 
-async function createHarness(script: FakeAcpScript) {
+async function createHarness(
+  script: FakeAcpScript,
+  opts?: { readonly sessionStartTimeoutMs?: number },
+) {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "t3-error-engine-"));
   tempDirs.push(workspaceRoot);
   fs.mkdirSync(path.join(workspaceRoot, ".git"));
 
   const adapterLayer = Layer.effect(
     FakeCliAdapter,
-    makeCliAdapter(CLI_SETTINGS, { instanceId: INSTANCE_ID }),
+    // ru-fork #4: opts.sessionStartTimeoutMs is passed through to the real adapter so a
+    // "hang" start trips the timeout in ms. Until the adapter wires the option it is
+    // ignored at runtime (the test then fails by hitting its own guard — TDD red).
+    makeCliAdapter(CLI_SETTINGS, {
+      instanceId: INSTANCE_ID,
+      ...(opts?.sessionStartTimeoutMs !== undefined
+        ? { sessionStartTimeoutMs: opts.sessionStartTimeoutMs }
+        : {}),
+    }),
   ).pipe(Layer.provide(fakeAcpSpawnerLayer(script)));
 
   const orchestrationLayer = OrchestrationEngineLive.pipe(
@@ -488,5 +501,46 @@ describe("cliAdapterErrorEngine", () => {
     expect(thread.session?.status).not.toBe("error");
     expect(assistantStreamingStuck(thread)).toBe(false);
     expect(errorActivity(thread)).toBeUndefined(); // not a failure
+  });
+
+  // ── Group 4: inner CLI start timeout (ru-fork #4) ──
+  // A wedged `cli --acp` boot must FAIL the start (so the reactor's overlay finalizer
+  // fires) instead of hanging forever. These drive the REAL adapter over the fake.
+
+  it("G7 — start handshake HANG → typed start error within the timeout (NOT a hang)", async () => {
+    const harness = await createHarness(
+      { onPrompt: (steps) => steps.respondOk(), startBehavior: "hang" },
+      { sessionStartTimeoutMs: 50 },
+    );
+    // Guard the call so red (no timeout wired) fails fast at 2s instead of hanging the suite.
+    const outcome = await Effect.runPromise(
+      startSession(harness.adapter, harness.workspaceRoot).pipe(
+        Effect.matchCause({
+          onFailure: (cause) => ({ kind: "failed" as const, message: Cause.pretty(cause) }),
+          onSuccess: () => ({ kind: "established" as const }),
+        }),
+        Effect.timeoutOrElse({
+          duration: Duration.millis(2000),
+          orElse: () => Effect.succeed({ kind: "guard-timeout" as const }),
+        }),
+      ),
+    );
+    // GREEN once the adapter wires the start timeout: a typed failure mentioning the
+    // unresponsive handshake. RED today: production never times out ⇒ "guard-timeout".
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toMatch(/start handshake|unresponsive/i);
+    }
+  });
+
+  it("G8 — start handshake ERROR settles as a typed failure (no hang)", async () => {
+    const harness = await createHarness({
+      onPrompt: (steps) => steps.respondOk(),
+      startBehavior: "error",
+    });
+    const exit = await Effect.runPromise(
+      Effect.exit(startSession(harness.adapter, harness.workspaceRoot)),
+    );
+    expect(Exit.isFailure(exit)).toBe(true); // a start RPC error must surface, not hang
   });
 });

@@ -29,6 +29,7 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -55,6 +56,7 @@ import {
   STOP_BUTTON_METHOD,
 } from "../../config.ts";
 import {
+  ACP_SESSION_START_TIMEOUT_MS,
   ACP_WIRE_STALL_KILL_MS,
   ACP_WIRE_STALL_WARN_MS,
   POST_ANSWER_RESUME_TIMEOUT_MS,
@@ -107,6 +109,12 @@ export interface CliAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly instanceId?: typeof ProviderInstanceId.Type;
+  /**
+   * ru-fork: override the ACP start-handshake timeout. Production omits it ⇒
+   * ACP_SESSION_START_TIMEOUT_MS. Tests pass a tiny value so a scripted hang at
+   * `session/new` trips the timeout without a real-time wait.
+   */
+  readonly sessionStartTimeoutMs?: number;
 }
 
 interface PendingApproval {
@@ -400,6 +408,9 @@ function parseCliResume(raw: unknown): { sessionId: string } | undefined {
 export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiveOptions) {
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make(CLI_NAME);
+    // ru-fork: bound the start handshake so a wedged `cli --acp` boot fails instead
+    // of hanging the turn forever (and, for MCP, promptly releases the ephemeral overlay).
+    const sessionStartTimeoutMs = options?.sessionStartTimeoutMs ?? ACP_SESSION_START_TIMEOUT_MS;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -665,6 +676,22 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
             stallWarned: false,
           };
 
+          // ru-fork: opaque spawn-time settings (MCP overlay path + server
+          // allowlist) resolved upstream by the reactor and forwarded verbatim.
+          // The adapter has no MCP knowledge — see CliAcpSettingsOverlay. Absent
+          // fields ⇒ today's spawn behaviour.
+          const settingsOverlay =
+            input.settingsOverlayPath !== undefined || input.allowedMcpServers !== undefined
+              ? {
+                  ...(input.settingsOverlayPath !== undefined
+                    ? { settingsOverlayPath: input.settingsOverlayPath }
+                    : {}),
+                  ...(input.allowedMcpServers !== undefined
+                    ? { allowedMcpServers: input.allowedMcpServers }
+                    : {}),
+                }
+              : undefined;
+
           const acp = yield* makeCliAcpRuntime({
             cliSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
@@ -672,6 +699,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
             // ru-fork: resolved cli.js — spawned as `node <cliJs> --acp` directly.
             cliJs: serverConfig.cliJs,
             cwd,
+            ...(settingsOverlay ? { settingsOverlay } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(resumeSessionId ? { resumeSessionId } : {}),
             protocolLogging: {
@@ -1068,6 +1096,32 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
             Effect.mapError((error) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
             ),
+            // ru-fork: hard ceiling on the start handshake. Nothing else bounds it
+            // (the stall/child-exit watchdogs are forked only AFTER start and act
+            // only during an active turn). On timeout the interrupt unwinds the
+            // pending `initialize`/`session.new` RPC and the session scope closes,
+            // SIGKILLing the child; we surface a typed adapter error so callers
+            // (and the reactor's overlay finalizer) see a settled failure.
+            Effect.timeoutOrElse({
+              duration: Duration.millis(sessionStartTimeoutMs),
+              orElse: () =>
+                Effect.logError("[cli-acp.start-timeout]", {
+                  threadId: input.threadId,
+                  method: "session/start",
+                  timeoutMs: sessionStartTimeoutMs,
+                }).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ProviderAdapterProcessError({
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        detail: `ACP session did not complete its start handshake within ${sessionStartTimeoutMs}ms — the cli --acp child is unresponsive.`,
+                        cause: new Error("acp-session-start-timeout"),
+                      }),
+                    ),
+                  ),
+                ),
+            }),
           );
 
           const resumeOutcome: "fresh" | "resumed" | "resume-fallback-fresh" =

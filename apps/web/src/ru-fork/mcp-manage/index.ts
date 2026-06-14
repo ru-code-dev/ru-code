@@ -1,13 +1,15 @@
 /**
  * MCP Manager (ru-fork) — public surface.
  *
- * Demo feature for browsing a catalog of MCP servers and enabling them per project.
- * Fake-data only. Design rationale + wiring notes live in
- * ru-fork-instrumental/changes/mcp/ (DESIGN.md, README.md).
+ * Browse the MCP catalog and enable servers per project. Backed by real,
+ * persistent server state: reads via the `mcp` RPC atoms (rpc/mcpState) + the
+ * app's projects, mutations via the mcp.* orchestration commands (see ./useMcp).
+ * Design rationale + wiring notes live in ru-fork-instrumental/changes/mcp/.
  */
 
 export { McpPanel } from "./components/McpPanel";
 export { McpPanelInlineSidebar } from "./components/McpPanelInlineSidebar";
+export { McpPanelMount } from "./components/McpPanelMount";
 export {
   isToolEnabled,
   selectProjectBindings,

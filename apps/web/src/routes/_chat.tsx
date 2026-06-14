@@ -14,6 +14,27 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "~/rpc/serverState";
+import { useActiveProjectRef } from "~/hooks/useActiveProject";
+import { McpPanelMount } from "../ru-fork/mcp-manage";
+import { getPrimaryEnvironmentConnection } from "../environments/runtime";
+import { getPrimaryKnownEnvironment } from "../environments/primary";
+
+// ru-fork: tell the server which project the user is viewing so the MCP
+// supervisor scopes auto-probing to it (no probe spam for unwatched projects).
+function McpActiveProjectSync() {
+  const activeProjectId = useActiveProjectRef();
+
+  useEffect(() => {
+    if (!getPrimaryKnownEnvironment()) {
+      return;
+    }
+    void getPrimaryEnvironmentConnection()
+      .client.mcp.setActiveProject({ projectId: activeProjectId })
+      .catch(() => undefined);
+  }, [activeProjectId]);
+
+  return null;
+}
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -101,7 +122,11 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
+      <McpActiveProjectSync />
       <Outlet />
+      {/* ru-fork: single MCP panel mount for all chat routes (draft + thread) —
+          hoisted here so it never remounts on navigation. */}
+      <McpPanelMount />
     </>
   );
 }

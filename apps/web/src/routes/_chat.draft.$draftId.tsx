@@ -69,6 +69,8 @@ function DraftChatThreadRouteView() {
     return null;
   }
 
+  // The MCP panel is mounted once in the _chat layout (McpPanelMount), so it is
+  // available here on drafts too without a per-route mount.
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
       <ChatView

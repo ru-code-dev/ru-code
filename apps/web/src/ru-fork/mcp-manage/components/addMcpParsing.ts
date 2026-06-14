@@ -3,22 +3,7 @@
  * fiddly string→config logic stays testable and the JSX stays readable.
  */
 
-import type { McpServerConfig } from "../types";
-
-/** Parse `KEY=value` lines into a record. Blank lines and lines without `=` are ignored. */
-export function parseEnvLines(text: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.trim();
-    if (line.length === 0) continue;
-    const separator = line.indexOf("=");
-    if (separator <= 0) continue;
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    if (key.length > 0) result[key] = value;
-  }
-  return result;
-}
+import type { McpServerConfig, McpVar } from "../types";
 
 /** Parse `Key: value` lines into a record. Blank lines and lines without `:` are ignored. */
 export function parseHeaderLines(text: string): Record<string, string> {
@@ -36,7 +21,7 @@ export function parseHeaderLines(text: string): Record<string, string> {
 }
 
 export type AdvancedJsonResult =
-  | { ok: true; config: McpServerConfig }
+  | { ok: true; config: McpServerConfig; vars: McpVar[]; timeoutMs?: number }
   | { ok: false; error: string };
 
 function asStringRecord(value: unknown): Record<string, string> {
@@ -48,9 +33,30 @@ function asStringRecord(value: unknown): Record<string, string> {
   return result;
 }
 
+/** A pasted `env` block becomes plain vars — the standard MCP `env` maps onto our var model. */
+function envToVars(env: Record<string, string>): McpVar[] {
+  return Object.entries(env).map(([name, value]) => ({
+    name,
+    value,
+    secret: false,
+    perProject: false,
+    required: false,
+    hasStoredSecret: false,
+    origin: "user",
+    valueLocked: false,
+  }));
+}
+
+function asTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 1000
+    ? Math.round(value)
+    : undefined;
+}
+
 /**
- * Parse a raw MCP server JSON blob into a {@link McpServerConfig}. Accepts the two shapes the
- * product targets: `{command,args,env}` (stdio) or `{httpUrl,headers}` (streamable HTTP).
+ * Parse a raw MCP server JSON blob into a template {@link McpServerConfig} + vars. Accepts
+ * the two shapes the product targets: `{command,args,env}` (stdio, env → vars) or
+ * `{httpUrl,headers}` (streamable HTTP). An optional `timeout`/`timeoutMs` is carried out.
  */
 export function parseAdvancedJson(text: string): AdvancedJsonResult {
   let parsed: unknown;
@@ -63,15 +69,15 @@ export function parseAdvancedJson(text: string): AdvancedJsonResult {
     return { ok: false, error: "Ожидается JSON-объект." };
   }
   const record = parsed as Record<string, unknown>;
+  const timeoutMs = asTimeoutMs(record["timeoutMs"] ?? record["timeout"]);
+  const withTimeout = timeoutMs !== undefined ? { timeoutMs } : {};
 
   if (typeof record["httpUrl"] === "string") {
     return {
       ok: true,
-      config: {
-        transport: "http",
-        httpUrl: record["httpUrl"],
-        headers: asStringRecord(record["headers"]),
-      },
+      config: { transport: "http", httpUrl: record["httpUrl"], headers: asStringRecord(record["headers"]) },
+      vars: [],
+      ...withTimeout,
     };
   }
 
@@ -81,12 +87,9 @@ export function parseAdvancedJson(text: string): AdvancedJsonResult {
       : [];
     return {
       ok: true,
-      config: {
-        transport: "stdio",
-        command: record["command"],
-        args,
-        env: asStringRecord(record["env"]),
-      },
+      config: { transport: "stdio", command: record["command"], args },
+      vars: envToVars(asStringRecord(record["env"])),
+      ...withTimeout,
     };
   }
 

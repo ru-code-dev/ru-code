@@ -83,6 +83,15 @@ import {
 // ru-fork: skill + subagent contracts live under ./ru-fork/.
 import { ServerProviderSkill } from "./ru-fork/skills.ts";
 import { ServerProviderSubagent } from "./ru-fork/subagents.ts";
+import {
+  McpError,
+  McpProjectionStreamEvent,
+  McpRuntimeStreamEvent,
+  McpServerId,
+  McpSnapshot,
+  McpTransport,
+} from "./ru-fork/mcp.ts";
+import { ProjectId } from "./baseSchemas.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   SourceControlCloneRepositoryInput,
@@ -160,6 +169,13 @@ export const WS_METHODS = {
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
+
+  // ru-fork: MCP management (reads + subscriptions; mutations via dispatchCommand)
+  mcpGetSnapshot: "mcp.getSnapshot",
+  mcpSetActiveProject: "mcp.setActiveProject",
+  mcpRecheck: "mcp.recheck",
+  subscribeMcpProjection: "subscribeMcpProjection",
+  subscribeMcpRuntime: "subscribeMcpRuntime",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -471,6 +487,45 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
   stream: true,
 });
 
+// ru-fork: MCP reads + subscriptions. Mutations reuse orchestration.dispatchCommand.
+export const WsMcpGetSnapshotRpc = Rpc.make(WS_METHODS.mcpGetSnapshot, {
+  payload: Schema.Struct({ projectId: Schema.NullOr(ProjectId) }),
+  success: McpSnapshot,
+  error: McpError,
+});
+// Tells the server which project the client is viewing, so monitoring is scoped
+// to it (null ⇒ none). Fire-and-forget.
+export const WsMcpSetActiveProjectRpc = Rpc.make(WS_METHODS.mcpSetActiveProject, {
+  payload: Schema.Struct({ projectId: Schema.NullOr(ProjectId) }),
+  success: Schema.Void,
+  error: McpError,
+});
+// Force a probe NOW of the matching live instances (manual "Проверить" / refresh).
+// All payload fields optional + AND-combined: {serverId} rechecks a catalog server
+// across projects; {projectId} rechecks a whole project; {projectId,serverId} one
+// binding. Fire-and-forget — results arrive over the runtime subscription.
+export const WsMcpRecheckRpc = Rpc.make(WS_METHODS.mcpRecheck, {
+  payload: Schema.Struct({
+    projectId: Schema.optional(ProjectId),
+    serverId: Schema.optional(McpServerId),
+    transport: Schema.optional(McpTransport),
+  }),
+  success: Schema.Void,
+  error: McpError,
+});
+export const WsSubscribeMcpProjectionRpc = Rpc.make(WS_METHODS.subscribeMcpProjection, {
+  payload: Schema.Struct({}),
+  success: McpProjectionStreamEvent,
+  error: McpError,
+  stream: true,
+});
+export const WsSubscribeMcpRuntimeRpc = Rpc.make(WS_METHODS.subscribeMcpRuntime, {
+  payload: Schema.Struct({}),
+  success: McpRuntimeStreamEvent,
+  error: McpError,
+  stream: true,
+});
+
 export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
   payload: Schema.Struct({}),
   success: ServerLifecycleStreamEvent,
@@ -534,4 +589,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+  WsMcpGetSnapshotRpc,
+  WsMcpSetActiveProjectRpc,
+  WsMcpRecheckRpc,
+  WsSubscribeMcpProjectionRpc,
+  WsSubscribeMcpRuntimeRpc,
 );

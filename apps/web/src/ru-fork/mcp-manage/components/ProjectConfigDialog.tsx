@@ -1,5 +1,4 @@
 import { type ReactElement, useState } from "react";
-import { RotateCcwIcon } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -11,15 +10,34 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "~/components/ui/dialog";
-import { effectiveBindingConfig, useMcpManagerStore } from "../store";
-import type { McpProjectBinding, McpRegistryServer } from "../types";
-import { ServerConfigFields } from "./ServerConfigFields";
-import { configFromDraft, draftFromConfig, type ServerConfigDraft } from "./serverConfigForm";
+import { Label } from "~/components/ui/label";
+import { useMcpMutations } from "../useMcp";
+import type { McpProjectBinding, McpRegistryServer, McpVar } from "../types";
+import { SecretAwareInput } from "./SecretAwareInput";
+import { TimeoutField } from "./TimeoutField";
+import { parseTimeout, timeoutTextFromMs } from "./serverConfigForm";
+
+/** The per-project holes the catalog opened for this server (name read-only, value editable). */
+function perProjectVars(server: McpRegistryServer): readonly McpVar[] {
+  return server.vars.filter((variable) => variable.perProject);
+}
+
+/** Initial input values for the holes, prefilled from the binding (secrets read back masked). */
+function initialValues(
+  vars: readonly McpVar[],
+  binding: McpProjectBinding,
+): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const variable of vars) {
+    values[variable.name] = binding.varValues[variable.name] ?? "";
+  }
+  return values;
+}
 
 /**
- * Configure a server *for one project*. Pre-filled from the binding's effective config
- * (override or catalog default). Saving stores a per-project override; "reset" reverts to
- * the catalog default so the binding tracks the server again.
+ * Configure a server *for one project*. Identity is locked by the catalog — this dialog only
+ * fills the per-project holes (`[для проекта]` vars) and the timeout override. Empty ⇒ inherit
+ * the catalog value. Saving replaces the binding's per-project values.
  */
 export function ProjectConfigDialog({
   trigger,
@@ -30,30 +48,51 @@ export function ProjectConfigDialog({
   server: McpRegistryServer;
   binding: McpProjectBinding;
 }) {
-  const setBindingConfig = useMcpManagerStore((state) => state.setBindingConfig);
-  const hasOverride = binding.configOverride !== undefined;
+  const { setProjectBinding } = useMcpMutations();
+  const vars = perProjectVars(server);
 
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<ServerConfigDraft>(() =>
-    draftFromConfig(effectiveBindingConfig(binding, server)),
-  );
+  const [values, setValues] = useState<Record<string, string>>(() => initialValues(vars, binding));
+  const [timeoutText, setTimeoutText] = useState(timeoutTextFromMs(binding.timeoutMs));
   const [error, setError] = useState<string | null>(null);
+  const storedSecretNames = new Set(binding.secretVarNames);
+
+  function resync() {
+    setValues(initialValues(vars, binding));
+    setTimeoutText(timeoutTextFromMs(binding.timeoutMs));
+    setError(null);
+  }
 
   function handleSave() {
     setError(null);
-    const result = configFromDraft(draft);
-    if (!result.ok) {
-      setError(result.error);
+    const timeout = parseTimeout(timeoutText);
+    if (!timeout.ok) {
+      setError(timeout.error);
       return;
     }
-    setBindingConfig(server.id, binding.projectId, result.config);
-    setOpen(false);
-  }
-
-  function handleReset() {
-    setBindingConfig(server.id, binding.projectId, null);
-    setDraft(draftFromConfig(server.config));
-    setOpen(false);
+    // Empty fields are omitted → the binding inherits the catalog value for that hole.
+    const varValues: Record<string, string> = {};
+    const keepVarValues: string[] = [];
+    for (const variable of vars) {
+      const value = (values[variable.name] ?? "").trim();
+      if (value.length > 0) {
+        varValues[variable.name] = value;
+      } else if (variable.secret && storedSecretNames.has(variable.name)) {
+        // Masked secret left blank ⇒ preserve the stored per-project ref instead of clearing it.
+        keepVarValues.push(variable.name);
+      }
+    }
+    // ru-fork #5: a save rejection is shown as a readable TOAST by the mutation; keep the dialog open
+    // (blocked) and close only on success.
+    void setProjectBinding(server.id, binding.projectId, {
+      varValues,
+      keepVarValues,
+      timeoutMs: timeout.timeoutMs ?? null,
+    })
+      .then(() => {
+        setOpen(false);
+      })
+      .catch(() => undefined);
   }
 
   return (
@@ -62,9 +101,7 @@ export function ProjectConfigDialog({
       onOpenChange={(next) => {
         setOpen(next);
         if (next) {
-          // Re-sync the draft each time the dialog opens (override may have changed).
-          setDraft(draftFromConfig(effectiveBindingConfig(binding, server)));
-          setError(null);
+          resync(); // re-sync each time the dialog opens (binding may have changed)
         }
       }}
     >
@@ -73,36 +110,65 @@ export function ProjectConfigDialog({
         <DialogHeader>
           <DialogTitle>Настройка «{server.name}» для проекта</DialogTitle>
           <DialogDescription>
-            Эти параметры действуют только в этом проекте и не меняют сервер в каталоге.
+            Эти параметры действуют только в этом проекте. Сам сервер берётся из каталога и не
+            меняется.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <div className="space-y-4">
-            {hasOverride && (
-              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300/90">
-                Для этого проекта задана своя конфигурация — она отличается от каталога.
+            {vars.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                У этого сервера нет переменных для настройки в проекте.
               </p>
+            ) : (
+              <div className="space-y-3">
+                {vars.map((variable) => {
+                  const hasDefault = !variable.secret && variable.value.length > 0;
+                  return (
+                    <div key={variable.name}>
+                      <Label htmlFor={`mcp-proj-${variable.name}`} className="font-mono">
+                        {variable.name}
+                        {variable.required && <span className="ml-0.5 text-destructive">*</span>}
+                      </Label>
+                      <SecretAwareInput
+                        id={`mcp-proj-${variable.name}`}
+                        value={values[variable.name] ?? ""}
+                        secret={variable.secret}
+                        hasStoredSecret={storedSecretNames.has(variable.name)}
+                        invalid={binding.missingVars.includes(variable.name)}
+                        onChange={(next) =>
+                          setValues((prev) => ({ ...prev, [variable.name]: next }))
+                        }
+                        placeholder={
+                          variable.secret
+                            ? "значение секрета"
+                            : hasDefault
+                              ? `по умолчанию: ${variable.value}`
+                              : "значение"
+                        }
+                        className="mt-1.5"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            <ServerConfigFields value={draft} onChange={setDraft} idPrefix="mcp-proj" />
+
+            <TimeoutField
+              value={timeoutText}
+              onChange={setTimeoutText}
+              idPrefix="mcp-proj"
+              caption={<>Пусто — берётся таймаут из каталога.</>}
+            />
+
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
         </DialogPanel>
-        <DialogFooter className="sm:justify-between">
-          <Button
-            variant="ghost"
-            onClick={handleReset}
-            disabled={!hasOverride}
-            title={hasOverride ? "Вернуть конфигурацию из каталога" : "Сейчас используется каталог"}
-          >
-            <RotateCcwIcon className="size-4" />
-            Сбросить к умолчанию
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Отмена
           </Button>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={handleSave}>Сохранить</Button>
-          </div>
+          <Button onClick={handleSave}>Сохранить</Button>
         </DialogFooter>
       </DialogPopup>
     </Dialog>

@@ -93,6 +93,12 @@ import {
 } from "./ru-fork/mcp.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
+// ru-fork: advanced chat mode — transcript subscription.
+import {
+  TRANSCRIPT_WS_METHOD,
+  TranscriptRpcSchemas,
+  TranscriptSubscribeError,
+} from "./ru-fork/transcript.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -474,6 +480,14 @@ export const WsOrchestrationSubscribeThreadRpc = Rpc.make(
   },
 );
 
+// ru-fork: advanced chat mode — stream normalized qwen transcript records.
+export const WsOrchestrationSubscribeTranscriptRpc = Rpc.make(TRANSCRIPT_WS_METHOD, {
+  payload: TranscriptRpcSchemas.subscribeTranscript.input,
+  success: TranscriptRpcSchemas.subscribeTranscript.output,
+  error: TranscriptSubscribeError,
+  stream: true,
+});
+
 export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTerminalEvents, {
   payload: Schema.Struct({}),
   success: TerminalEvent,
@@ -594,4 +608,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsMcpRecheckRpc,
   WsSubscribeMcpProjectionRpc,
   WsSubscribeMcpRuntimeRpc,
+  // ru-fork: advanced chat mode.
+  WsOrchestrationSubscribeTranscriptRpc,
 );

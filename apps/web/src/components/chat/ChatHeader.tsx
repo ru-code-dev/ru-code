@@ -9,7 +9,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
-import { BoxesIcon, DiffIcon, TerminalSquareIcon } from "lucide-react";
+import { BoxesIcon, DiffIcon, SparklesIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -37,6 +37,9 @@ interface ChatHeaderProps {
   gitCwd: string | null;
   diffOpen: boolean;
   mcpPanelOpen: boolean;
+  // ru-fork: advanced chat mode (qwen transcript view) toggle.
+  advancedChatOpen: boolean;
+  onToggleAdvancedChat: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -65,6 +68,8 @@ export const ChatHeader = memo(function ChatHeader({
   gitCwd,
   diffOpen,
   mcpPanelOpen,
+  advancedChatOpen,
+  onToggleAdvancedChat,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -188,6 +193,24 @@ export const ChatHeader = memo(function ChatHeader({
             }
           />
           <TooltipPopup side="bottom">Показать/скрыть панель MCP-серверов</TooltipPopup>
+        </Tooltip>
+        {/* ru-fork: advanced chat mode — render the CLI transcript view. */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0"
+                pressed={advancedChatOpen}
+                onPressedChange={onToggleAdvancedChat}
+                aria-label="Toggle advanced chat view"
+                variant="outline"
+                size="xs"
+              >
+                <SparklesIcon className="size-3" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">Расширенный чат (стенограмма CLI)</TooltipPopup>
         </Tooltip>
       </div>
     </div>

@@ -155,6 +155,10 @@ import { flattenSubagentBuckets } from "../ru-fork/subagents/composerIntegration
 // command outside its ACP allowlist (otherwise -32603 "Internal error" crash).
 import { applyUnknownSlashCommandStripToComposer } from "../ru-fork/unsupported-slash-commands/applyUnknownSlashCommandStripToComposer";
 import { ChatHeader } from "./chat/ChatHeader";
+// ru-fork: advanced chat mode (qwen CLI transcript view).
+import { AdvancedMessagesTimeline } from "~/ru-fork/advanced-chat/AdvancedMessagesTimeline";
+import { useAdvancedChatMode } from "~/ru-fork/advanced-chat/advancedChatMode";
+import { useTranscriptSubscription } from "~/ru-fork/advanced-chat/useTranscriptSubscription";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -1536,6 +1540,18 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  // ru-fork: advanced chat mode — render qwen's CLI transcript instead of the
+  // projection timeline. Per-thread toggle; transcript streamed read-only.
+  const advancedChatModeByThread = useAdvancedChatMode((state) => state.byThread);
+  const toggleAdvancedChatMode = useAdvancedChatMode((state) => state.toggle);
+  const advancedChatOpen = activeThread
+    ? Boolean(advancedChatModeByThread[activeThread.id])
+    : false;
+  const transcriptRecords = useTranscriptSubscription(
+    activeThread?.environmentId,
+    activeThread?.id,
+    advancedChatOpen,
+  );
   const activeTerminalLaunchContext =
     terminalLaunchContext?.threadId === activeThreadId
       ? terminalLaunchContext
@@ -1604,7 +1620,15 @@ export default function ChatView(props: ChatViewProps) {
         return diffOpen ? { ...rest, diff: undefined } : { ...rest, diff: "1" };
       },
     });
-  }, [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, setMcpPanelOpen, threadId]);
+  }, [
+    diffOpen,
+    environmentId,
+    isServerThread,
+    navigate,
+    onDiffPanelOpen,
+    setMcpPanelOpen,
+    threadId,
+  ]);
 
   const onToggleMcp = useCallback(() => {
     const next = !mcpPanelOpen;
@@ -3611,6 +3635,10 @@ export default function ChatView(props: ChatViewProps) {
           gitCwd={gitCwd}
           diffOpen={diffOpen}
           mcpPanelOpen={mcpPanelOpen}
+          advancedChatOpen={advancedChatOpen}
+          onToggleAdvancedChat={() => {
+            if (activeThread) toggleAdvancedChatMode(activeThread.id);
+          }}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
@@ -3633,36 +3661,48 @@ export default function ChatView(props: ChatViewProps) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
           <div className="relative flex min-h-0 flex-1 flex-col">
-            {/* Messages — LegendList handles virtualization and scrolling internally */}
-            <MessagesTimeline
-              key={activeThread.id}
-              isWorking={isWorking}
-              activeTurnInProgress={isWorking || !latestTurnSettled}
-              activeTurnId={activeLatestTurn?.turnId ?? null}
-              activeTurnStartedAt={activeWorkStartedAt}
-              listRef={legendListRef}
-              timelineEntries={timelineEntries}
-              completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-              completionSummary={completionSummary}
-              turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-              activeThreadEnvironmentId={activeThread.environmentId}
-              routeThreadKey={routeThreadKey}
-              onOpenTurnDiff={onOpenTurnDiff}
-              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-              onRevertUserMessage={onRevertUserMessage}
-              isRevertingCheckpoint={isRevertingCheckpoint}
-              onImageExpand={onExpandTimelineImage}
-              markdownCwd={gitCwd ?? undefined}
-              resolvedTheme={resolvedTheme}
-              timestampFormat={timestampFormat}
-              workspaceRoot={activeWorkspaceRoot}
-              skills={cwdSkillsFlat /* ru-fork: from filesystem scanner */}
-              subagents={cwdSubagentsFlat /* ru-fork: from filesystem scanner */}
-              onIsAtEndChange={onIsAtEndChange}
-            />
+            {/* ru-fork: advanced chat mode swaps the projection timeline for the
+                read-only qwen CLI transcript view; composer/approvals stay live. */}
+            {advancedChatOpen ? (
+              <AdvancedMessagesTimeline
+                key={`advanced-${activeThread.id}`}
+                records={transcriptRecords}
+                markdownCwd={gitCwd ?? undefined}
+              />
+            ) : (
+              <>
+                {/* Messages — LegendList handles virtualization and scrolling internally */}
+                <MessagesTimeline
+                  key={activeThread.id}
+                  isWorking={isWorking}
+                  activeTurnInProgress={isWorking || !latestTurnSettled}
+                  activeTurnId={activeLatestTurn?.turnId ?? null}
+                  activeTurnStartedAt={activeWorkStartedAt}
+                  listRef={legendListRef}
+                  timelineEntries={timelineEntries}
+                  completionDividerBeforeEntryId={completionDividerBeforeEntryId}
+                  completionSummary={completionSummary}
+                  turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                  activeThreadEnvironmentId={activeThread.environmentId}
+                  routeThreadKey={routeThreadKey}
+                  onOpenTurnDiff={onOpenTurnDiff}
+                  revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                  onRevertUserMessage={onRevertUserMessage}
+                  isRevertingCheckpoint={isRevertingCheckpoint}
+                  onImageExpand={onExpandTimelineImage}
+                  markdownCwd={gitCwd ?? undefined}
+                  resolvedTheme={resolvedTheme}
+                  timestampFormat={timestampFormat}
+                  workspaceRoot={activeWorkspaceRoot}
+                  skills={cwdSkillsFlat /* ru-fork: from filesystem scanner */}
+                  subagents={cwdSubagentsFlat /* ru-fork: from filesystem scanner */}
+                  onIsAtEndChange={onIsAtEndChange}
+                />
+              </>
+            )}
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
-            {showScrollToBottom && (
+            {!advancedChatOpen && showScrollToBottom && (
               <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
                 <button
                   type="button"

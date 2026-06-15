@@ -11,6 +11,7 @@ import {
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+import { PixsoNavGroup } from "../ru-fork/pixso-move";
 import {
   ChangeRequestStatusIcon,
   prStatusIndicator,
@@ -2657,6 +2658,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarGroup>
+      <PixsoNavGroup />
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
         <SidebarGroup className="px-2 pt-2 pb-0">
           <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">

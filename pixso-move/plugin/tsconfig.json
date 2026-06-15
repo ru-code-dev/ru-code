@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "plugins": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "paths": { "~/*": ["./src/ui/*"] }
+  },
+  "include": ["src", "tests", "vite.code.config.ts", "vite.ui.config.ts"]
+}

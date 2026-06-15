@@ -16,6 +16,8 @@ export * from "./ru-fork/skills.ts";
 export * from "./ru-fork/subagents.ts";
 export * from "./ru-fork/terminalErrors.ts";
 export * from "./ru-fork/mcp.ts";
+// ru-fork: advanced chat mode — normalized qwen transcript contract.
+export * from "./ru-fork/transcript.ts";
 export * from "./settings.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";

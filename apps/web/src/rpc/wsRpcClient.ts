@@ -7,6 +7,7 @@ import {
   type LocalApi,
   ORCHESTRATION_WS_METHODS,
   type ServerSettingsPatch,
+  TRANSCRIPT_WS_METHOD,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
@@ -150,6 +151,8 @@ export interface WsRpcClient {
     >;
     readonly subscribeShell: RpcStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeShell>;
     readonly subscribeThread: RpcInputStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeThread>;
+    // ru-fork: advanced chat mode — qwen transcript stream.
+    readonly subscribeTranscript: RpcInputStreamMethod<typeof TRANSCRIPT_WS_METHOD>;
   };
   // ru-fork: MCP catalog/bindings reads + runtime status. Mutations go through
   // `orchestration.dispatchCommand` (the 5 mcp.* commands).
@@ -317,6 +320,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           listener,
           { ...options, tag: ORCHESTRATION_WS_METHODS.subscribeThread },
         ),
+      // ru-fork: advanced chat mode — qwen transcript stream.
+      subscribeTranscript: (input, listener, options) =>
+        transport.subscribe((client) => client[TRANSCRIPT_WS_METHOD](input), listener, {
+          ...options,
+          tag: TRANSCRIPT_WS_METHOD,
+        }),
     },
     mcp: {
       getSnapshot: (input) =>

@@ -30,6 +30,7 @@ import {
   FilesystemBrowseError,
   ThreadId,
   type TerminalEvent,
+  TRANSCRIPT_WS_METHOD,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -49,6 +50,9 @@ import { McpProjectionQuery } from "./ru-fork/mcp/McpProjectionQuery.ts";
 import { McpRuntime } from "./ru-fork/mcp/McpRuntime.ts";
 import { McpSupervisor } from "./ru-fork/mcp/McpSupervisor.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+// ru-fork: advanced chat mode — qwen transcript stream service.
+import { QwenTranscriptService } from "./ru-fork/qwen-transcript/QwenTranscriptService.ts";
+import { QwenTranscriptLive } from "./ru-fork/qwen-transcript/QwenTranscriptLive.ts";
 // ru-fork: telemetry/observability (spans + metrics) was removed, and the
 // per-RPC FAILURE CAPTURE that lived in this wrapper went with it — so every
 // RPC failed silently server-side. These wrappers restore just the failure
@@ -194,6 +198,8 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+      // ru-fork: advanced chat mode — read-only qwen transcript feed.
+      const qwenTranscript = yield* QwenTranscriptService;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const keybindings = yield* Keybindings;
@@ -886,6 +892,13 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             }),
             { "rpc.aggregate": "orchestration" },
           ),
+        // ru-fork: advanced chat mode — stream the qwen JSONL transcript.
+        [TRANSCRIPT_WS_METHOD]: (input) =>
+          observeRpcStream(
+            TRANSCRIPT_WS_METHOD,
+            qwenTranscript.subscribe(input.threadId),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
@@ -1345,6 +1358,10 @@ export const websocketRpcRouteLayer = prefixedRouteLayer(
       Effect.provide(
         makeWsRpcLayer(session.sessionId).pipe(
           Layer.provideMerge(RpcSerialization.layerJson),
+          // ru-fork: advanced chat mode — deps (ProjectionSnapshotQuery,
+          // ProviderSessionDirectory, ServerConfig, FileSystem) come from the
+          // outer runtime context this route is provided within.
+          Layer.provide(QwenTranscriptLive),
           Layer.provide(ProviderMaintenanceRunner.layer),
           Layer.provide(
             SourceControlDiscoveryLayer.layer.pipe(

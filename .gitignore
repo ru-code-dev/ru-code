@@ -7,6 +7,8 @@ node_modules
 apps/*/dist
 .astro
 packages/*/dist
+# all build output, any package depth (e.g. pixso-move/*/dist)
+dist/
 .env
 .env.local
 build/

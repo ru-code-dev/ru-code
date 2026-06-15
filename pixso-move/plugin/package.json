@@ -1,0 +1,36 @@
+{
+  "name": "@pixso-move/plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm build:code && pnpm build:ui",
+    "build:code": "vite build --config vite.code.config.ts",
+    "build:ui": "vite build --config vite.ui.config.ts",
+    "dev": "vite --config vite.ui.config.ts --open",
+    "watch:code": "vite build --config vite.code.config.ts --watch",
+    "watch:ui": "vite build --config vite.ui.config.ts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:fast": "vitest run"
+  },
+  "dependencies": {
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "@base-ui/react": "1.4.1",
+    "class-variance-authority": "0.7.1",
+    "tailwind-merge": "3.4.0",
+    "lucide-react": "0.564.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "vite": "8.0.10",
+    "@vitejs/plugin-react": "6.0.1",
+    "tailwindcss": "4.2.4",
+    "@tailwindcss/vite": "4.2.4",
+    "vite-plugin-singlefile": "2.3.3",
+    "vitest": "catalog:",
+    "typescript": "catalog:"
+  }
+}

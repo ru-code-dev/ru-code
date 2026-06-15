@@ -1,0 +1,28 @@
+{
+  "name": "@pixso-move/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "pixso-move-server": "./dist/bin.mjs" },
+  "scripts": {
+    "dev": "node --watch src/bin.ts start",
+    "build": "tsdown",
+    "start": "node dist/bin.mjs start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --coverage",
+    "test:fast": "vitest run"
+  },
+  "dependencies": {
+    "@pixso-move/contracts": "workspace:*",
+    "@pixso-move/processor": "workspace:*",
+    "effect": "catalog:",
+    "@effect/platform-node": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "tsdown": "catalog:"
+  }
+}

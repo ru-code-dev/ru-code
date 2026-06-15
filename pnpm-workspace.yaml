@@ -4,6 +4,7 @@ packages:
   - "oxlint-plugin-t3code"
   - "scripts"
   - "mcp-probe"
+  - "pixso-move/*"
 
 catalog:
   # MCP client SDK — used by the probe now and the server-side MCP supervisor

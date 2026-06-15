@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixso Move</title>
+    <script>
+      // Apply the saved theme before paint (mirrors apps/web/index.html).
+      (function () {
+        const VALID = ["ru-fork", "aurora", "onyx", "grayscale", "pastel-dreams", "vs-code", "caffeine"];
+        try {
+          const stored = window.localStorage.getItem("t3code:theme");
+          const theme = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+          const storedName = window.localStorage.getItem("t3code:themeName");
+          const themeName = VALID.includes(storedName) ? storedName : "pastel-dreams";
+          const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.setAttribute("data-theme", themeName);
+          document.documentElement.style.backgroundColor = dark ? "#161616" : "#ffffff";
+        } catch {
+          document.documentElement.classList.add("dark");
+          document.documentElement.setAttribute("data-theme", "pastel-dreams");
+          document.documentElement.style.backgroundColor = "#161616";
+        }
+      })();
+    </script>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: var(--background);
+        color: var(--foreground);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

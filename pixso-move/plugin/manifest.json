@@ -1,0 +1,8 @@
+{
+  "name": "PixsoMove",
+  "id": "REPLACE_WITH_PIXSO_PLUGIN_ID",
+  "api": "2.0.0",
+  "editorType": ["pixso"],
+  "main": "dist/code.js",
+  "ui": "dist/ui.html"
+}

@@ -29,6 +29,13 @@
     --success-foreground: var(--color-emerald-700);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-700);
+    /* ru-fork: chart series palette (shadcn --chart-* convention), tuned to the
+       blue primary so analytics charts inherit the default theme. */
+    --chart-1: oklch(0.55 0.2 264);
+    --chart-2: oklch(0.62 0.16 162);
+    --chart-3: oklch(0.68 0.15 70);
+    --chart-4: oklch(0.58 0.22 18);
+    --chart-5: oklch(0.55 0.2 310);
   }
 
   .dark[data-theme="ru-fork"] {
@@ -59,5 +66,10 @@
     --success-foreground: var(--color-emerald-400);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
+    --chart-1: oklch(0.62 0.19 264);
+    --chart-2: oklch(0.7 0.15 162);
+    --chart-3: oklch(0.75 0.14 70);
+    --chart-4: oklch(0.66 0.2 18);
+    --chart-5: oklch(0.64 0.19 310);
   }
 }

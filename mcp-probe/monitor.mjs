@@ -16,7 +16,7 @@ export async function probeOnce(target) {
       transport = new StdioClientTransport({
         command: target.command,
         args: target.args ?? [],
-        env: { ...process.env, ...(target.env ?? {}) },
+        env: { ...process.env, ...target.env },
       });
     } else {
       const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");

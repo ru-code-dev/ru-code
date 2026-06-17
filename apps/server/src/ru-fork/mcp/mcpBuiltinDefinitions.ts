@@ -23,48 +23,63 @@ export const MCP_BUILTINS: ReadonlyArray<McpBuiltinDefinition> = [
     vars: [],
   },
   {
-    builtinId: "context7",
-    name: "context7",
+    builtinId: "context7_local",
+    name: "Context 7 Local",
+    description:
+      "Актуальная документация библиотек и фреймворков. Публичный HTTP-эндпоинт.",
+    websiteUrl: "https://context7.com",
+    config: {
+      default: {
+        transport: "stdio",
+        command: "npx",
+        args: ["-y", "@upstash/context7-mcp"],
+      },
+    },
+    vars: [],
+  },
+  {
+    builtinId: "context7_remote",
+    name: "Context 7 Remote",
     description: "Актуальная документация библиотек и фреймворков. Публичный HTTP-эндпоинт.",
     websiteUrl: "https://context7.com",
     config: { default: { transport: "http", httpUrl: "https://mcp.context7.com/mcp", headers: {} } },
     vars: [],
   },
-  {
-    builtinId: "atlassian",
-    name: "atlassian",
-    description:
-      "Доступ к Jira и Confluence: задачи, страницы, поиск. Укажите логины и API-токены в каталоге.",
-    websiteUrl: "https://github.com/sooperset/mcp-atlassian",
-    config: {
-      default: {
-        transport: "stdio",
-        command: "uvx",
-        args: ["mcp-atlassian"],
-      },
-    },
-    // All catalog-level (perProject:false), all required. The two URLs ship a placeholder value (the
-    // user edits them); the logins are unfilled; the API tokens are secrets (value:null — never ship a
-    // real secret). Until the unfilled ones are set, the catalog server shows «требует настройки».
-    vars: [
-      {
-        name: "JIRA_URL",
-        secret: false,
-        perProject: false,
-        required: true,
-        value: "https://your-company.atlassian.net/wiki",
-      },
-      { name: "JIRA_USERNAME", secret: false, perProject: false, required: true, value: null },
-      { name: "JIRA_API_TOKEN", secret: true, perProject: false, required: true, value: null },
-      {
-        name: "CONFLUENCE_URL",
-        secret: false,
-        perProject: false,
-        required: true,
-        value: "https://your-company.atlassian.net/wiki",
-      },
-      { name: "CONFLUENCE_USERNAME", secret: false, perProject: false, required: true, value: null },
-      { name: "CONFLUENCE_API_TOKEN", secret: true, perProject: false, required: true, value: null },
-    ],
-  },
+  // {
+  //   builtinId: "atlassian",
+  //   name: "atlassian",
+  //   description:
+  //     "Доступ к Jira и Confluence: задачи, страницы, поиск. Укажите логины и API-токены в каталоге.",
+  //   websiteUrl: "https://github.com/sooperset/mcp-atlassian",
+  //   config: {
+  //     default: {
+  //       transport: "stdio",
+  //       command: "uvx",
+  //       args: ["mcp-atlassian"],
+  //     },
+  //   },
+  //   // All catalog-level (perProject:false), all required. The two URLs ship a placeholder value (the
+  //   // user edits them); the logins are unfilled; the API tokens are secrets (value:null — never ship a
+  //   // real secret). Until the unfilled ones are set, the catalog server shows «требует настройки».
+  //   vars: [
+  //     {
+  //       name: "JIRA_URL",
+  //       secret: false,
+  //       perProject: false,
+  //       required: true,
+  //       value: "https://your-company.atlassian.net/wiki",
+  //     },
+  //     { name: "JIRA_USERNAME", secret: false, perProject: false, required: true, value: null },
+  //     { name: "JIRA_API_TOKEN", secret: true, perProject: false, required: true, value: null },
+  //     {
+  //       name: "CONFLUENCE_URL",
+  //       secret: false,
+  //       perProject: false,
+  //       required: true,
+  //       value: "https://your-company.atlassian.net/wiki",
+  //     },
+  //     { name: "CONFLUENCE_USERNAME", secret: false, perProject: false, required: true, value: null },
+  //     { name: "CONFLUENCE_API_TOKEN", secret: true, perProject: false, required: true, value: null },
+  //   ],
+  // },
 ];

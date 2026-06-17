@@ -23,10 +23,19 @@ export function encryptSecret(plaintext: Uint8Array): Uint8Array {
   return new TextEncoder().encode(blob);
 }
 
+// ru-fork #4: a blob that isn't our `ivHex:authTagHex:cipherHex` shape — i.e. a LEGACY plaintext secret
+// written BEFORE at-rest encryption existed (e.g. a `server-signing-key` from an older build). Kept
+// distinct from a GCM auth failure (tampered / wrong host-key) so the store can self-heal a legacy key
+// by treating it as absent WITHOUT silently dropping a real encrypted secret that fails to authenticate.
+export const LEGACY_SECRET_FORMAT_ERROR = "Invalid encrypted secret format";
+
+export const isLegacySecretFormatError = (cause: unknown): boolean =>
+  cause instanceof Error && cause.message === LEGACY_SECRET_FORMAT_ERROR;
+
 export function decryptSecret(blob: Uint8Array): Uint8Array {
   const parts = new TextDecoder().decode(blob).split(":");
   if (parts.length !== 3) {
-    throw new Error("Invalid encrypted secret format");
+    throw new Error(LEGACY_SECRET_FORMAT_ERROR);
   }
   const iv = Buffer.from(parts[0]!, "hex");
   const authTag = Buffer.from(parts[1]!, "hex");

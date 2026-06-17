@@ -8,7 +8,7 @@ import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
 
 import { ServerConfig } from "../../config.ts";
-import { decryptSecret, encryptSecret } from "../secretCrypto.ts";
+import { decryptSecret, encryptSecret, isLegacySecretFormatError } from "../secretCrypto.ts";
 import {
   SecretStoreError,
   ServerSecretStore,
@@ -48,8 +48,11 @@ export const makeServerSecretStore = Effect.gen(function* () {
               }),
             ),
       ),
-      // ru-fork #4: at-rest decryption runs AFTER the read-error catch — a NotFound stays null; a
-      // tampered/unwrappable blob becomes a typed SecretStoreError (Effect.try converts the throw).
+      // ru-fork #4: at-rest decryption runs AFTER the read-error catch — a NotFound stays null. A
+      // LEGACY plaintext blob (a pre-encryption signing key — fails the iv:tag:cipher format check) is
+      // treated as ABSENT so getOrCreateRandom self-heals (mints a fresh encrypted key, no error/log).
+      // Any OTHER decrypt failure (GCM auth: tampered / wrong host-key) stays a typed SecretStoreError,
+      // so a real encrypted secret never silently vanishes.
       Effect.flatMap((bytes) =>
         bytes === null
           ? Effect.succeed(null)
@@ -57,7 +60,13 @@ export const makeServerSecretStore = Effect.gen(function* () {
               try: () => decryptSecret(Uint8Array.from(bytes)),
               catch: (cause) =>
                 new SecretStoreError({ message: `Failed to decrypt secret ${name}.`, cause }),
-            }),
+            }).pipe(
+              Effect.catch((error) =>
+                isLegacySecretFormatError(error.cause)
+                  ? Effect.succeed(null)
+                  : Effect.fail(error),
+              ),
+            ),
       ),
     );
 
@@ -127,11 +136,11 @@ export const makeServerSecretStore = Effect.gen(function* () {
                   Effect.flatMap((created) =>
                     created !== null
                       ? Effect.succeed(created)
-                      : Effect.fail(
-                          new SecretStoreError({
-                            message: `Failed to read secret ${name} after concurrent creation.`,
-                          }),
-                        ),
+                      : // ru-fork #4: the blocking file is present but UNREADABLE (a legacy plaintext
+                        // secret — `get` healed it to null — not a concurrent writer's valid one), so the
+                        // exclusive `create` can never overwrite it. Replace it atomically via `set` so a
+                        // legacy signing key self-heals instead of stranding the boot.
+                        set(name, generated).pipe(Effect.as(Uint8Array.from(generated))),
                   ),
                 )
               : Effect.fail(error),

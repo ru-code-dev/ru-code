@@ -19,6 +19,7 @@ import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybi
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
+import { Route as SettingsAnalyticsRouteImport } from './routes/settings.analytics'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -71,6 +72,11 @@ const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   path: '/archived',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsAnalyticsRoute = SettingsAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -87,6 +93,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/settings/analytics': typeof SettingsAnalyticsRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -99,6 +106,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/settings/analytics': typeof SettingsAnalyticsRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -114,6 +122,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/settings/analytics': typeof SettingsAnalyticsRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -130,6 +139,7 @@ export interface FileRouteTypes {
     | '/'
     | '/pair'
     | '/settings'
+    | '/settings/analytics'
     | '/settings/archived'
     | '/settings/connections'
     | '/settings/general'
@@ -142,6 +152,7 @@ export interface FileRouteTypes {
   to:
     | '/pair'
     | '/settings'
+    | '/settings/analytics'
     | '/settings/archived'
     | '/settings/connections'
     | '/settings/general'
@@ -156,6 +167,7 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/pair'
     | '/settings'
+    | '/settings/analytics'
     | '/settings/archived'
     | '/settings/connections'
     | '/settings/general'
@@ -245,6 +257,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsArchivedRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/analytics': {
+      id: '/settings/analytics'
+      path: '/analytics'
+      fullPath: '/settings/analytics'
+      preLoaderRoute: typeof SettingsAnalyticsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -277,6 +296,7 @@ const ChatRouteChildren: ChatRouteChildren = {
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 interface SettingsRouteChildren {
+  SettingsAnalyticsRoute: typeof SettingsAnalyticsRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
@@ -286,6 +306,7 @@ interface SettingsRouteChildren {
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAnalyticsRoute: SettingsAnalyticsRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,

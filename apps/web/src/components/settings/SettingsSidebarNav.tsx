@@ -2,6 +2,7 @@ import { useCallback, type ComponentType } from "react";
 import {
   ArchiveIcon,
   ArrowLeftIcon,
+  ChartColumnIcon,
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
@@ -25,6 +26,7 @@ export type SettingsSectionPath =
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/analytics"
   | "/settings/archived";
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
@@ -37,6 +39,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   // { label: "Провайдеры", to: "/settings/providers", icon: BotIcon },
   { label: "Контроль версий", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Подключения", to: "/settings/connections", icon: Link2Icon },
+  { label: "Аналитика", to: "/settings/analytics", icon: ChartColumnIcon },
   { label: "Архив", to: "/settings/archived", icon: ArchiveIcon },
 ];
 

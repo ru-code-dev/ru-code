@@ -37,12 +37,20 @@ import { OrchestrationProjectionSnapshotQueryLive } from "../../../src/orchestra
 import { OrchestrationEngineService } from "../../../src/orchestration/Services/OrchestrationEngine.ts";
 import { ServerConfig } from "../../../src/config.ts";
 import { ServerSettingsService } from "../../../src/serverSettings.ts";
-import { builtinServerId } from "../../../src/ru-fork/mcp/McpBuiltins.ts";
+import { builtinConfigForPlatform, builtinServerId } from "../../../src/ru-fork/mcp/McpBuiltins.ts";
+import { MCP_BUILTINS } from "../../../src/ru-fork/mcp/mcpBuiltinDefinitions.ts";
 import { McpOverlayLive } from "../../../src/ru-fork/mcp/McpOverlay.ts";
 import { McpReactor, McpReactorLive } from "../../../src/ru-fork/mcp/McpReactor.ts";
 import { McpSupervisor, McpSupervisorLive } from "../../../src/ru-fork/mcp/McpSupervisor.ts";
 
 const ISO = "2026-01-01T00:00:00.000Z";
+
+// ru-fork: the built-in ids that reconcileBuiltins will actually seed on THIS platform (a definition
+// with no variant for the current OS is skipped). Derived from the shipped list so these tests track
+// edits to mcpBuiltinDefinitions.ts (add/remove/rename a built-in) instead of hard-coding names/counts.
+const SEEDED_BUILTIN_IDS = MCP_BUILTINS.filter(
+  (definition) => builtinConfigForPlatform(definition, process.platform) !== null,
+).map((definition) => definition.builtinId);
 
 // packages/mcp-core/test-fixtures/fakeMcpStdioServer.mjs — real stdio MCP server (echo + ping).
 const FAKE_SERVER = path.resolve(
@@ -176,8 +184,13 @@ describe("McpReactor worker + start lifecycle (integration)", () => {
     expect(result.instances.length).toBeGreaterThan(0);
     expect(result.instances.every((i) => i.status === "unchecked")).toBe(true);
     expect(result.inFlight.size).toBe(0);
-    // The shipped built-ins were seeded into the catalog by start().
-    expect(result.instances.some((i) => i.refs.has(`catalog:${builtinServerId("filesystem")}`))).toBe(true);
+    // The shipped built-ins were seeded into the catalog by start() (at least one complete built-in
+    // registers a catalog instance — derived from the shipped list, not a hard-coded name).
+    expect(
+      SEEDED_BUILTIN_IDS.some((builtinId) =>
+        result.instances.some((instance) => instance.refs.has(`catalog:${builtinServerId(builtinId)}`)),
+      ),
+    ).toBe(true);
   }, 25_000);
 
   it("a post-startup server-add flows engine → stream → worker → probe and goes ONLINE", async () => {
@@ -207,9 +220,11 @@ describe("McpReactor worker + start lifecycle (integration)", () => {
   }, 25_000);
 
   it("project.created autobinds every built-in through the worker when autobindDefaults is ON", async () => {
-    // Disable the two always-complete built-ins so their autobound bindings don't trigger real
-    // npx/http probes — we're asserting the WIRING (bindings created), not probe outcomes.
+    // Disable EVERY shipped built-in first so their autobound (enabled) bindings don't trigger real
+    // npx/http probes — we're asserting the WIRING (one enabled binding per built-in), not probe
+    // outcomes. The set is derived from MCP_BUILTINS, so this stays correct when the list changes.
     system = makeSystem({ mcp: { autobindDefaults: true } });
+    const expectedBuiltinCount = SEEDED_BUILTIN_IDS.length;
     const bindings = await system.run(
       Effect.gen(function* () {
         const reactor = yield* McpReactor;
@@ -218,20 +233,21 @@ describe("McpReactor worker + start lifecycle (integration)", () => {
 
         yield* reactor.start();
         yield* reactor.drain;
-        yield* engine.dispatch(setEnabled(builtinServerId("filesystem"), false));
-        yield* engine.dispatch(setEnabled(builtinServerId("context7"), false));
+        yield* Effect.forEach(SEEDED_BUILTIN_IDS, (builtinId) =>
+          engine.dispatch(setEnabled(builtinServerId(builtinId), false)),
+        );
         yield* reactor.drain;
 
         yield* engine.dispatch(createProject("proj-ab"));
         return yield* waitUntil(
           bindingRepository.listByProject({ projectId: ProjectId.make("proj-ab") }),
-          (rows) => rows.length >= 3,
+          (rows) => rows.length >= expectedBuiltinCount,
         );
       }),
     );
 
-    // All three shipped built-ins (filesystem, context7, atlassian) are autobound, enabled.
-    expect(bindings.length).toBe(3);
+    // Every shipped (platform-supported) built-in is autobound, enabled.
+    expect(bindings.length).toBe(expectedBuiltinCount);
     expect(bindings.every((binding) => binding.enabled)).toBe(true);
   }, 25_000);
 

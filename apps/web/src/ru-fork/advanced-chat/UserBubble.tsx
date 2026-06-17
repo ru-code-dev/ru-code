@@ -13,8 +13,10 @@ export function UserBubble({ record, cwd }: { record: UserRecord; cwd: string | 
   const text = record.parts
     .flatMap((part) => (part.kind === "text" ? [part.text] : []))
     .join("\n\n");
-  const images = record.parts.flatMap((part) =>
-    part.kind === "inline_data" ? [part.mimeType] : [],
+  // Keep each image part's index in the immutable record — a stable, unique identity for the key
+  // (two parts of the same mime type still differ), instead of the rendered-list position.
+  const images = record.parts.flatMap((part, partIndex) =>
+    part.kind === "inline_data" ? [{ mimeType: part.mimeType, partIndex }] : [],
   );
   const date = new Date(record.timestamp);
   const time = Number.isNaN(date.getTime()) ? record.timestamp : date.toLocaleTimeString();
@@ -25,10 +27,10 @@ export function UserBubble({ record, cwd }: { record: UserRecord; cwd: string | 
         {text.length > 0 ? <ChatMarkdown text={text} cwd={cwd} /> : null}
         {images.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {images.map((mimeType, index) => (
-              <Badge key={`img-${index}-${mimeType}`} variant="outline" size="sm" className="font-mono">
+            {images.map((image) => (
+              <Badge key={image.partIndex} variant="outline" size="sm" className="font-mono">
                 <PaperclipIcon className="size-3" />
-                {mimeType || "вложение"}
+                {image.mimeType || "вложение"}
               </Badge>
             ))}
           </div>

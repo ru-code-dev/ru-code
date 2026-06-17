@@ -118,9 +118,9 @@ function FileDiffView({
 
   return (
     <div className="flex flex-col gap-2">
-      {files.map((fileDiff, index) => (
+      {files.map((fileDiff) => (
         <FileDiff
-          key={`${fileName}-${index}`}
+          key={fileDiff.name}
           fileDiff={fileDiff}
           renderHeaderPrefix={() => (
             <button

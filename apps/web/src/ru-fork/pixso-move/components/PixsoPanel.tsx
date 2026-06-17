@@ -65,7 +65,7 @@ export function PixsoPanel({
   );
 
   return (
-    <DiffPanelShell mode={mode} header={header}>
+    <DiffPanelShell mode={mode} header={header} className="bg-card">
       {view === "settings" ? (
         <SettingsView />
       ) : view === "detail" ? (

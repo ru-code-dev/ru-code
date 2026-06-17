@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { BoxesIcon, XIcon } from "lucide-react";
-import { Button } from "~/components/ui/button";
+import { DiffPanelShell, type DiffPanelMode } from "~/components/DiffPanelShell";
+import { Toggle } from "~/components/ui/toggle-group";
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from "~/components/ui/tabs";
 import { useActiveProject } from "~/hooks/useActiveProject";
 import { useMcpManagerStore } from "../store";
@@ -9,10 +10,20 @@ import { ProjectsTab } from "./ProjectsTab";
 import { RegistryTab } from "./RegistryTab";
 
 /**
- * The MCP manager panel content: a header with title + close, two tabs (Каталог / Проекты),
- * and their panels. Shared by the inline sidebar and the mobile sheet (both pass `onClose`).
+ * The MCP manager panel. Built on `DiffPanelShell` (same as PixsoPanel) so its background
+ * and header match the diff/Pixso panels exactly — `bg-background`, the same header row
+ * (height + Electron drag-region + titlebar handling + `px-4` + bottom border). The close
+ * button is the same outline `Toggle` (`variant="outline" size="xs"`, `pressed={false}`)
+ * those headers use. Body: two tabs (Каталог / Проекты). Shared by the inline sidebar
+ * (`mode="sidebar"`) and the mobile sheet (`mode="sheet"`).
  */
-export function McpPanel({ onClose }: { onClose: () => void }) {
+export function McpPanel({
+  onClose,
+  mode = "sidebar",
+}: {
+  onClose: () => void;
+  mode?: DiffPanelMode;
+}) {
   const activeTab = useMcpManagerStore((state) => state.activeTab);
   const setActiveTab = useMcpManagerStore((state) => state.setActiveTab);
   const selectProject = useMcpManagerStore((state) => state.selectProject);
@@ -30,20 +41,28 @@ export function McpPanel({ onClose }: { onClose: () => void }) {
     }
   }, [routeProjectId, selectProject]);
 
-  return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-card text-foreground">
-      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <BoxesIcon className="size-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">MCP-серверы</h2>
-        </div>
-        <div className="flex items-center gap-0.5">
-          <Button variant="ghost" size="icon-xs" onClick={onClose} aria-label="Закрыть панель MCP">
-            <XIcon className="size-4" />
-          </Button>
-        </div>
+  const header = (
+    <>
+      <div className="flex min-w-0 items-center gap-2">
+        <BoxesIcon className="size-4 text-muted-foreground" />
+        <h2 className="truncate text-sm font-semibold">MCP-серверы</h2>
       </div>
+      <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <Toggle
+          variant="outline"
+          size="xs"
+          pressed={false}
+          onPressedChange={() => onClose()}
+          aria-label="Закрыть панель MCP"
+        >
+          <XIcon className="size-3" />
+        </Toggle>
+      </div>
+    </>
+  );
 
+  return (
+    <DiffPanelShell mode={mode} header={header} className="bg-card">
       <Tabs
         value={activeTab}
         onValueChange={(value) => setActiveTab(value as McpPanelTab)}
@@ -61,6 +80,6 @@ export function McpPanel({ onClose }: { onClose: () => void }) {
           <ProjectsTab />
         </TabsPanel>
       </Tabs>
-    </div>
+    </DiffPanelShell>
   );
 }

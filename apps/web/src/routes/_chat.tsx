@@ -15,7 +15,6 @@ import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "~/rpc/serverState";
 import { useActiveProjectRef } from "~/hooks/useActiveProject";
-import { McpPanelMount } from "../ru-fork/mcp-manage";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import { getPrimaryKnownEnvironment } from "../environments/primary";
 
@@ -124,9 +123,8 @@ function ChatRouteLayout() {
       <ChatRouteGlobalShortcuts />
       <McpActiveProjectSync />
       <Outlet />
-      {/* ru-fork: single MCP panel mount for all chat routes (draft + thread) —
-          hoisted here so it never remounts on navigation. */}
-      <McpPanelMount />
+      {/* ru-fork: the MCP + Pixso overlay panels are mounted once in
+          AppSidebarLayout (coordinator-driven), not here. */}
     </>
   );
 }

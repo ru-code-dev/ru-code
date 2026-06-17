@@ -27,9 +27,7 @@ export const PROJECTS: readonly [ProjectDefinition, ...ProjectDefinition[]] = [
   { projectId: "ai-playground", label: "ai-playground", path: "~/WORKSPACE/Projects/ai-playground", kind: "real", weight: 38 },
   { projectId: "atomic-code", label: "atomic-code", path: "~/WORKSPACE/Projects/experements/atomic-code", kind: "real", weight: 24 },
   { projectId: "t3code", label: "t3code", path: "~/WORKSPACE/Projects/experements/t3code", kind: "real", weight: 20 },
-  { projectId: "t3code-copy", label: "t3code-copy", path: "~/WORKSPACE/Projects/experements/t3code-copy", kind: "real", weight: 8 },
   { projectId: "test1", label: "test1", path: "~/WORKSPACE/test1", kind: "real", weight: 6 },
-  { projectId: "n8tb1t-tools", label: "n8tb1t-tools", path: "~/WORKSPACE/Projects/open-source/n8tb1t-tools", kind: "real", weight: 3 },
   { projectId: "server", label: "t3code-apps-server", path: "~/WORKSPACE/Projects/experements/t3code-apps-server", kind: "real", weight: 3 },
   { projectId: "test3", label: "test3", path: "~/WORKSPACE/test3", kind: "real", weight: 2 },
   { projectId: "sandbox", label: "Песочница / temp", path: "/var/folders/…/acp-test-*", kind: "temp", weight: 14 },
@@ -56,8 +54,7 @@ export const BRANCHES: readonly [BranchDefinition, ...BranchDefinition[]] = [
   { name: "ru-code", weight: 30 },
   { name: "feat/qwen", weight: 26 },
   { name: "main", weight: 20 },
-  { name: "feat/public", weight: 14 },
-  { name: "atomic-code/ab43438f", weight: 10 },
+  { name: "feat/public", weight: 14 }
 ];
 
 export interface ToolDefinition extends Weighted {

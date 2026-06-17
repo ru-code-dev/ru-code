@@ -22,8 +22,9 @@ import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../st
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
-import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
-import { useMcpManagerStore } from "../ru-fork/mcp-manage";
+import { RightInlineSidebar } from "../components/RightInlineSidebar";
+import { SidebarInset } from "../components/ui/sidebar";
+import { useRightPanelStore } from "../ru-fork/rightPanel";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
@@ -114,28 +115,17 @@ const DiffPanelInlineSidebar = (props: {
   );
 
   return (
-    <SidebarProvider
-      defaultOpen={false}
+    <RightInlineSidebar
       open={diffOpen}
       onOpenChange={onOpenChange}
-      className="w-auto min-h-0 flex-none bg-transparent"
-      style={{ "--sidebar-width": DIFF_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
+      storageKey={DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY}
+      defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
+      minWidth={DIFF_INLINE_SIDEBAR_MIN_WIDTH}
+      maxWidth={DIFF_INLINE_SIDEBAR_MAX_WIDTH}
+      shouldAcceptWidth={shouldAcceptInlineSidebarWidth}
     >
-      <Sidebar
-        side="right"
-        collapsible="offcanvas"
-        className="border-l border-border bg-card text-foreground"
-        resizable={{
-          maxWidth: DIFF_INLINE_SIDEBAR_MAX_WIDTH,
-          minWidth: DIFF_INLINE_SIDEBAR_MIN_WIDTH,
-          shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
-        }}
-      >
-        {renderDiffContent ? <LazyDiffPanel mode="sidebar" /> : null}
-        <SidebarRail />
-      </Sidebar>
-    </SidebarProvider>
+      {renderDiffContent ? <LazyDiffPanel mode="sidebar" /> : null}
+    </RightInlineSidebar>
   );
 };
 
@@ -169,9 +159,12 @@ function ChatThreadRouteView() {
   const serverThreadStarted = threadHasStarted(serverThread);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const diffOpen = search.diff === "1";
-  // MCP panel open/close is global (useMcpManagerStore) and rendered once in the
-  // _chat layout; here we only need the setter to keep diff + MCP mutually exclusive.
-  const setMcpPanelOpen = useMcpManagerStore((store) => store.setPanelOpen);
+  // The overlay panels (MCP/Pixso) are coordinator-driven and mounted in
+  // AppSidebarLayout. Diff stays URL-driven; the two seams below keep all three
+  // mutually exclusive: opening diff closes the overlay, and the effect closes
+  // diff whenever an overlay opens (e.g. from the left nav).
+  const overlayPanelOpen = useRightPanelStore((store) => store.open !== null);
+  const closeOverlayPanel = useRightPanelStore((store) => store.close);
   const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
@@ -208,8 +201,8 @@ function ChatThreadRouteView() {
       return;
     }
     markDiffOpened();
-    // Diff and MCP share the right-panel slot — only one open at a time.
-    setMcpPanelOpen(false);
+    // Diff and the overlay panels share the right-panel slot — only one open.
+    closeOverlayPanel();
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -218,7 +211,14 @@ function ChatThreadRouteView() {
         return { ...rest, diff: "1" };
       },
     });
-  }, [markDiffOpened, navigate, setMcpPanelOpen, threadRef]);
+  }, [markDiffOpened, navigate, closeOverlayPanel, threadRef]);
+
+  // Seam: opening an overlay panel (from the left nav) closes the diff panel.
+  useEffect(() => {
+    if (overlayPanelOpen && diffOpen) {
+      closeDiff();
+    }
+  }, [overlayPanelOpen, diffOpen, closeDiff]);
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
@@ -261,7 +261,7 @@ function ChatThreadRouteView() {
           onOpenDiff={openDiff}
           renderDiffContent={shouldRenderDiffContent}
         />
-        {/* ru-fork: the MCP panel is mounted once in the _chat layout (McpPanelMount). */}
+        {/* ru-fork: the MCP/Pixso overlay panels are mounted in AppSidebarLayout, not per route. */}
       </>
     );
   }
@@ -279,7 +279,7 @@ function ChatThreadRouteView() {
       <RightPanelSheet open={diffOpen} onClose={closeDiff}>
         {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
       </RightPanelSheet>
-      {/* ru-fork: the MCP panel sheet is mounted once in the _chat layout. */}
+      {/* ru-fork: the MCP/Pixso overlay panels are mounted in AppSidebarLayout, not per route. */}
     </>
   );
 }

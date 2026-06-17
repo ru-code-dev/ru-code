@@ -8,8 +8,6 @@
  */
 
 export { McpPanel } from "./components/McpPanel";
-export { McpPanelInlineSidebar } from "./components/McpPanelInlineSidebar";
-export { McpPanelMount } from "./components/McpPanelMount";
 export {
   isToolEnabled,
   selectProjectBindings,

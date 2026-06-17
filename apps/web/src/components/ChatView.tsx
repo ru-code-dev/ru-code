@@ -196,7 +196,7 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
-import { useMcpManagerStore } from "../ru-fork/mcp-manage";
+import { useRightPanelStore } from "../ru-fork/rightPanel";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -1596,8 +1596,7 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
-  const mcpPanelOpen = useMcpManagerStore((state) => state.panelOpen);
-  const setMcpPanelOpen = useMcpManagerStore((state) => state.setPanelOpen);
+  const closeOverlayPanel = useRightPanelStore((state) => state.close);
 
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
@@ -1605,8 +1604,9 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (!diffOpen) {
       onDiffPanelOpen?.();
-      // Diff and MCP share the right-panel slot: opening diff closes MCP.
-      setMcpPanelOpen(false);
+      // Diff and the overlay panels share the right-panel slot: opening diff
+      // closes whichever overlay (MCP/Pixso) is open.
+      closeOverlayPanel();
     }
     void navigate({
       to: "/$environmentId/$threadId",
@@ -1626,26 +1626,9 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     navigate,
     onDiffPanelOpen,
-    setMcpPanelOpen,
+    closeOverlayPanel,
     threadId,
   ]);
-
-  const onToggleMcp = useCallback(() => {
-    const next = !mcpPanelOpen;
-    setMcpPanelOpen(next);
-    // Mutual exclusion with the diff panel: opening MCP closes diff.
-    if (next && diffOpen) {
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: { environmentId, threadId },
-        replace: true,
-        search: (previous) => {
-          const rest = stripDiffSearchParams(previous);
-          return { ...rest, diff: undefined };
-        },
-      });
-    }
-  }, [diffOpen, environmentId, mcpPanelOpen, navigate, setMcpPanelOpen, threadId]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -3634,7 +3617,6 @@ export default function ChatView(props: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
-          mcpPanelOpen={mcpPanelOpen}
           advancedChatOpen={advancedChatOpen}
           onToggleAdvancedChat={() => {
             if (activeThread) toggleAdvancedChatMode(activeThread.id);
@@ -3645,7 +3627,6 @@ export default function ChatView(props: ChatViewProps) {
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
-          onToggleMcp={onToggleMcp}
         />
       </header>
 

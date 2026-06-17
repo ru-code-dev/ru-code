@@ -1,7 +1,9 @@
 /**
- * Pixso Move — UI + settings store (zustand). Mirrors the MCP manager store: panel open
- * state + a small master→detail view machine, plus the designer's settings persisted to
- * localStorage (the web app is not sandboxed, so localStorage is safe here).
+ * Pixso Move — UI + settings store (zustand). Mirrors the MCP manager store: a small
+ * master→detail view machine, plus the designer's settings persisted to localStorage
+ * (the web app is not sandboxed, so localStorage is safe here). Panel open/close (and
+ * MCP⊕Pixso mutual exclusion) lives in the shared right-panel coordinator
+ * (ru-fork/rightPanel), not here.
  */
 
 import { create } from "zustand";
@@ -51,15 +53,12 @@ function persist(settings: PixsoSettings): void {
 }
 
 interface PixsoStore {
-  readonly panelOpen: boolean;
   readonly view: PixsoView;
   readonly selectedNodeId: string | null;
   /** Bumped by the refresh button; gates the gallery query (manual refresh only). */
   readonly refreshNonce: number;
   readonly settings: PixsoSettings;
 
-  readonly openPanel: () => void;
-  readonly closePanel: () => void;
   readonly openSettings: () => void;
   readonly openNode: (nodeId: string) => void;
   readonly backToGallery: () => void;
@@ -68,14 +67,11 @@ interface PixsoStore {
 }
 
 export const usePixsoStore = create<PixsoStore>()((set) => ({
-  panelOpen: false,
   view: "gallery",
   selectedNodeId: null,
   refreshNonce: 0,
   settings: loadSettings(),
 
-  openPanel: () => set({ panelOpen: true }),
-  closePanel: () => set({ panelOpen: false }),
   openSettings: () => set({ view: "settings" }),
   openNode: (nodeId) => set({ selectedNodeId: nodeId, view: "detail" }),
   backToGallery: () => set({ view: "gallery" }),

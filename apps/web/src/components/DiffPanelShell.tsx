@@ -21,6 +21,8 @@ export function DiffPanelShell(props: {
   mode: DiffPanelMode;
   header: ReactNode;
   children: ReactNode;
+  /** Optional override for the shell's surface (e.g. `bg-card`); defaults to `bg-background`. */
+  className?: string;
 }) {
   const shouldUseDragRegion = isElectron && props.mode !== "sheet";
 
@@ -31,6 +33,7 @@ export function DiffPanelShell(props: {
         props.mode === "inline"
           ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
           : "w-full",
+        props.className,
       )}
     >
       {shouldUseDragRegion ? (

@@ -265,6 +265,17 @@ export class WsTransport {
           this.lastHeartbeatPongAt = Date.now();
           this.lifecycleHandlers?.onHeartbeatPong?.();
         },
+        // ru-fork: a ping timeout surfaces as a Socket *Open* error, which
+        // effect's makeProtocolSocket swallows under retryTransientErrors — it
+        // silently reopens the socket WITHOUT replaying the subscription
+        // requests, so every live stream dies while unary calls (browse,
+        // dispatchCommand) keep working. Force our own session swap so the
+        // subscribe() loop sees session !== this.session and re-attaches every
+        // stream on the fresh socket.
+        onHeartbeatTimeout: () => {
+          this.lifecycleHandlers?.onHeartbeatTimeout?.();
+          void this.reconnect().catch(() => undefined);
+        },
       }),
     );
     const clientScope = runtime.runSync(Scope.make());

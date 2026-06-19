@@ -4,6 +4,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type TerminalEvent,
+  describeUnknownTerminalError,
   terminalErrorMessage,
   type TerminalSessionSnapshot,
   type ThreadId,
@@ -703,12 +704,19 @@ export function TerminalViewport({
         }
       } catch (err) {
         if (disposed) return;
-        // ru-fork: rebuild the real reason from the wire-decoded terminal error
-        // (the tagged error's `message` getter is lost over the RPC boundary),
-        // falling back to a plain Error message, then a generic string.
+        // ru-fork: dump the raw error first — when it isn't one of the 4 typed
+        // terminal tags (e.g. an RPC/transport/decode failure) both the
+        // formatter and `err.message` are empty, and the real reason was being
+        // discarded into a generic string.
+        console.error("[terminal] open failed", err);
+        // rebuild the real reason from the wire-decoded terminal error (the
+        // tagged error's `message` getter is lost over the RPC boundary),
+        // falling back to a plain Error message, then whatever the unknown wire
+        // object carries, then a generic string.
         const detail =
           terminalErrorMessage(err as { _tag?: string }) ??
           (err instanceof Error ? err.message : undefined) ??
+          describeUnknownTerminalError(err) ??
           "Не удалось открыть терминал.";
         writeSystemMessage(terminal, detail);
       }

@@ -49,3 +49,23 @@ export function terminalErrorMessage(error: TerminalErrorShape): string | undefi
       return undefined;
   }
 }
+
+// ru-fork: last-resort detail for an error that is NOT a typed terminal error
+// (RPC/transport failure, decode mismatch, a defect) — surface whatever the
+// wire object carries instead of collapsing to a generic string.
+export function describeUnknownTerminalError(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const shape = error as {
+    _tag?: string;
+    reason?: string;
+    message?: unknown;
+    cause?: unknown;
+  };
+  const tag = typeof shape._tag === "string" ? shape._tag : undefined;
+  const cause =
+    shape.cause && typeof shape.cause === "object" && "message" in shape.cause
+      ? String((shape.cause as { message?: unknown }).message)
+      : undefined;
+  const parts = [tag, shape.reason, cause].filter(Boolean);
+  return parts.length > 0 ? `Терминал не открылся: ${parts.join(" · ")}` : undefined;
+}

@@ -3,12 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "bin": { "pixso-move-server": "./dist/bin.mjs" },
+  "bin": {
+    "pixso-move-server": "./dist/bin.mjs"
+  },
   "scripts": {
     "dev": "node --watch src/bin.ts start",
     "build": "tsdown",
     "start": "node dist/bin.mjs start",
     "typecheck": "tsc --noEmit",
+    "typecheck:tsgo": "tsgo --noEmit",
     "test": "vitest run --coverage",
     "test:fast": "vitest run"
   },

@@ -167,7 +167,7 @@ export const makeServerSecretStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const entries = yield* fileSystem
         .readDirectory(serverConfig.secretsDir)
-        .pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<string>>([])));
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
       for (const entry of entries) {
         if (!entry.endsWith(".bin")) {
           continue;

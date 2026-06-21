@@ -30,6 +30,11 @@
       "outputs": [],
       "cache": false
     },
+    "typecheck:tsgo": {
+      "dependsOn": ["^typecheck:tsgo"],
+      "outputs": [],
+      "cache": false
+    },
     "test": {
       "dependsOn": ["^build"],
       "cache": false,

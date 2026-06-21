@@ -8,6 +8,7 @@ import type { ServerProviderSubagent } from "@t3tools/contracts";
 import { ServerProviderSubagent as ServerProviderSubagentSchema } from "@t3tools/contracts";
 import { homedir } from "node:os";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
@@ -34,6 +35,10 @@ const toResult = (r: ScanResult<ServerProviderSubagent>): SubagentsForCwdResult 
 const makeScanner = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const path = yield* Path.Path;
+  // ru-fork: resolve FileSystem at layer creation and provide it (with Path) into each
+  // method below, so the scan dependencies stay internal to the layer rather than leaking
+  // onto the public service surface.
+  const fs = yield* FileSystem.FileSystem;
 
   // Mirrors cli-code's SubagentManager: when `cwd === homedir`, project
   // scan would re-read the user agents dir and double-list every entry.
@@ -62,8 +67,18 @@ const makeScanner = Effect.gen(function* () {
   });
 
   return {
-    getSubagentsForCwd: (cwd) => core.getForCwd(cwd).pipe(Effect.map(toResult)),
-    refreshSubagentsForCwd: (cwd) => core.refreshForCwd(cwd).pipe(Effect.map(toResult)),
+    getSubagentsForCwd: (cwd) =>
+      core.getForCwd(cwd).pipe(
+        Effect.map(toResult),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
+    refreshSubagentsForCwd: (cwd) =>
+      core.refreshForCwd(cwd).pipe(
+        Effect.map(toResult),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
   } satisfies SubagentScannerShape;
 });
 

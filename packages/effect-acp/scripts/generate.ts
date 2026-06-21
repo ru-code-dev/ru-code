@@ -146,7 +146,7 @@ function collectSchemaEntries(
   return entries;
 }
 
-function normalizeNullableTypes(value: typeof Schema.Json.Type): typeof Schema.Json.Type {
+function normalizeNullableTypes(value: Schema.Json): Schema.Json {
   if (Array.isArray(value)) {
     return value.map(normalizeNullableTypes);
   }
@@ -160,7 +160,7 @@ function normalizeNullableTypes(value: typeof Schema.Json.Type): typeof Schema.J
   ]);
   const normalizedObject = Object.fromEntries(normalizedEntries) as Record<
     string,
-    typeof Schema.Json.Type
+    Schema.Json
   >;
   const typeValue = normalizedObject.type;
 
@@ -179,7 +179,7 @@ function normalizeNullableTypes(value: typeof Schema.Json.Type): typeof Schema.J
   }
   const nonNullType = nonNullTypes[0]!;
 
-  const nextObject: Record<string, typeof Schema.Json.Type> = {};
+  const nextObject: Record<string, Schema.Json> = {};
   for (const [key, child] of Object.entries(normalizedObject)) {
     if (key !== "type") {
       nextObject[key] = child;

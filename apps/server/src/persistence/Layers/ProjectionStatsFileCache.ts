@@ -55,7 +55,7 @@ const makeStatsFileCacheRepository = Effect.gen(function* () {
       const decoded = yield* Effect.forEach(rawRows, (rawRow) =>
         decodeRow(rawRow).pipe(
           Effect.map((row) => Option.some(rowToCacheRow(row))),
-          Effect.catch(() => Effect.succeed(Option.none<StatsFileCacheRow>())),
+          Effect.orElseSucceed(() => Option.none<StatsFileCacheRow>()),
         ),
       );
       const rows = decoded.filter(Option.isSome).map((entry) => entry.value);

@@ -1,5 +1,7 @@
 import type { DesignerId, NodeRecord, NodeSummary } from "@pixso-move/contracts";
 import { NodeId } from "@pixso-move/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -29,10 +31,11 @@ export const NodeStoreLive = Layer.effect(
   NodeStore,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const crypto = yield* Crypto.Crypto;
     return {
       insert: (input: NodeInsert) =>
         Effect.gen(function* () {
-          const nodeId = NodeId.make(crypto.randomUUID());
+          const nodeId = NodeId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
           const addedAt = yield* nowIso;
           yield* sql`
             INSERT INTO nodes (id, designer_id, root_name, nodes_json, preview, added_at)
@@ -91,4 +94,4 @@ export const NodeStoreLive = Layer.effect(
         ),
     };
   }),
-);
+).pipe(Layer.provide(NodeCrypto.layer));

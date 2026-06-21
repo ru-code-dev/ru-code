@@ -131,10 +131,11 @@ export const pairingStartupRouteLayer = prefixedRouteLayer(
     );
     return HttpServerResponse.jsonUnsafe({ url }, { status: 200 });
   }).pipe(
-    Effect.catchTag("LoopbackOnlyError", respondToLoopbackOnlyError),
-    Effect.catchTag("PairingStartupError", (error) =>
-      Effect.succeed(HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 500 })),
-    ),
+    Effect.catchTags({
+      LoopbackOnlyError: respondToLoopbackOnlyError,
+      PairingStartupError: (error) =>
+        Effect.succeed(HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 500 })),
+    }),
   ),
 );
 
@@ -210,7 +211,7 @@ export const attachmentsRouteLayer = prefixedRouteLayer(
     const fileSystem = yield* FileSystem.FileSystem;
     const fileInfo = yield* fileSystem
       .stat(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     if (!fileInfo || fileInfo.type !== "File") {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
@@ -221,8 +222,8 @@ export const attachmentsRouteLayer = prefixedRouteLayer(
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      Effect.orElseSucceed(() =>
+        HttpServerResponse.text("Internal Server Error", { status: 500 }),
       ),
     );
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
@@ -262,8 +263,8 @@ export const projectFaviconRouteLayer = prefixedRouteLayer(
         "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
       },
     }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      Effect.orElseSucceed(() =>
+        HttpServerResponse.text("Internal Server Error", { status: 500 }),
       ),
     );
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
@@ -345,12 +346,12 @@ export const staticAndDevRouteLayer = HttpRouter.add(
 
     const fileInfo = yield* fileSystem
       .stat(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     if (!fileInfo || fileInfo.type !== "File") {
       const indexPath = path.resolve(staticRoot, "index.html");
       const indexData = yield* fileSystem
         .readFile(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (!indexData) {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
@@ -368,7 +369,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     const contentType = Mime.getType(filePath) ?? "application/octet-stream";
     const data = yield* fileSystem
       .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     if (!data) {
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
     }

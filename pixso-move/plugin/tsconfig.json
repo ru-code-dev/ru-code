@@ -3,11 +3,25 @@
   "compilerOptions": {
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["node"],
-    "plugins": [],
+    "types": ["node", "vite/client"],
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // ru-fork: this is a browser Figma/Pixso plugin UI — Date/Math.random/timers are the
+        // legitimate platform APIs here, not Effect anti-patterns. Severities deep-merge with the
+        // root tsconfig.base.json; list only plugin-specific overrides.
+        "diagnosticSeverity": {
+          "globalDate": "off",
+          "globalConsole": "off",
+          "globalRandom": "off",
+          "globalTimers": "off",
+          "globalFetch": "off"
+        }
+      }
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": { "~/*": ["./src/ui/*"] }
   },
-  "include": ["src", "tests", "vite.code.config.ts", "vite.ui.config.ts"]
+  "include": ["src", "tests", "vite.code.config.ts"]
 }

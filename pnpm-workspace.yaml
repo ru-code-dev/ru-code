@@ -16,7 +16,9 @@ catalog:
   "@effect/platform-node": 4.0.0-beta.78
   "@effect/platform-node-shared": 4.0.0-beta.78
   "@effect/language-service": 0.84.2
+  "@effect/tsgo": 0.13.2
   "@effect/vitest": 4.0.0-beta.78
+  "@typescript/native-preview": 7.0.0-dev.20260604.1
   "@types/node": 24.10.13
   tsdown: 0.20.3
   typescript: 5.9.3

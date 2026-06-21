@@ -12,6 +12,8 @@ import {
   type McpCatalogServer,
   type McpProbeRecord,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -77,14 +79,18 @@ const fakeProbeCache = (record: McpProbeRecord) =>
 
 const stdioConfig = (id: string) => ({ transport: "stdio" as const, command: "uvx", args: [id] });
 
-// Run `effect` (already fully provided except logging) and capture every emitted log entry.
-async function runCapturingLogs(effect: Effect.Effect<unknown, never, never>) {
+// Run `effect` (already fully provided except logging + the Crypto service the reactor's
+// commandId minting now needs) and capture every emitted log entry.
+async function runCapturingLogs(effect: Effect.Effect<unknown, never, Crypto.Crypto>) {
   const captured: Array<{ readonly level: string; readonly message: string }> = [];
   const logger = Logger.make(({ logLevel, message }) => {
     captured.push({ level: String(logLevel), message: String(message) });
   });
   await Effect.runPromise(
-    effect.pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+    effect.pipe(
+      Effect.provide(NodeCrypto.layer),
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+    ),
   );
   return captured;
 }

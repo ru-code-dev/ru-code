@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- vite build plugin runs in Node, not an Effect runtime
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";

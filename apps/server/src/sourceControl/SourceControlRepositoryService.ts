@@ -278,12 +278,12 @@ export const make = Effect.fn("makeSourceControlRepositoryService")(function* ()
         })
         .pipe(
           Effect.map(() => true),
-          Effect.catch(() => Effect.succeed(false)),
+          Effect.orElseSucceed(() => false),
         );
       if (!hasCommits) {
         const details = yield* git
           .statusDetails(input.cwd)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
         return {
           repository: toRepositoryInfo(providerKind, urls),
           remoteName,

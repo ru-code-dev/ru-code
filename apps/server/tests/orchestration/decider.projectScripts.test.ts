@@ -11,7 +11,16 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
 
-import { decideOrchestrationCommand } from "../../src/orchestration/decider.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+
+import { decideOrchestrationCommand as decideOrchestrationCommandRaw } from "../../src/orchestration/decider.ts";
+
+// ru-fork: the decider now resolves event ids through the Effect `Crypto` service
+// (withEventBase). Provide the Node implementation so these unit tests can run the
+// decide effect directly without standing up a full runtime.
+const decideOrchestrationCommand = (
+  input: Parameters<typeof decideOrchestrationCommandRaw>[0],
+) => decideOrchestrationCommandRaw(input).pipe(Effect.provide(NodeCrypto.layer));
 import { createEmptyReadModel, projectEvent } from "../../src/orchestration/projector.ts";
 
 const asEventId = (value: string): EventId => EventId.make(value);

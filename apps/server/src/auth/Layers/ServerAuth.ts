@@ -182,7 +182,7 @@ export const makeServerAuth = Effect.gen(function* () {
       if (credential) {
         const verified = yield* authenticateToken(credential).pipe(
           Effect.map((session): Option.Option<AuthenticatedSession> => Option.some(session)),
-          Effect.catch(() => Effect.succeed(Option.none<AuthenticatedSession>())),
+          Effect.orElseSucceed(() => Option.none<AuthenticatedSession>()),
         );
         if (Option.isSome(verified)) {
           const session = verified.value;
@@ -202,7 +202,7 @@ export const makeServerAuth = Effect.gen(function* () {
       if (loopbackBypassEnabled && isLoopbackRequest(request)) {
         const issued = yield* issueLoopbackSession(request).pipe(
           Effect.map((session): Option.Option<IssuedSession> => Option.some(session)),
-          Effect.catch(() => Effect.succeed(Option.none<IssuedSession>())),
+          Effect.orElseSucceed(() => Option.none<IssuedSession>()),
         );
         if (Option.isSome(issued)) {
           const session = issued.value;

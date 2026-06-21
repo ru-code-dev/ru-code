@@ -21,6 +21,7 @@
     "build:preflight": "tsdown --config tsdown.preflight.config.ts",
     "start": "node dist/bin.mjs start --port 8080",
     "typecheck": "tsc --noEmit",
+    "typecheck:tsgo": "tsgo --noEmit",
     "test": "vitest run --coverage",
     "test:fast": "vitest run"
   },

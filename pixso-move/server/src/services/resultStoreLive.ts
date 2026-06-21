@@ -1,5 +1,7 @@
 import type { ProcessingResult, ProcessingStatus } from "@pixso-move/contracts";
 import { DesignerId, NodeId, ResultTag } from "@pixso-move/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -35,16 +37,18 @@ export const ResultStoreLive = Layer.effect(
   ResultStore,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const crypto = yield* Crypto.Crypto;
     return {
       reconcile: (rows: ReadonlyArray<ReconcileRow>) =>
         Effect.gen(function* () {
           let inserted = 0;
           for (const row of rows) {
             const createdAt = yield* nowIso;
+            const resultId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
             const out = yield* sql<{ readonly id: string }>`
               INSERT INTO processing_results
                 (id, designer_id, node_id, result_tag, status, attempts, created_at)
-              VALUES (${crypto.randomUUID()}, ${row.designerId}, ${row.nodeId}, ${row.resultTag}, 'pending', 0, ${createdAt})
+              VALUES (${resultId}, ${row.designerId}, ${row.nodeId}, ${row.resultTag}, 'pending', 0, ${createdAt})
               ON CONFLICT (node_id, result_tag) DO NOTHING
               RETURNING id
             `;
@@ -126,4 +130,4 @@ export const ResultStoreLive = Layer.effect(
       ),
     };
   }),
-);
+).pipe(Layer.provide(NodeCrypto.layer));

@@ -7,7 +7,8 @@
   },
   "type": "module",
   "scripts": {
-    "prepare": "effect-language-service patch",
+    "prepare": "effect-language-service patch && effect-tsgo patch",
+    "typecheck:tsgo": "turbo run typecheck:tsgo",
     "dev": "node scripts/dev-runner.ts dev",
     "dev:server": "node scripts/dev-runner.ts dev:server",
     "dev:web": "node scripts/dev-runner.ts dev:web",
@@ -27,7 +28,9 @@
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@effect/tsgo": "catalog:",
     "@oxlint/plugins": "^1.63.0",
+    "@typescript/native-preview": "catalog:",
     "@types/node": "catalog:",
     "beachball": "2.51.0",
     "oxfmt": "0.40.0",

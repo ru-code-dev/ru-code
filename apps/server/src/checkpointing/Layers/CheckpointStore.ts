@@ -105,7 +105,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       })
       .pipe(
         Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"),
-        Effect.catch(() => Effect.succeed(false)),
+        Effect.orElseSucceed(() => false),
       );
 
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = Effect.fn(

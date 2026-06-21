@@ -21,6 +21,7 @@
  *
  * @module ru-fork/turnCompletedCheckpointDispatch
  */
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import {
@@ -44,6 +45,7 @@ export const dispatchTurnCompletedCheckpointPlaceholder = (params: {
   readonly now: string;
 }) =>
   Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
 
@@ -76,10 +78,11 @@ export const dispatchTurnCompletedCheckpointPlaceholder = (params: {
     const checkpointTurnCount =
       checkpointContext.checkpoints.reduce((max, c) => Math.max(max, c.checkpointTurnCount), 0) + 1;
 
+    const commandUuid = yield* crypto.randomUUIDv4;
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.diff.complete",
       commandId: CommandId.make(
-        `provider:${params.event.eventId}:thread-turn-diff-complete-from-completion:${crypto.randomUUID()}`,
+        `provider:${params.event.eventId}:thread-turn-diff-complete-from-completion:${commandUuid}`,
       ),
       threadId: params.threadId,
       turnId: params.turnId,

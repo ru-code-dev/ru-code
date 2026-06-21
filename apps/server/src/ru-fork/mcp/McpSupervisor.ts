@@ -461,7 +461,7 @@ const makeMcpSupervisor = Effect.gen(function* () {
 
   const runSweep = Effect.gen(function* () {
     const settings = yield* serverSettings.getSettings.pipe(
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.orElseSucceed(() => null),
     );
     const instances = [...(yield* Ref.get(registryRef)).values()];
     if (settings === null || instances.length === 0) {

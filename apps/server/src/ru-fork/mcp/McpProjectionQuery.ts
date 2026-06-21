@@ -60,7 +60,7 @@ const makeMcpProjectionQuery = Effect.gen(function* () {
           Effect.map((snapshot): McpProjectionStreamEvent | null => ({ type: "snapshot", snapshot })),
           // A transient snapshot read failure drops THIS update instead of ending the subscription
           // (matches McpRuntime's resilience); the next event re-reads fresh.
-          Effect.catch(() => Effect.succeed(null)),
+          Effect.orElseSucceed(() => null),
         ),
       ),
       Stream.filter((event): event is McpProjectionStreamEvent => event !== null),

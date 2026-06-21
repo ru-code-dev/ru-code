@@ -86,7 +86,8 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:tsgo": "tsgo --noEmit"
   },
   "dependencies": {
     "@ru-fork/branding": "workspace:*",

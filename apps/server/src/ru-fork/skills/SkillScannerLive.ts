@@ -12,7 +12,9 @@
 import type { ServerProviderSkill } from "@t3tools/contracts";
 import { ServerProviderSkill as ServerProviderSkillSchema } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 
 import { ServerConfig } from "../../config.ts";
 import { makeCachedFsScanner, type ScanResult } from "../common/cachedFsScanner.ts";
@@ -38,6 +40,11 @@ const toResult = (r: ScanResult<ServerProviderSkill>): SkillsForCwdResult => ({
 
 const makeScanner = Effect.gen(function* () {
   const config = yield* ServerConfig;
+  // ru-fork: resolve FileSystem + Path at layer creation and provide them into each
+  // method below, so the scan dependencies stay internal instead of leaking onto the
+  // public service surface (every caller would otherwise have to provide them).
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   const core = yield* makeCachedFsScanner({
     cachePath: config.skillsCachePath,
@@ -58,8 +65,18 @@ const makeScanner = Effect.gen(function* () {
   });
 
   return {
-    getSkillsForCwd: (cwd) => core.getForCwd(cwd).pipe(Effect.map(toResult)),
-    refreshSkillsForCwd: (cwd) => core.refreshForCwd(cwd).pipe(Effect.map(toResult)),
+    getSkillsForCwd: (cwd) =>
+      core.getForCwd(cwd).pipe(
+        Effect.map(toResult),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
+    refreshSkillsForCwd: (cwd) =>
+      core.refreshForCwd(cwd).pipe(
+        Effect.map(toResult),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
   } satisfies SkillScannerShape;
 });
 

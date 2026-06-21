@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics importFromBarrel:off
 // @effect-diagnostics globalTimers:off
+// @effect-diagnostics globalTimersInEffect:off globalFetchInEffect:off globalFetch:off -- native fetch + AbortController timeout, wrapped in Effect.tryPromise (fire-once bootstrap/shutdown HTTP probes). globalFetch* = tsgo + language-service rule names for the same check.
 // @effect-diagnostics globalErrorInEffectFailure:off
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -75,7 +76,7 @@ const probeHealth = (origin: string) =>
       }
     },
     catch: (cause) => new DaemonLauncherError({ message: "health probe failed", cause }),
-  }).pipe(Effect.catch(() => Effect.succeed(false)));
+  }).pipe(Effect.orElseSucceed(() => false));
 
 const pollHealth = (statePath: string) =>
   Effect.gen(function* () {
@@ -229,7 +230,7 @@ const fetchPairingStartupUrl = (origin: string) =>
       }
     },
     catch: (cause) => new DaemonLauncherError({ message: "pairing-startup request failed", cause }),
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  }).pipe(Effect.orElseSucceed(() => null));
 
 const resolveDerivedPaths = (input: {
   readonly baseDirOverride: string | undefined;
@@ -373,7 +374,7 @@ export const runStopCommand = (input: StopCommandInput) =>
         }
       },
       catch: (cause) => new DaemonLauncherError({ message: "shutdown request failed", cause }),
-    }).pipe(Effect.catch(() => Effect.succeed(false)));
+    }).pipe(Effect.orElseSucceed(() => false));
 
     if (!sent) {
       yield* Console.log("");
@@ -400,7 +401,7 @@ export const runStopCommand = (input: StopCommandInput) =>
         schedule: Schedule.spaced(Duration.millis(STOP_DRAIN_INTERVAL_MS)),
         times: STOP_DRAIN_RETRIES,
       }),
-      Effect.catch(() => Effect.succeed(false)),
+      Effect.orElseSucceed(() => false),
     );
 
     yield* Console.log("");

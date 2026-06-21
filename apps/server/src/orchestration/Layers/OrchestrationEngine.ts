@@ -8,6 +8,7 @@ import type {
 import { MCP_CATALOG_AGGREGATE_ID, OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -102,6 +103,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   // ru-fork: the decider splits MCP draft secrets into the secret store.
   const serverSecretStore = yield* ServerSecretStore;
+  const crypto = yield* Crypto.Crypto;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
@@ -172,7 +174,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
           readModel: commandReadModel,
-        }).pipe(Effect.provideService(ServerSecretStore, serverSecretStore));
+        }).pipe(
+          Effect.provideService(ServerSecretStore, serverSecretStore),
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
         const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
         const committedCommand = yield* sql
           .withTransaction(

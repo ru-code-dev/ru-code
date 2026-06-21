@@ -30,7 +30,7 @@ export interface StatsScannerShape {
 }
 
 export class StatsScanner extends Context.Service<StatsScanner, StatsScannerShape>()(
-  "ru-fork/stats/StatsScanner",
+  "@ru-code/ru-code/ru-fork/stats/StatsScanner",
 ) {}
 
 interface DiskFile {

@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -160,7 +161,7 @@ export class AcpSessionRuntime extends Context.Service<AcpSessionRuntime, AcpSes
   ): Layer.Layer<
     AcpSessionRuntime,
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner
+    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
   > {
     return Layer.effect(AcpSessionRuntime, makeAcpSessionRuntime(options));
   }
@@ -171,7 +172,7 @@ const makeAcpSessionRuntime = (
 ): Effect.Effect<
   AcpSessionRuntimeShape,
   EffectAcpErrors.AcpError,
-  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope | Crypto.Crypto
 > =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -187,10 +188,11 @@ const makeAcpSessionRuntime = (
     // window. T3 already has its own thread history, so the replay is dropped
     // to avoid double-rendering historical messages into the live chat.
     const suppressUpdatesRef = yield* Ref.make(false);
+    const crypto = yield* Crypto.Crypto;
     // Per-runtime-instance nonce. Used in assistant message item IDs so that a
     // resumed session (same acpSessionId, fresh in-memory segment counter at 0)
     // never collides with assistant message IDs persisted by the prior runtime.
-    const runtimeInstanceId = crypto.randomUUID().slice(0, 8);
+    const runtimeInstanceId = (yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8);
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;

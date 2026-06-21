@@ -25,6 +25,7 @@ import {
 } from "@ru-fork/mcp-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -60,7 +61,10 @@ import { type DesiredInstance, McpSupervisor } from "./McpSupervisor.ts";
 // uuid here is correct — and matches CheckpointReactor / ProviderCommandReactor. (autobind is the
 // deliberate exception below: its stable id IS its "bind a builtin to a project once ever" guard.)
 const mkReconcileCommandId = (tag: string) =>
-  CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
+  Crypto.Crypto.pipe(
+    Effect.flatMap((crypto) => crypto.randomUUIDv4.pipe(Effect.orDie)),
+    Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)),
+  );
 
 export interface McpReactorShape {
   /** Start reacting to authored MCP/project changes. Run inside the reactor scope. */
@@ -144,7 +148,7 @@ export const reconcileBuiltinsWith = (
           // ru-fork: unique per dispatch (see mkReconcileCommandId). Identity is `serverId` (stable), and
           // whether to dispatch at all is decided by the hash GATE above (`installed.builtinHash === hash`
           // ⇒ skip), so a no-op restart mints nothing and a changed definition / a re-add always re-syncs.
-          commandId: mkReconcileCommandId(`mcp-builtin-sync:${definition.builtinId}`),
+          commandId: yield* mkReconcileCommandId(`mcp-builtin-sync:${definition.builtinId}`),
           serverId: McpServerId.make(serverId),
           builtinId: definition.builtinId,
           builtinHash: hash,
@@ -170,7 +174,7 @@ export const reconcileBuiltinsWith = (
         yield* engine
           .dispatch({
             type: "mcp.server-remove",
-            commandId: mkReconcileCommandId(`mcp-builtin-remove:${installed.builtinId}`),
+            commandId: yield* mkReconcileCommandId(`mcp-builtin-remove:${installed.builtinId}`),
             serverId: installed.id,
           })
           .pipe(
@@ -229,7 +233,7 @@ export const backfillServerMetadataEffect = Effect.gen(function* () {
         yield* engine
           .dispatch({
             type: "mcp.server-update",
-            commandId: mkReconcileCommandId(
+            commandId: yield* mkReconcileCommandId(
               `mcp-meta-backfill:${server.id}:${Object.keys(patch).toSorted().join("-")}`,
             ),
             serverId: server.id,
@@ -274,7 +278,7 @@ export const pruneOrphanedVarValuesEffect = Effect.gen(function* () {
     yield* engine
       .dispatch({
         type: "mcp.binding-set",
-        commandId: mkReconcileCommandId(`mcp-prune-vars:${binding.projectId}:${binding.serverId}`),
+        commandId: yield* mkReconcileCommandId(`mcp-prune-vars:${binding.projectId}:${binding.serverId}`),
         projectId: binding.projectId,
         serverId: binding.serverId,
         patch: { varValues: {}, keepVarValues: keep },
@@ -432,7 +436,7 @@ export const autobindBuiltinsForProjectWith = (projectId: ProjectId) =>
     const serverSettings = yield* ServerSettingsService;
     const catalogRepository = yield* McpCatalogRepository;
     const engine = yield* OrchestrationEngineService;
-    const settings = yield* serverSettings.getSettings.pipe(Effect.catch(() => Effect.succeed(null)));
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
     if (settings === null || !settings.mcp.autobindDefaults) {
       return;
     }
@@ -470,6 +474,7 @@ export const autobindBuiltinsForProjectWith = (projectId: ProjectId) =>
   );
 
 const make = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
   const catalogRepository = yield* McpCatalogRepository;
   const bindingRepository = yield* McpBindingRepository;
   const probeCache = yield* McpProbeCacheRepository;
@@ -499,6 +504,7 @@ const make = Effect.gen(function* () {
   // default-config cache row and dispatches a metadata-only `mcp.server-update`. Replay-idempotent
   // (deterministic, field-scoped commandId); converges (once filled, the next pass produces no patch).
   const backfillServerMetadata = backfillServerMetadataEffect.pipe(
+    Effect.provideService(Crypto.Crypto, crypto),
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(McpCatalogRepository, catalogRepository),
     Effect.provideService(McpProbeCacheRepository, probeCache),
@@ -549,6 +555,7 @@ const make = Effect.gen(function* () {
   // content-hash change (3-way merge preserves user values/vars/extraArgs), remove deleted. Runs at
   // startup. NOT eager (no probing on load). Unsupported platform (no config variant) ⇒ skip.
   const reconcileBuiltins = reconcileBuiltinsWith(MCP_BUILTINS, process.platform).pipe(
+    Effect.provideService(Crypto.Crypto, crypto),
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(McpCatalogRepository, catalogRepository),
   );
@@ -564,6 +571,7 @@ const make = Effect.gen(function* () {
   // ignores unknown names, so this is hygiene + makes the secret GC exact. Ref-preserving (no
   // plaintext needed) — `keepVarValues` carries the surviving names' existing refs through.
   const pruneOrphanedVarValues = pruneOrphanedVarValuesEffect.pipe(
+    Effect.provideService(Crypto.Crypto, crypto),
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(McpCatalogRepository, catalogRepository),
     Effect.provideService(McpBindingRepository, bindingRepository),

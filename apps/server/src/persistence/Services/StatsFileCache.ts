@@ -42,4 +42,4 @@ export interface StatsFileCacheRepositoryShape {
 export class StatsFileCacheRepository extends Context.Service<
   StatsFileCacheRepository,
   StatsFileCacheRepositoryShape
->()("ru-fork/persistence/Services/StatsFileCache/StatsFileCacheRepository") {}
+>()("@ru-code/ru-code/persistence/Services/StatsFileCache/StatsFileCacheRepository") {}

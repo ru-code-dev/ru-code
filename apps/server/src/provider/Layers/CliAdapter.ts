@@ -108,7 +108,7 @@ const PROVIDER = ProviderDriverKind.make(CLI_NAME);
 export interface CliAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogger?: EventNdjsonLogger;
-  readonly instanceId?: typeof ProviderInstanceId.Type;
+  readonly instanceId?: ProviderInstanceId;
   /**
    * ru-fork: override the ACP start-handshake timeout. Production omits it ⇒
    * ACP_SESSION_START_TIMEOUT_MS. Tests pass a tiny value so a scripted hang at
@@ -738,6 +738,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                 : Effect.void,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
+            Effect.provideService(Crypto.Crypto, crypto),
             // ru-fork: capture the original stream-side cause at the
             // boundary — `mapAcpToAdapterError` below wraps it in a
             // `ProviderAdapterProcessError` whose `.cause` is preserved

@@ -7,15 +7,11 @@
 import type { ServerProviderSkill } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
-import type * as Path from "effect/Path";
 
 export interface SkillsForCwdResult {
   readonly global: ReadonlyArray<ServerProviderSkill>;
   readonly project: ReadonlyArray<ServerProviderSkill>;
 }
-
-export type SkillScannerEnv = FileSystem.FileSystem | Path.Path;
 
 export interface SkillScannerShape {
   /**
@@ -26,7 +22,7 @@ export interface SkillScannerShape {
    */
   readonly getSkillsForCwd: (
     cwd: string | null,
-  ) => Effect.Effect<SkillsForCwdResult, never, SkillScannerEnv>;
+  ) => Effect.Effect<SkillsForCwdResult, never, never>;
 
   /**
    * Force a re-scan of the global root and (when cwd is non-null) the
@@ -34,7 +30,7 @@ export interface SkillScannerShape {
    */
   readonly refreshSkillsForCwd: (
     cwd: string | null,
-  ) => Effect.Effect<SkillsForCwdResult, never, SkillScannerEnv>;
+  ) => Effect.Effect<SkillsForCwdResult, never, never>;
 }
 
 export class SkillScanner extends Context.Service<SkillScanner, SkillScannerShape>()(

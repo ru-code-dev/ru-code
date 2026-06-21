@@ -7,6 +7,8 @@ import {
   type LocalApi,
   ORCHESTRATION_WS_METHODS,
   type ServerSettingsPatch,
+  STATS_GET_SNAPSHOT_METHOD,
+  STATS_REFRESH_METHOD,
   TRANSCRIPT_WS_METHOD,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -162,6 +164,11 @@ export interface WsRpcClient {
     readonly subscribeRuntime: RpcStreamMethod<typeof WS_METHODS.subscribeMcpRuntime>;
     readonly setActiveProject: RpcUnaryMethod<typeof WS_METHODS.mcpSetActiveProject>;
     readonly recheck: RpcUnaryMethod<typeof WS_METHODS.mcpRecheck>;
+  };
+  // ru-fork: stats (analytics) — pure-read snapshot + disk refresh.
+  readonly stats: {
+    readonly getSnapshot: RpcUnaryMethod<typeof STATS_GET_SNAPSHOT_METHOD>;
+    readonly refresh: RpcUnaryMethod<typeof STATS_REFRESH_METHOD>;
   };
 }
 
@@ -345,6 +352,11 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       setActiveProject: (input) =>
         transport.request((client) => client[WS_METHODS.mcpSetActiveProject](input)),
       recheck: (input) => transport.request((client) => client[WS_METHODS.mcpRecheck](input)),
+    },
+    stats: {
+      getSnapshot: (input) =>
+        transport.request((client) => client[STATS_GET_SNAPSHOT_METHOD](input)),
+      refresh: (input) => transport.request((client) => client[STATS_REFRESH_METHOD](input)),
     },
   };
 }

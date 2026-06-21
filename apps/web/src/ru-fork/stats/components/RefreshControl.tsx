@@ -1,21 +1,18 @@
 /**
- * ru-fork: Analytics — refresh cadence control. Manual refresh icon (re-rolls
- * the demo data so it feels live), the "обновлено N назад" stamp, and the
- * update-interval setting (default 30 мин) that also drives an auto-refresh tick.
+ * ru-fork: Analytics — refresh control. Manual ⟳ icon (forces a server
+ * `stats.refresh` via the store nonce) and the "обновлено N назад" stamp. There is
+ * no auto-refresh — data loads only on open and on this button.
  *
  * @module ru-fork/stats/components/RefreshControl
  */
 import { useEffect, useState } from "react";
-import { RefreshCwIcon, TimerIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
-import { REFRESH_INTERVAL_OPTIONS, useStatsStore } from "../store";
-import { FilterSelect } from "./primitives";
+import { useStatsStore } from "../store";
 
 const RELATIVE_TIME_TICK_MS = 15_000;
-const REFRESH_SPINNER_MS = 700;
-const MILLISECONDS_PER_MINUTE = 60_000;
 
 function useRelativeTime(sinceMs: number): string {
   const [, forceRerender] = useState(0);
@@ -24,6 +21,7 @@ function useRelativeTime(sinceMs: number): string {
     return () => clearInterval(intervalId);
   }, []);
 
+  if (sinceMs === 0) return "—";
   const elapsedSeconds = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
   if (elapsedSeconds < 30) return "только что";
   if (elapsedSeconds < 90) return "минуту назад";
@@ -34,26 +32,11 @@ function useRelativeTime(sinceMs: number): string {
 }
 
 export function RefreshControl() {
-  const isRefreshing = useStatsStore((state) => state.isRefreshing);
+  const status = useStatsStore((state) => state.status);
   const lastRefreshedAtMs = useStatsStore((state) => state.lastRefreshedAtMs);
-  const refreshIntervalMin = useStatsStore((state) => state.refreshIntervalMin);
-  const startRefresh = useStatsStore((state) => state.startRefresh);
-  const finishRefresh = useStatsStore((state) => state.finishRefresh);
-  const setRefreshIntervalMin = useStatsStore((state) => state.setRefreshIntervalMin);
+  const requestRefresh = useStatsStore((state) => state.requestRefresh);
   const relativeTime = useRelativeTime(lastRefreshedAtMs);
-
-  // Resolve the spinner shortly after a refresh starts.
-  useEffect(() => {
-    if (!isRefreshing) return;
-    const timeoutId = setTimeout(() => finishRefresh(), REFRESH_SPINNER_MS);
-    return () => clearTimeout(timeoutId);
-  }, [isRefreshing, finishRefresh]);
-
-  // Auto-refresh on the configured cadence.
-  useEffect(() => {
-    const intervalId = setInterval(() => startRefresh(), refreshIntervalMin * MILLISECONDS_PER_MINUTE);
-    return () => clearInterval(intervalId);
-  }, [refreshIntervalMin, startRefresh]);
+  const isRefreshing = status === "loading";
 
   return (
     <div className="flex items-center gap-2">
@@ -61,20 +44,13 @@ export function RefreshControl() {
       <Button
         size="sm"
         variant="outline"
-        onClick={() => startRefresh()}
+        onClick={() => requestRefresh()}
         disabled={isRefreshing}
         aria-label="Обновить статистику"
       >
         <RefreshCwIcon className={cn(isRefreshing && "animate-spin")} />
         <span className="hidden sm:inline">Обновить</span>
       </Button>
-      <FilterSelect
-        ariaLabel="Интервал обновления"
-        icon={TimerIcon}
-        value={String(refreshIntervalMin)}
-        onChange={(nextValue) => setRefreshIntervalMin(Number(nextValue))}
-        options={REFRESH_INTERVAL_OPTIONS.map((option) => ({ value: String(option.value), label: option.label }))}
-      />
     </div>
   );
 }

@@ -1,21 +1,21 @@
 /**
  * ru-fork: Analytics — UI state (zustand) + the derived-view hook.
  *
- * Holds filters, chart granularity, the refresh cadence setting, and which
- * drill-down (widget detail / session) is open. The actual numbers are derived
- * by {@link useStatsView} from the fake session set for the current seed —
- * "refresh" just bumps the seed + stamps a time, so it feels live, 0 server.
+ * Holds filters, granularity, the fetched sessions, load status, and which
+ * drill-down is open. Numbers are derived by {@link useStatsView} from the
+ * server-provided sessions for the current filters. The fetch itself lives in
+ * {@link useStatsData}; the ⟳ button bumps `refreshNonce` to force a refresh.
  *
  * @module ru-fork/stats/store
  */
 import { useMemo } from "react";
 import { create } from "zustand";
 
-import { BASE_SESSIONS, sessionsForSeed } from "./model/fakeData";
-import { buildView } from "./model/selectors";
-import type { Granularity, StatsFilters, StatsSession, StatsView } from "./model/types";
+import type { StatsSession } from "@t3tools/contracts";
 
-/** Which expandable widget detail panel is open. */
+import { buildView } from "./model/selectors";
+import type { Granularity, StatsFilters, StatsView } from "./model/types";
+
 export type WidgetId =
   | "usage"
   | "models"
@@ -26,44 +26,34 @@ export type WidgetId =
   | "branches"
   | "composition";
 
-export interface RefreshIntervalOption {
-  readonly value: number;
-  readonly label: string;
-}
+export type StatsStatus = "idle" | "loading" | "ready" | "error";
 
-export const REFRESH_INTERVAL_OPTIONS: readonly RefreshIntervalOption[] = [
-  { value: 5, label: "5 минут" },
-  { value: 15, label: "15 минут" },
-  { value: 30, label: "30 минут" },
-  { value: 60, label: "1 час" },
-  { value: 360, label: "6 часов" },
-];
-
-const DEFAULT_FILTERS: StatsFilters = {
+export const DEFAULT_FILTERS: StatsFilters = {
   rangeDays: 30,
   projectId: "all",
   model: "all",
   branch: "all",
   includeTemp: false,
-  traffic: "all",
+  traffic: "turns",
 };
 
 interface StatsState {
   readonly filters: StatsFilters;
   readonly granularity: Granularity;
-  readonly refreshIntervalMin: number;
-  readonly seed: number;
+  readonly sessions: ReadonlyArray<StatsSession>;
+  readonly status: StatsStatus;
+  readonly errorDetail: string | null;
   readonly lastRefreshedAtMs: number;
-  readonly isRefreshing: boolean;
+  readonly refreshNonce: number;
   readonly openWidget: WidgetId | null;
   readonly selectedSessionId: string | null;
 
   readonly setFilters: (patch: Partial<StatsFilters>) => void;
   readonly resetFilters: () => void;
   readonly setGranularity: (granularity: Granularity) => void;
-  readonly setRefreshIntervalMin: (refreshIntervalMin: number) => void;
-  readonly startRefresh: () => void;
-  readonly finishRefresh: () => void;
+  readonly setSnapshot: (sessions: ReadonlyArray<StatsSession>, atMs: number) => void;
+  readonly setStatus: (status: StatsStatus, errorDetail?: string | null) => void;
+  readonly requestRefresh: () => void;
   readonly openWidgetDetail: (widget: WidgetId | null) => void;
   readonly selectSession: (sessionId: string | null) => void;
 }
@@ -71,33 +61,40 @@ interface StatsState {
 export const useStatsStore = create<StatsState>()((set) => ({
   filters: DEFAULT_FILTERS,
   granularity: "day",
-  refreshIntervalMin: 30,
-  seed: 0,
-  lastRefreshedAtMs: Date.now(),
-  isRefreshing: false,
+  sessions: [],
+  status: "idle",
+  errorDetail: null,
+  lastRefreshedAtMs: 0,
+  refreshNonce: 0,
   openWidget: null,
   selectedSessionId: null,
 
   setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
   resetFilters: () => set({ filters: DEFAULT_FILTERS }),
   setGranularity: (granularity) => set({ granularity }),
-  setRefreshIntervalMin: (refreshIntervalMin) => set({ refreshIntervalMin }),
-  startRefresh: () => set({ isRefreshing: true }),
-  finishRefresh: () =>
-    set((state) => ({ isRefreshing: false, seed: state.seed + 1, lastRefreshedAtMs: Date.now() })),
+  // Replace the session set + clear any prior error. Used by both the instant read
+  // and a successful refresh.
+  setSnapshot: (sessions, atMs) =>
+    set({ sessions, status: "ready", errorDetail: null, lastRefreshedAtMs: atMs }),
+  // Status-only update — never touches `sessions`, so a failed refresh keeps the
+  // last good data on screen (just flips status to "error" + a note).
+  setStatus: (status, errorDetail = null) => set({ status, errorDetail }),
+  // ⟳ button: bump the nonce so useStatsData runs a forced refresh.
+  requestRefresh: () => set((state) => ({ refreshNonce: state.refreshNonce + 1, status: "loading" })),
   openWidgetDetail: (openWidget) => set({ openWidget }),
   selectSession: (selectedSessionId) => set({ selectedSessionId }),
 }));
 
-/** Derived dashboard view for the active filters/seed. Memoized per input. */
+/** Derived dashboard view for the active filters + fetched sessions. */
 export function useStatsView(): StatsView {
   const filters = useStatsStore((state) => state.filters);
   const granularity = useStatsStore((state) => state.granularity);
-  const seed = useStatsStore((state) => state.seed);
+  const sessions = useStatsStore((state) => state.sessions);
+  const lastRefreshedAtMs = useStatsStore((state) => state.lastRefreshedAtMs);
   return useMemo(() => {
-    const sessions = seed === 0 ? BASE_SESSIONS : sessionsForSeed(seed);
-    return buildView(sessions, filters, granularity);
-  }, [filters, granularity, seed]);
+    const anchorMs = lastRefreshedAtMs > 0 ? lastRefreshedAtMs : Date.now();
+    return buildView(sessions, filters, granularity, anchorMs);
+  }, [sessions, filters, granularity, lastRefreshedAtMs]);
 }
 
 export function findSessionById(view: StatsView, sessionId: string | null): StatsSession | null {

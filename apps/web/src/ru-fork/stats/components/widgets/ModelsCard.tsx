@@ -24,7 +24,7 @@ export function ModelsCard({ models, onExpand }: ModelsCardProps) {
 
   return (
     <WidgetCard title="Модели" subtitle={`${models.length} в использовании`} icon={BotIcon} onExpand={onExpand}>
-      <div className="flex flex-1 items-center gap-3">
+      <div className="flex flex-1 flex-col items-center gap-3">
         <ChartContainer config={MODELS_CONFIG} className="aspect-square h-[150px]">
           <PieChart>
             <ChartTooltip content={<ChartTooltipContent hideLabel nameKey="label" />} />
@@ -44,7 +44,7 @@ export function ModelsCard({ models, onExpand }: ModelsCardProps) {
             </Pie>
           </PieChart>
         </ChartContainer>
-        <ul className="flex flex-1 flex-col gap-2 text-xs">
+        <ul className="flex w-full flex-col gap-2 text-xs">
           {models.map((model, modelIndex) => (
             <li key={model.groupKey} className="flex items-center gap-2">
               <span className="size-2.5 shrink-0 rounded-[3px]" style={{ background: chartColor(modelIndex) }} />

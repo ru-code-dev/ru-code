@@ -1,13 +1,17 @@
 /**
- * ru-fork: Analytics — pure aggregation. Filters narrow the session set; this
- * turns the survivors into every widget's view model. One source of truth: change
- * a filter and the KPIs, charts, tables and heatmap all recompute from here.
+ * ru-fork: Analytics — pure aggregation. Filters narrow the session set; this turns
+ * the survivors into every widget's view model. One source of truth: change a filter
+ * and the KPIs, charts, tables and heatmap all recompute from here.
+ *
+ * Time is handled at the grain the server pre-computed: each session carries
+ * `tokensByDay` (per UTC day) and `tokensByWeekdayHour`. Token/usage views are summed
+ * from the in-window days, so a multi-day session contributes to each day it touched
+ * — no more pinning a whole session to one timestamp.
  *
  * @module ru-fork/stats/model/selectors
  */
 import { TOOLS } from "./catalog";
-import { DEMO_TODAY } from "./generateSessions";
-import { dayKey, isoWeekday } from "./format";
+import { isoWeekday } from "./format";
 import type {
   ApprovalSplit,
   ErrorStat,
@@ -16,6 +20,8 @@ import type {
   KpiSet,
   LatencyBucket,
   NamedTokenSlice,
+  RangeDays,
+  StatsDayBucket,
   StatsFilters,
   StatsSession,
   StatsView,
@@ -26,7 +32,6 @@ import type {
 } from "./types";
 
 const MILLISECONDS_PER_DAY = 86_400_000;
-const ANCHOR_MS = Date.parse(`${DEMO_TODAY}T23:59:59.000Z`);
 
 const TOOL_GROUP_BY_NAME: ReadonlyMap<string, ToolGroup> = new Map(
   TOOLS.map((tool) => [tool.name, tool.group]),
@@ -35,10 +40,63 @@ function toolGroupForName(toolName: string): ToolGroup {
   return TOOL_GROUP_BY_NAME.get(toolName) ?? (toolName.startsWith("mcp__") ? "mcp" : "flow");
 }
 
-function startsWithinRange(session: StatsSession, rangeDays: number, anchorMs = ANCHOR_MS): boolean {
-  const cutoffMs = anchorMs - rangeDays * MILLISECONDS_PER_DAY;
-  return Date.parse(session.startedAt) >= cutoffMs;
+// ── time windows (calendar-day aligned, UTC) ────────────────────────────────
+
+/** Local "YYYY-MM-DD" of a millisecond instant — the browser's local day, matching the
+ *  server's local-zone day keys (same machine ⇒ same zone). */
+function dayKeyFromMs(milliseconds: number): string {
+  const date = new Date(milliseconds);
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
+
+/** Earliest in-window day key for a range; null ⇒ "all" (no cutoff). */
+function cutoffDayKey(rangeDays: RangeDays, anchorMs: number): string | null {
+  if (rangeDays === "all") return null;
+  return dayKeyFromMs(anchorMs - (rangeDays - 1) * MILLISECONDS_PER_DAY);
+}
+
+/** Sum the session's day buckets that fall on/after the cutoff (all if null). */
+function windowedTokens(session: StatsSession, cutoff: string | null): StatsDayBucket {
+  let input = 0;
+  let output = 0;
+  let thinking = 0;
+  let cached = 0;
+  let apiCalls = 0;
+  for (const [day, bucket] of Object.entries(session.tokensByDay)) {
+    if (cutoff !== null && day < cutoff) continue;
+    input += bucket.input;
+    output += bucket.output;
+    thinking += bucket.thinking;
+    cached += bucket.cached;
+    apiCalls += bucket.apiCalls;
+  }
+  return { input, output, thinking, cached, apiCalls };
+}
+
+/** Does the session have any activity on/after the cutoff (always, when "all")? */
+function hasWindowActivity(session: StatsSession, cutoff: string | null): boolean {
+  const days = Object.keys(session.tokensByDay);
+  if (cutoff === null) return days.length > 0;
+  return days.some((day) => day >= cutoff);
+}
+
+function visibleTotal(tokens: TokenBreakdown): number {
+  return tokens.input + tokens.output + tokens.thinking;
+}
+
+function bucketVisible(bucket: StatsDayBucket): number {
+  return bucket.input + bucket.output + bucket.thinking;
+}
+
+function sumRecordValues(record: Readonly<Record<string, number>>): number {
+  let total = 0;
+  for (const value of Object.values(record)) total += value;
+  return total;
+}
+
+// ── dimension matching + filtering ──────────────────────────────────────────
 
 function matchesDimensions(session: StatsSession, filters: StatsFilters): boolean {
   if (!filters.includeTemp && session.projectKind === "temp") return false;
@@ -48,37 +106,60 @@ function matchesDimensions(session: StatsSession, filters: StatsFilters): boolea
   return true;
 }
 
+function matchesTraffic(session: StatsSession, filters: StatsFilters): boolean {
+  if (filters.traffic === "turns") return !session.isBackground;
+  if (filters.traffic === "background") return session.isBackground;
+  return true;
+}
+
 export function filterSessions(
   sessions: readonly StatsSession[],
   filters: StatsFilters,
+  anchorMs: number,
 ): readonly StatsSession[] {
-  return sessions.filter((session) => {
-    if (!matchesDimensions(session, filters)) return false;
-    if (filters.traffic === "turns" && session.isBackground) return false;
-    if (filters.traffic === "background" && !session.isBackground) return false;
-    return startsWithinRange(session, filters.rangeDays);
-  });
-}
-
-function sumTokens(sessions: readonly StatsSession[]): TokenBreakdown {
-  return sessions.reduce<TokenBreakdown>(
-    (accumulator, session) => ({
-      input: accumulator.input + session.tokens.input,
-      output: accumulator.output + session.tokens.output,
-      thinking: accumulator.thinking + session.tokens.thinking,
-      cached: accumulator.cached + session.tokens.cached,
-    }),
-    { input: 0, output: 0, thinking: 0, cached: 0 },
+  const cutoff = cutoffDayKey(filters.rangeDays, anchorMs);
+  return sessions.filter(
+    (session) =>
+      matchesDimensions(session, filters) &&
+      matchesTraffic(session, filters) &&
+      hasWindowActivity(session, cutoff),
   );
 }
 
-function visibleTotal(tokens: TokenBreakdown): number {
-  return tokens.input + tokens.output + tokens.thinking;
+// ── token aggregation (windowed) ────────────────────────────────────────────
+
+function sumWindowedTokens(sessions: readonly StatsSession[], cutoff: string | null): TokenBreakdown {
+  let input = 0;
+  let output = 0;
+  let thinking = 0;
+  let cached = 0;
+  for (const session of sessions) {
+    const windowed = windowedTokens(session, cutoff);
+    input += windowed.input;
+    output += windowed.output;
+    thinking += windowed.thinking;
+    cached += windowed.cached;
+  }
+  return { input, output, thinking, cached };
 }
 
-function sumRecordValues(record: Readonly<Record<string, number>>): number {
+/** Visible tokens in the previous equal-length window (for the trend chips). */
+function previousWindowVisibleTokens(
+  sessions: readonly StatsSession[],
+  filters: StatsFilters,
+  anchorMs: number,
+): number {
+  if (filters.rangeDays === "all") return 0;
+  const span = filters.rangeDays;
+  const previousEnd = dayKeyFromMs(anchorMs - span * MILLISECONDS_PER_DAY);
+  const previousStart = dayKeyFromMs(anchorMs - (2 * span - 1) * MILLISECONDS_PER_DAY);
   let total = 0;
-  for (const value of Object.values(record)) total += value;
+  for (const session of sessions) {
+    if (!matchesDimensions(session, filters) || !matchesTraffic(session, filters)) continue;
+    for (const [day, bucket] of Object.entries(session.tokensByDay)) {
+      if (day >= previousStart && day <= previousEnd) total += bucketVisible(bucket);
+    }
+  }
   return total;
 }
 
@@ -86,8 +167,13 @@ function buildKpis(
   allSessions: readonly StatsSession[],
   filteredSessions: readonly StatsSession[],
   filters: StatsFilters,
+  anchorMs: number,
+  cutoff: string | null,
 ): KpiSet {
-  const tokens = sumTokens(filteredSessions);
+  const tokens = sumWindowedTokens(filteredSessions, cutoff);
+  // Counts (calls/tools/errors) + latency are session-grain over the in-window sessions;
+  // only token amounts are windowed by day. So errorRate's denominator matches its
+  // numerator and the "API calls" tile matches the latency denominator.
   const apiCalls = filteredSessions.reduce((total, session) => total + session.apiCalls, 0);
   const toolCalls = filteredSessions.reduce((total, session) => total + sumRecordValues(session.toolCounts), 0);
   const errors = filteredSessions.reduce((total, session) => total + sumRecordValues(session.errorTypes), 0);
@@ -97,15 +183,7 @@ function buildKpis(
   );
   const projectCount = new Set(filteredSessions.map((session) => session.projectId)).size;
 
-  // Previous equal-length window for the trend chips.
-  const previousWindowEndMs = ANCHOR_MS - filters.rangeDays * MILLISECONDS_PER_DAY;
-  const previousWindowStartMs = previousWindowEndMs - filters.rangeDays * MILLISECONDS_PER_DAY;
-  const previousSessions = allSessions.filter((session) => {
-    if (!matchesDimensions(session, filters)) return false;
-    const startedMs = Date.parse(session.startedAt);
-    return startedMs >= previousWindowStartMs && startedMs < previousWindowEndMs;
-  });
-  const previousTokens = visibleTotal(sumTokens(previousSessions));
+  const previousTokens = previousWindowVisibleTokens(allSessions, filters, anchorMs);
   const currentTokens = visibleTotal(tokens);
   const tokensDeltaPct = previousTokens > 0 ? ((currentTokens - previousTokens) / previousTokens) * 100 : 0;
 
@@ -126,6 +204,8 @@ function buildKpis(
   };
 }
 
+// ── usage over time (per day, windowed) ─────────────────────────────────────
+
 interface MutableTimeBucket {
   bucketKey: string;
   label: string;
@@ -136,29 +216,38 @@ interface MutableTimeBucket {
   calls: number;
 }
 
-function weekStartKey(isoString: string): string {
-  const mondayMs = Date.parse(isoString) - isoWeekday(isoString) * MILLISECONDS_PER_DAY;
+function weekStartKey(dayKeyValue: string): string {
+  const mondayMs = Date.parse(`${dayKeyValue}T00:00:00Z`) - isoWeekday(dayKeyValue) * MILLISECONDS_PER_DAY;
   return new Date(mondayMs).toISOString().slice(0, 10);
 }
 
-function buildSeries(sessions: readonly StatsSession[], granularity: Granularity): readonly TimeBucket[] {
+function buildSeries(
+  sessions: readonly StatsSession[],
+  granularity: Granularity,
+  cutoff: string | null,
+): readonly TimeBucket[] {
   const bucketsByKey = new Map<string, MutableTimeBucket>();
   for (const session of sessions) {
-    const bucketKey = granularity === "day" ? dayKey(session.startedAt) : weekStartKey(session.startedAt);
-    const bucket =
-      bucketsByKey.get(bucketKey) ??
-      { bucketKey, label: bucketKey, input: 0, output: 0, thinking: 0, total: 0, calls: 0 };
-    bucket.input += session.tokens.input;
-    bucket.output += session.tokens.output;
-    bucket.thinking += session.tokens.thinking;
-    bucket.total += visibleTotal(session.tokens);
-    bucket.calls += session.apiCalls;
-    bucketsByKey.set(bucketKey, bucket);
+    for (const [day, dayBucket] of Object.entries(session.tokensByDay)) {
+      if (cutoff !== null && day < cutoff) continue;
+      const bucketKey = granularity === "day" ? day : weekStartKey(day);
+      const bucket =
+        bucketsByKey.get(bucketKey) ??
+        { bucketKey, label: bucketKey, input: 0, output: 0, thinking: 0, total: 0, calls: 0 };
+      bucket.input += dayBucket.input;
+      bucket.output += dayBucket.output;
+      bucket.thinking += dayBucket.thinking;
+      bucket.total += bucketVisible(dayBucket);
+      bucket.calls += dayBucket.apiCalls;
+      bucketsByKey.set(bucketKey, bucket);
+    }
   }
   return Array.from(bucketsByKey.values()).toSorted((first, second) =>
     first.bucketKey.localeCompare(second.bucketKey),
   );
 }
+
+// ── dimension leaderboards (windowed tokens per group) ──────────────────────
 
 interface GroupDescriptor {
   readonly groupKey: string;
@@ -175,13 +264,14 @@ interface MutableSlice {
 
 function groupSlices(
   sessions: readonly StatsSession[],
+  cutoff: string | null,
   describeGroup: (session: StatsSession) => GroupDescriptor,
 ): readonly NamedTokenSlice[] {
   const slicesByKey = new Map<string, MutableSlice>();
   let grandTotal = 0;
   for (const session of sessions) {
     const descriptor = describeGroup(session);
-    const sessionTokens = visibleTotal(session.tokens);
+    const sessionTokens = bucketVisible(windowedTokens(session, cutoff));
     grandTotal += sessionTokens;
     const slice =
       slicesByKey.get(descriptor.groupKey) ??
@@ -201,6 +291,8 @@ function groupSlices(
     }))
     .toSorted((first, second) => second.tokens - first.tokens);
 }
+
+// ── tools / errors / approvals / latency (session-grain over the filtered set) ──
 
 function buildTools(sessions: readonly StatsSession[]): readonly ToolStat[] {
   const callsByTool = new Map<string, number>();
@@ -276,6 +368,8 @@ function buildLatency(sessions: readonly StatsSession[]): readonly LatencyBucket
   return counts;
 }
 
+// ── activity heatmap (from the per-weekday-hour slots) ──────────────────────
+
 interface MutableHeatCell {
   weekday: number;
   hour: number;
@@ -286,37 +380,44 @@ interface MutableHeatCell {
 function buildHeatmap(sessions: readonly StatsSession[]): readonly HeatCell[] {
   const cellsByKey = new Map<string, MutableHeatCell>();
   for (const session of sessions) {
-    const weekday = isoWeekday(session.startedAt);
-    const hour = new Date(session.startedAt).getUTCHours();
-    const cellKey = `${weekday}:${hour}`;
-    const cell = cellsByKey.get(cellKey) ?? { weekday, hour, tokens: 0, sessions: 0 };
-    cell.tokens += visibleTotal(session.tokens);
-    cell.sessions += 1;
-    cellsByKey.set(cellKey, cell);
+    for (const [slot, tokens] of Object.entries(session.tokensByWeekdayHour)) {
+      const [weekdayPart, hourPart] = slot.split(":");
+      const weekday = Number(weekdayPart);
+      const hour = Number(hourPart);
+      if (!Number.isInteger(weekday) || !Number.isInteger(hour)) continue;
+      const cell = cellsByKey.get(slot) ?? { weekday, hour, tokens: 0, sessions: 0 };
+      cell.tokens += tokens;
+      cell.sessions += 1;
+      cellsByKey.set(slot, cell);
+    }
   }
   return Array.from(cellsByKey.values());
 }
+
+// ── assembly ────────────────────────────────────────────────────────────────
 
 export function buildView(
   allSessions: readonly StatsSession[],
   filters: StatsFilters,
   granularity: Granularity,
+  anchorMs: number,
 ): StatsView {
-  const filteredSessions = filterSessions(allSessions, filters);
+  const cutoff = cutoffDayKey(filters.rangeDays, anchorMs);
+  const filteredSessions = filterSessions(allSessions, filters, anchorMs);
   return {
-    kpis: buildKpis(allSessions, filteredSessions, filters),
-    series: buildSeries(filteredSessions, granularity),
-    composition: sumTokens(filteredSessions),
-    byModel: groupSlices(filteredSessions, (session) => ({
+    kpis: buildKpis(allSessions, filteredSessions, filters, anchorMs, cutoff),
+    series: buildSeries(filteredSessions, granularity, cutoff),
+    composition: sumWindowedTokens(filteredSessions, cutoff),
+    byModel: groupSlices(filteredSessions, cutoff, (session) => ({
       groupKey: session.model,
-      label: session.model.replace("qwen/", ""),
+      label: session.model,
     })),
-    byProject: groupSlices(filteredSessions, (session) => ({
+    byProject: groupSlices(filteredSessions, cutoff, (session) => ({
       groupKey: session.projectId,
       label: session.projectLabel,
       kind: session.projectKind,
     })),
-    byBranch: groupSlices(filteredSessions, (session) => ({
+    byBranch: groupSlices(filteredSessions, cutoff, (session) => ({
       groupKey: session.branch,
       label: session.branch,
     })),

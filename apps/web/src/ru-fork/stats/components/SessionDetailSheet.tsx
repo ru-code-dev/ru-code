@@ -6,7 +6,7 @@
 import { Badge } from "~/components/ui/badge";
 import { Sheet, SheetDescription, SheetHeader, SheetPanel, SheetPopup, SheetTitle } from "~/components/ui/sheet";
 import { formatDateTime, formatDuration, formatInt, formatTokens } from "../model/format";
-import type { StatsSession, StatsView } from "../model/types";
+import { CATEGORY_LABEL, type StatsSession, type StatsView } from "../model/types";
 import { findSessionById, useStatsStore } from "../store";
 import { BarRow } from "./primitives";
 
@@ -37,9 +37,9 @@ function SessionDetailBody({ session }: { session: StatsSession }) {
         <SheetDescription>{formatDateTime(session.startedAt)}</SheetDescription>
         <div className="flex flex-wrap gap-1.5">
           <Badge variant="outline">{session.branch}</Badge>
-          <Badge variant="secondary">{session.model.replace("qwen/", "")}</Badge>
+          <Badge variant="secondary">{session.model}</Badge>
           {session.projectKind === "temp" ? <Badge variant="outline">песочница</Badge> : null}
-          {session.isBackground ? <Badge variant="info">фон</Badge> : null}
+          <Badge variant={session.category === "dialog" ? "secondary" : "info"}>{CATEGORY_LABEL[session.category]}</Badge>
         </div>
       </SheetHeader>
       <SheetPanel className="flex flex-col gap-4">

@@ -9,6 +9,7 @@
 import * as Schema from "effect/Schema";
 import type { ChatAttachment } from "@t3tools/contracts";
 
+import { COMMIT_MESSAGE_INSTRUCTION, PR_CONTENT_INSTRUCTION } from "./instructions.ts";
 import { limitSection } from "./TextGenerationUtils.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
@@ -44,7 +45,7 @@ export function buildCommitMessagePrompt(input: CommitMessagePromptInput) {
   const wantsBranch = input.includeBranch;
 
   const prompt = [
-    "You write concise git commit messages.",
+    COMMIT_MESSAGE_INSTRUCTION,
     wantsBranch
       ? "Return a JSON object with keys: subject, body, branch."
       : "Return a JSON object with keys: subject, body.",
@@ -99,7 +100,7 @@ export interface PrContentPromptInput {
 
 export function buildPrContentPrompt(input: PrContentPromptInput) {
   const prompt = [
-    "You write GitHub pull request content.",
+    PR_CONTENT_INSTRUCTION,
     "Return a JSON object with keys: title, body.",
     "Rules:",
     "- title MUST be in Russian (Русский язык), concise and specific, no trailing punctuation",

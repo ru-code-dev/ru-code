@@ -41,6 +41,8 @@ export const formatSchemaError = (cause: Cause.Cause<Schema.SchemaError>) => {
     : Cause.pretty(cause);
 };
 
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
+
 /**
  * A `Getter` that parses a lenient JSON string (tolerating trailing commas
  * and JS-style comments) into an unknown value.
@@ -66,7 +68,7 @@ const parseLenientJsonGetter = SchemaGetter.onSome((input: string) =>
       // Strip trailing commas before `}` or `]`.
       stripped = stripped.replace(/,(\s*[}\]])/g, "$1");
 
-      return Option.some(JSON.parse(stripped));
+      return Option.some(decodeUnknownJsonString(stripped));
     },
     catch: (e) => new SchemaIssue.InvalidValue(Option.some(input), { message: String(e) }),
   }),

@@ -63,7 +63,7 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   "TerminalSubprocessCheckError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
     terminalPid: Schema.Number,
     command: Schema.Literals(["powershell", "pgrep", "ps"]),
   },
@@ -73,7 +73,7 @@ class TerminalProcessSignalError extends Schema.TaggedErrorClass<TerminalProcess
   "TerminalProcessSignalError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
     signal: Schema.Literals(["SIGTERM", "SIGKILL"]),
   },
 ) {}

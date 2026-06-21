@@ -16,7 +16,7 @@ import * as Context from "effect/Context";
 export class PtySpawnError extends Schema.TaggedErrorClass<PtySpawnError>()("PtySpawnError", {
   adapter: Schema.String,
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 export interface PtyExitEvent {
@@ -56,5 +56,5 @@ export interface PtyAdapterShape {
  * PtyAdapter - Service tag for PTY process integration.
  */
 export class PtyAdapter extends Context.Service<PtyAdapter, PtyAdapterShape>()(
-  "t3/terminal/Services/PTY/PtyAdapter",
+  "@ru-code/ru-code/terminal/Services/PTY/PtyAdapter",
 ) {}

@@ -33,4 +33,4 @@ export interface McpBindingRepositoryShape {
 export class McpBindingRepository extends Context.Service<
   McpBindingRepository,
   McpBindingRepositoryShape
->()("ru-fork/persistence/Services/McpBinding/McpBindingRepository") {}
+>()("@ru-code/ru-code/persistence/Services/McpBinding/McpBindingRepository") {}

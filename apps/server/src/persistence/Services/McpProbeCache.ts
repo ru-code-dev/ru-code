@@ -30,4 +30,4 @@ export interface McpProbeCacheRepositoryShape {
 export class McpProbeCacheRepository extends Context.Service<
   McpProbeCacheRepository,
   McpProbeCacheRepositoryShape
->()("ru-fork/persistence/Services/McpProbeCache/McpProbeCacheRepository") {}
+>()("@ru-code/ru-code/persistence/Services/McpProbeCache/McpProbeCacheRepository") {}

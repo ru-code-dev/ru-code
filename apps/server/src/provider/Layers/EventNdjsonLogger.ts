@@ -14,6 +14,7 @@ import { RotatingFileSink } from "@t3tools/shared/logging";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Logger from "effect/Logger";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
@@ -84,29 +85,18 @@ function resolveStreamLabel(stream: EventNdjsonStream): string {
   }
 }
 
+const encodeUnknownJsonString = Schema.encodeUnknownEffect(Schema.UnknownFromJsonString);
+
 const toLogMessage = Effect.fn("toLogMessage")(function* (
   event: unknown,
 ): Effect.fn.Return<string | undefined> {
-  const serialized = yield* Effect.sync(() => {
-    try {
-      return { ok: true as const, value: JSON.stringify(event) };
-    } catch (error) {
-      return { ok: false as const, error };
-    }
-  });
-
-  if (!serialized.ok) {
-    yield* logWarning("failed to serialize provider event log record", {
-      error: serialized.error,
-    });
-    return undefined;
-  }
-
-  if (typeof serialized.value !== "string") {
-    return undefined;
-  }
-
-  return serialized.value;
+  return yield* encodeUnknownJsonString(event).pipe(
+    Effect.catch((error) =>
+      logWarning("failed to serialize provider event log record", { error }).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  );
 });
 
 const makeThreadWriter = Effect.fn("makeThreadWriter")(function* (input: {

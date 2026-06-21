@@ -70,7 +70,7 @@ export interface McpReactorShape {
 }
 
 export class McpReactor extends Context.Service<McpReactor, McpReactorShape>()(
-  "ru-fork/mcp/McpReactor",
+  "@ru-code/ru-code/ru-fork/mcp/McpReactor",
 ) {}
 
 /**

@@ -29,5 +29,5 @@ export interface NodeStoreShape {
 }
 
 export class NodeStore extends Context.Service<NodeStore, NodeStoreShape>()(
-  "pixso-move/NodeStore",
+  "@pixso-move/server/services/nodeStore",
 ) {}

@@ -29,7 +29,7 @@ export interface McpProjectionQueryShape {
 export class McpProjectionQuery extends Context.Service<
   McpProjectionQuery,
   McpProjectionQueryShape
->()("ru-fork/mcp/McpProjectionQuery") {}
+>()("@ru-code/ru-code/ru-fork/mcp/McpProjectionQuery") {}
 
 function isProjectionRelevant(event: OrchestrationEvent): boolean {
   return event.type.startsWith("mcp.") || event.type === "project.deleted";

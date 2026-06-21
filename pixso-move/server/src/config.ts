@@ -35,7 +35,7 @@ const defaults: ServerConfigShape = {
 };
 
 export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShape>()(
-  "pixso-move/ServerConfig",
+  "@pixso-move/server/config/ServerConfig",
 ) {
   // Production layer built from resolved options.
   static readonly layer = (shape: ServerConfigShape): Layer.Layer<ServerConfig> =>

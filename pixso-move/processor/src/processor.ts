@@ -12,5 +12,5 @@ export interface ProcessorShape {
 }
 
 export class Processor extends Context.Service<Processor, ProcessorShape>()(
-  "pixso-move/Processor",
+  "@pixso-move/processor/processor",
 ) {}

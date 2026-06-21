@@ -20,4 +20,4 @@ export interface QwenTranscriptServiceShape {
 export class QwenTranscriptService extends Context.Service<
   QwenTranscriptService,
   QwenTranscriptServiceShape
->()("t3/ru-fork/QwenTranscriptService") {}
+>()("@ru-code/ru-code/ru-fork/qwen-transcript/QwenTranscriptService") {}

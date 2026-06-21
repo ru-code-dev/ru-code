@@ -29,4 +29,4 @@ export interface VcsDriverShape {
   readonly initRepository: (input: VcsInitInput) => Effect.Effect<void, VcsError>;
 }
 
-export class VcsDriver extends Context.Service<VcsDriver, VcsDriverShape>()("t3/vcs/VcsDriver") {}
+export class VcsDriver extends Context.Service<VcsDriver, VcsDriverShape>()("@ru-code/ru-code/vcs/VcsDriver") {}

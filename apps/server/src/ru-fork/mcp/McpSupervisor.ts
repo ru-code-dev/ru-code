@@ -212,7 +212,7 @@ export interface McpSupervisorShape {
 }
 
 export class McpSupervisor extends Context.Service<McpSupervisor, McpSupervisorShape>()(
-  "ru-fork/mcp/McpSupervisor",
+  "@ru-code/ru-code/ru-fork/mcp/McpSupervisor",
 ) {}
 
 // Exported for unit testing (alongside isProbeDue/isSweepDue).

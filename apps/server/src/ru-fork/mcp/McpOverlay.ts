@@ -82,7 +82,7 @@ export interface McpOverlayShape {
 }
 
 export class McpOverlay extends Context.Service<McpOverlay, McpOverlayShape>()(
-  "ru-fork/mcp/McpOverlay",
+  "@ru-code/ru-code/ru-fork/mcp/McpOverlay",
 ) {}
 
 /** qwen mcpServers entry: resolved transport fields + policy-derived tool filter.

@@ -18,7 +18,7 @@ import { SOURCE_CONTROL_DEFAULT_TIMEOUT_MS } from "../timeouts.ts";
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
   operation: Schema.String,
   detail: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
@@ -92,7 +92,7 @@ export interface GitHubCliShape {
 }
 
 export class GitHubCli extends Context.Service<GitHubCli, GitHubCliShape>()(
-  "t3/source-control/GitHubCli",
+  "@ru-code/ru-code/sourceControl/GitHubCli",
 ) {}
 
 function errorText(error: VcsError | unknown): string {

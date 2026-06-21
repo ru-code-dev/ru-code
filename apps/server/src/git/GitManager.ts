@@ -88,7 +88,7 @@ export interface GitManagerShape {
 }
 
 export class GitManager extends Context.Service<GitManager, GitManagerShape>()(
-  "t3/git/GitManager",
+  "@ru-code/ru-code/git/GitManager",
 ) {}
 
 const MAX_PROGRESS_TEXT_LENGTH = 500;

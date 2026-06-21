@@ -27,6 +27,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -36,7 +37,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
-import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -415,6 +415,11 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    const crypto = yield* Crypto.Crypto;
+    // ru-fork: secure UUID source. A missing CSPRNG is unrecoverable for an adapter
+    // that must mint event/request/turn ids, so we die rather than thread PlatformError
+    // through every id call site.
+    const cryptoUuid = crypto.randomUUIDv4.pipe(Effect.orDie);
     const nativeEventLogger = options?.nativeEventLogger ?? undefined;
 
     const sessions = new Map<ThreadId, CliSessionContext>();
@@ -429,7 +434,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
     const layerScope = yield* Effect.scope;
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.make(id));
+    const nextEventId = Effect.map(cryptoUuid, (id) => EventId.make(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
@@ -462,11 +467,12 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
       Effect.gen(function* () {
         if (!nativeEventLogger) return;
         const observedAt = yield* nowIso;
+        const eventId = yield* cryptoUuid;
         yield* nativeEventLogger.write(
           {
             observedAt,
             event: {
-              id: crypto.randomUUID(),
+              id: eventId,
               kind: "notification",
               provider: PROVIDER,
               createdAt: observedAt,
@@ -854,7 +860,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                     return { outcome: { outcome: "cancelled" as const } };
                   }
                   const { questions, questionIndexById } = normalizeCliQuestions(questionsPayload);
-                  const requestId = ApprovalRequestId.make(crypto.randomUUID());
+                  const requestId = ApprovalRequestId.make(yield* cryptoUuid);
                   const runtimeRequestId = RuntimeRequestId.make(requestId);
                   const answersDeferred = yield* Deferred.make<ProviderUserInputAnswers>();
                   pendingUserInputs.set(requestId, {
@@ -942,7 +948,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                       payload: params,
                     },
                   });
-                  const requestId = ApprovalRequestId.make(crypto.randomUUID());
+                  const requestId = ApprovalRequestId.make(yield* cryptoUuid);
                   const runtimeRequestId = RuntimeRequestId.make(requestId);
                   const decision = yield* Deferred.make<ProviderApprovalDecision>();
                   pendingApprovals.set(requestId, { decision, kind: "exit_plan_mode" });
@@ -1020,7 +1026,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
                   }
                 }
                 const permissionRequest = parsePermissionRequest(params);
-                const requestId = ApprovalRequestId.make(crypto.randomUUID());
+                const requestId = ApprovalRequestId.make(yield* cryptoUuid);
                 const runtimeRequestId = RuntimeRequestId.make(requestId);
                 const decision = yield* Deferred.make<ProviderApprovalDecision>();
                 pendingApprovals.set(requestId, {
@@ -1420,7 +1426,7 @@ export function makeCliAdapter(cliSettings: CliSettings, options?: CliAdapterLiv
         // finalize) and the real turnId (never a projection read). No `ctx` is
         // needed to emit — `finalized` is a local first-wins flag and the
         // threadId/turnId are local.
-        const turnId = TurnId.make(crypto.randomUUID());
+        const turnId = TurnId.make(yield* cryptoUuid);
         let finalized = false;
         let activeCtx: CliSessionContext | undefined;
         const turnFinalized = yield* Deferred.make<void>();

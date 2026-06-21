@@ -30,5 +30,5 @@ export interface ResultStoreShape {
 }
 
 export class ResultStore extends Context.Service<ResultStore, ResultStoreShape>()(
-  "pixso-move/ResultStore",
+  "@pixso-move/server/services/resultStore",
 ) {}

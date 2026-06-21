@@ -20,7 +20,7 @@ export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceF
     relativePath: Schema.optional(Schema.String),
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -48,4 +48,4 @@ export interface WorkspaceFileSystemShape {
 export class WorkspaceFileSystem extends Context.Service<
   WorkspaceFileSystem,
   WorkspaceFileSystemShape
->()("t3/workspace/Services/WorkspaceFileSystem") {}
+>()("@ru-code/ru-code/workspace/Services/WorkspaceFileSystem") {}

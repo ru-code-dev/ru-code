@@ -38,5 +38,5 @@ export interface SkillScannerShape {
 }
 
 export class SkillScanner extends Context.Service<SkillScanner, SkillScannerShape>()(
-  "ru-fork/SkillScanner",
+  "@ru-code/ru-code/ru-fork/skills/SkillScannerService/SkillScanner",
 ) {}

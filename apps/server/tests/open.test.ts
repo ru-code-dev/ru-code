@@ -1,10 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertSuccess } from "@effect/vitest/utils";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Random from "effect/Random";
 
 import {
   isCommandAvailable,
@@ -472,8 +472,9 @@ it.layer(NodeServices.layer)("launchDetached", (it) => {
 
   it.effect("rejects when command does not exist", () =>
     Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
       const result = yield* launchDetached({
-        command: `t3code-no-such-command-${yield* Random.nextUUIDv4}`,
+        command: `t3code-no-such-command-${yield* crypto.randomUUIDv4}`,
         args: [],
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");

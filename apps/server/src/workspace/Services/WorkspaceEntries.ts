@@ -23,7 +23,7 @@ export class WorkspaceEntriesError extends Schema.TaggedErrorClass<WorkspaceEntr
     cwd: Schema.String,
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -34,7 +34,7 @@ export class WorkspaceEntriesBrowseError extends Schema.TaggedErrorClass<Workspa
     partialPath: Schema.String,
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -68,5 +68,5 @@ export interface WorkspaceEntriesShape {
  * WorkspaceEntries - Service tag for cached workspace entry search.
  */
 export class WorkspaceEntries extends Context.Service<WorkspaceEntries, WorkspaceEntriesShape>()(
-  "t3/workspace/Services/WorkspaceEntries",
+  "@ru-code/ru-code/workspace/Services/WorkspaceEntries",
 ) {}

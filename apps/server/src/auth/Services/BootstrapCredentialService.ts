@@ -58,4 +58,4 @@ export interface BootstrapCredentialServiceShape {
 export class BootstrapCredentialService extends Context.Service<
   BootstrapCredentialService,
   BootstrapCredentialServiceShape
->()("t3/auth/Services/BootstrapCredentialService") {}
+>()("@ru-code/ru-code/auth/Services/BootstrapCredentialService") {}

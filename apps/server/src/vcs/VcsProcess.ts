@@ -67,7 +67,7 @@ export interface VcsProcessShape {
 }
 
 export class VcsProcess extends Context.Service<VcsProcess, VcsProcessShape>()(
-  "t3/vcs/VcsProcess",
+  "@ru-code/ru-code/vcs/VcsProcess",
 ) {}
 
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;

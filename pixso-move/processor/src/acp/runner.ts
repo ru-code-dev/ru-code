@@ -6,5 +6,5 @@ import type { AcpRunnerShape } from "../types.ts";
 // acpRunnerLive.integration.ts); tests provide a scripted fake. The embed layer resolves
 // this and hands it to the engine as `deps.acp`.
 export class AcpRunner extends Context.Service<AcpRunner, AcpRunnerShape>()(
-  "pixso-move/AcpRunner",
+  "@pixso-move/processor/acp/runner/AcpRunner",
 ) {}

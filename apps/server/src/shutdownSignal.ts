@@ -7,5 +7,5 @@ export interface ShutdownSignalShape {
 }
 
 export class ShutdownSignal extends Context.Service<ShutdownSignal, ShutdownSignalShape>()(
-  "t3/shutdownSignal",
+  "@ru-code/ru-code/shutdownSignal",
 ) {}

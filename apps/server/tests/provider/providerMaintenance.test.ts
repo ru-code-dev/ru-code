@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Random from "effect/Random";
 import {
   clearLatestProviderVersionCacheForTests,
   createProviderVersionAdvisory,
@@ -18,10 +17,8 @@ import {
 } from "../../src/provider/providerMaintenance.ts";
 
 const driver = (value: string) => ProviderDriverKind.make(value);
-const makeTempDir = Effect.fn("makeTempDir")(function* (name: string) {
-  const id = yield* Random.nextUUIDv4;
-  return path.join(os.tmpdir(), `${name}-${id}`);
-});
+const makeTempDir = (name: string) =>
+  Effect.sync(() => path.join(os.tmpdir(), `${name}-${globalThis.crypto.randomUUID()}`));
 const isNativeTestCommandPath =
   (expectedPathSegment: string) =>
   (commandPath: string): boolean =>

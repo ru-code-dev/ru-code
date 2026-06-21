@@ -29,7 +29,7 @@ export interface McpRuntimeShape {
 }
 
 export class McpRuntime extends Context.Service<McpRuntime, McpRuntimeShape>()(
-  "ru-fork/mcp/McpRuntime",
+  "@ru-code/ru-code/ru-fork/mcp/McpRuntime",
 ) {}
 
 const instanceRefKey = (projectId: string, serverId: string): string => `${projectId}:${serverId}`;

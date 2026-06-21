@@ -23,4 +23,4 @@ export interface McpCatalogRepositoryShape {
 export class McpCatalogRepository extends Context.Service<
   McpCatalogRepository,
   McpCatalogRepositoryShape
->()("ru-fork/persistence/Services/McpCatalog/McpCatalogRepository") {}
+>()("@ru-code/ru-code/persistence/Services/McpCatalog/McpCatalogRepository") {}

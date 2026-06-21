@@ -9,6 +9,7 @@
  */
 import { CLI_NAME } from "@ru-fork/branding";
 import { CliSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -55,6 +56,7 @@ const UPDATE = makeStaticProviderMaintenanceResolver(
 
 export type CliDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | Path.Path
   | ProviderEventLoggers

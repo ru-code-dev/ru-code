@@ -52,5 +52,5 @@ export type OpenInEditorInput = typeof OpenInEditorInput.Type;
 
 export class OpenError extends Schema.TaggedErrorClass<OpenError>()("OpenError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}

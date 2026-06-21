@@ -94,7 +94,7 @@ export interface ProcessRunnerShape {
 }
 
 export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerShape>()(
-  "t3/processRunner",
+  "@ru-code/ru-code/processRunner",
 ) {}
 
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;

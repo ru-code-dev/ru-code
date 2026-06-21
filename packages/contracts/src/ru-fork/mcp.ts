@@ -321,7 +321,7 @@ export type McpRuntimeStreamEvent = typeof McpRuntimeStreamEvent.Type;
 
 export class McpError extends Schema.TaggedErrorClass<McpError>()("McpError", {
   detail: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     return `MCP error: ${this.detail}`;

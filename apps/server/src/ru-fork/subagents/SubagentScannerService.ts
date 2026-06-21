@@ -39,5 +39,5 @@ export interface SubagentScannerShape {
 }
 
 export class SubagentScanner extends Context.Service<SubagentScanner, SubagentScannerShape>()(
-  "ru-fork/SubagentScanner",
+  "@ru-code/ru-code/ru-fork/subagents/SubagentScannerService/SubagentScanner",
 ) {}

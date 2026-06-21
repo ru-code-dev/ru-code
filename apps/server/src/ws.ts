@@ -31,6 +31,8 @@ import {
   ThreadId,
   type TerminalEvent,
   TRANSCRIPT_WS_METHOD,
+  STATS_GET_SNAPSHOT_METHOD,
+  STATS_REFRESH_METHOD,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -47,6 +49,7 @@ import { Open, resolveAvailableEditors } from "./open.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { McpProjectionQuery } from "./ru-fork/mcp/McpProjectionQuery.ts";
+import { StatsScanner } from "./ru-fork/stats/StatsScanner.ts";
 import { McpRuntime } from "./ru-fork/mcp/McpRuntime.ts";
 import { McpSupervisor } from "./ru-fork/mcp/McpSupervisor.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -240,6 +243,8 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const mcpProjectionQuery = yield* McpProjectionQuery;
       const mcpRuntime = yield* McpRuntime;
       const mcpSupervisor = yield* McpSupervisor;
+      // ru-fork: stats (analytics) — incremental scanner over the projects root.
+      const statsScanner = yield* StatsScanner;
       const serverCommandId = (tag: string) =>
         CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -980,6 +985,16 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         [WS_METHODS.mcpGetSnapshot]: ({ projectId }) =>
           observeRpcEffect(WS_METHODS.mcpGetSnapshot, mcpProjectionQuery.getSnapshot(projectId), {
             "rpc.aggregate": "mcp",
+          }),
+        // ru-fork: stats — getSnapshot = pure DB read (instant); refresh = scan disk,
+        // re-parse changed files, save, return (open + ⟳ button).
+        [STATS_GET_SNAPSHOT_METHOD]: (_input) =>
+          observeRpcEffect(STATS_GET_SNAPSHOT_METHOD, statsScanner.getSnapshot(), {
+            "rpc.aggregate": "stats",
+          }),
+        [STATS_REFRESH_METHOD]: (_input) =>
+          observeRpcEffect(STATS_REFRESH_METHOD, statsScanner.refresh(), {
+            "rpc.aggregate": "stats",
           }),
         [WS_METHODS.subscribeMcpProjection]: (_input) =>
           observeRpcStreamEffect(

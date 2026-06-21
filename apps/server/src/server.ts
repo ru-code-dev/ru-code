@@ -85,6 +85,9 @@ import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { McpRuntimeServicesLive } from "./ru-fork/mcp/McpLayers.ts";
+// ru-fork: stats (analytics) — DB-backed scanner; registered next to MCP so it
+// shares the runtime SqlClient/FileSystem/Path/ServerConfig graph.
+import { StatsLive } from "./ru-fork/stats/StatsLayers.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -221,6 +224,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // shared with the reactor + startup). Its repo/engine/settings requirements are
   // satisfied by the orchestration + settings layers provided below.
   Layer.provideMerge(McpRuntimeServicesLive),
+  // ru-fork: stats (analytics) scanner — shares the runtime graph below.
+  Layer.provideMerge(StatsLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),

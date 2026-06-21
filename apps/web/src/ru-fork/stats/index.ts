@@ -1,10 +1,10 @@
 /**
  * ru-fork: Analytics (stats) — public surface.
  *
- * A read-only Settings panel that scans the CLI's per-project chat transcripts
- * and surfaces usage analytics (tokens, models, tools, reliability, activity).
- * Currently driven by fake/demo data — no server logic — but the model shapes
- * mirror the real on-disk qwen telemetry so a real loader is a drop-in later.
+ * A read-only Settings panel that surfaces usage analytics (tokens, models,
+ * tools, reliability, activity) from the server's stats engine, which scans the
+ * CLI's per-project chat transcripts. The dashboard fetches one StatsSession per
+ * chat file via `stats.getSnapshot` and aggregates them client-side.
  *
  * @module ru-fork/stats
  */

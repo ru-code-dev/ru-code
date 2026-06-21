@@ -144,7 +144,7 @@ export function FilterSelect({ value, options, onChange, icon: LeadingIcon, aria
         {LeadingIcon ? <LeadingIcon className="size-3.5 text-muted-foreground/70" /> : null}
         <SelectValue />
       </SelectTrigger>
-      <SelectPopup>
+      <SelectPopup side="bottom" alignItemWithTrigger={false}>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}

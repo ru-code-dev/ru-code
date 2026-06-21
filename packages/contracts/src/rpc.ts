@@ -99,6 +99,13 @@ import {
   TranscriptRpcSchemas,
   TranscriptSubscribeError,
 } from "./ru-fork/transcript.ts";
+// ru-fork: stats (analytics) — pure-read snapshot + disk refresh.
+import {
+  STATS_GET_SNAPSHOT_METHOD,
+  STATS_REFRESH_METHOD,
+  StatsError,
+  StatsSnapshot,
+} from "./ru-fork/stats.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -540,6 +547,19 @@ export const WsSubscribeMcpRuntimeRpc = Rpc.make(WS_METHODS.subscribeMcpRuntime,
   stream: true,
 });
 
+// ru-fork: stats — pure DB read (no disk scan); the panel's instant safety-net load.
+export const WsStatsGetSnapshotRpc = Rpc.make(STATS_GET_SNAPSHOT_METHOD, {
+  payload: Schema.Struct({}),
+  success: StatsSnapshot,
+  error: StatsError,
+});
+// ru-fork: stats — scan disk, re-parse changed files, save, return (open + ⟳ button).
+export const WsStatsRefreshRpc = Rpc.make(STATS_REFRESH_METHOD, {
+  payload: Schema.Struct({}),
+  success: StatsSnapshot,
+  error: StatsError,
+});
+
 export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
   payload: Schema.Struct({}),
   success: ServerLifecycleStreamEvent,
@@ -610,4 +630,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeMcpRuntimeRpc,
   // ru-fork: advanced chat mode.
   WsOrchestrationSubscribeTranscriptRpc,
+  // ru-fork: stats (analytics).
+  WsStatsGetSnapshotRpc,
+  WsStatsRefreshRpc,
 );

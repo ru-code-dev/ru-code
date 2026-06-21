@@ -3,10 +3,10 @@
  *
  * Everything the dashboard renders derives from a single atomic unit, a
  * {@link StatsSession} (one CLI chat). Filters narrow the session set; the
- * selectors aggregate the survivors into the per-widget view models. This is
- * fake/demo data — no server logic — but the shapes mirror what the real
- * on-disk qwen telemetry (`qwen-code.api_response` / `.tool_call` / `.api_error`)
- * would yield, so swapping in a real loader later is a drop-in.
+ * selectors aggregate the survivors into the per-widget view models. The session
+ * shape is owned by the server contract (`@t3tools/contracts`), computed from the
+ * on-disk qwen telemetry (`qwen-code.api_response` / `.tool_call` / `.api_error`);
+ * the view-model types below are the selectors' derived outputs.
  *
  * @module ru-fork/stats/model/types
  */
@@ -20,33 +20,29 @@ export interface TokenBreakdown {
   readonly cached: number;
 }
 
-/** One CLI chat session — the atomic record all widgets aggregate from. */
-export interface StatsSession {
-  readonly sessionId: string;
-  readonly projectId: string;
-  readonly projectLabel: string;
-  readonly projectPath: string;
-  readonly projectKind: ProjectKind;
-  readonly branch: string;
-  readonly model: string;
-  /** ISO timestamp of the session start. */
-  readonly startedAt: string;
-  readonly durationMs: number;
-  readonly turns: number;
-  readonly isBackground: boolean;
-  readonly apiCalls: number;
-  readonly tokens: TokenBreakdown;
-  readonly avgLatencyMs: number;
-  readonly maxLatencyMs: number;
-  /** functionName -> call count. */
-  readonly toolCounts: Readonly<Record<string, number>>;
-  /** functionName -> failed call count (subset of toolCounts). */
-  readonly toolFailures: Readonly<Record<string, number>>;
-  /** errorType -> count. */
-  readonly errorTypes: Readonly<Record<string, number>>;
-  readonly autoAccepted: number;
-  readonly rejected: number;
-}
+// The session shape is owned by the server contract (one row per chat file).
+// `tokens` is structurally the web `TokenBreakdown`; the extra `present`/`lastSeenAt`
+// fields are ignored by the selectors. The local `ProjectKind` stays structurally
+// equal to the contract's "real" | "temp". Imported (not just re-exported) so the
+// derived view types below can reference it.
+import type { StatsSession } from "@t3tools/contracts";
+
+export type { StatsSession, StatsDayBucket, StatsCategory } from "@t3tools/contracts";
+
+import type { StatsCategory } from "@t3tools/contracts";
+
+/** Russian label for the session «Тип» column. */
+export const CATEGORY_LABEL: Record<StatsCategory, string> = {
+  dialog: "Диалог",
+  title: "Заголовок",
+  branch: "Ветка",
+  commit: "Коммит",
+  pr: "PR",
+  memory: "Память",
+  subagent: "Субагент",
+  compress: "Сжатие",
+  service: "Служебные",
+};
 
 /** Active dashboard filters (lives in the store). */
 export interface StatsFilters {
@@ -58,7 +54,8 @@ export interface StatsFilters {
   readonly traffic: TrafficFilter;
 }
 
-export type RangeDays = 7 | 14 | 30 | 48;
+/** Calendar-day windows. A number N = last N days (incl. today); "all" = no cutoff. */
+export type RangeDays = 1 | 7 | 14 | 30 | "all";
 export type TrafficFilter = "all" | "turns" | "background";
 export type Granularity = "day" | "week";
 

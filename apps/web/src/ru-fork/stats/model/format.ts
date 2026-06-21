@@ -60,11 +60,13 @@ export function formatDayLabel(isoString: string): string {
   return `${date.getUTCDate()} ${monthShort(date.getUTCMonth())}`;
 }
 
+/** Local "DD mon, HH:MM" of an instant — shown in the browser's local timezone, matching
+ *  the local-day windowing (an instant is one moment, displayed where the viewer is). */
 export function formatDateTime(isoString: string): string {
   const date = new Date(isoString);
-  const hours = `${date.getUTCHours()}`.padStart(2, "0");
-  const minutes = `${date.getUTCMinutes()}`.padStart(2, "0");
-  return `${date.getUTCDate()} ${monthShort(date.getUTCMonth())}, ${hours}:${minutes}`;
+  const hours = `${date.getHours()}`.padStart(2, "0");
+  const minutes = `${date.getMinutes()}`.padStart(2, "0");
+  return `${date.getDate()} ${monthShort(date.getMonth())}, ${hours}:${minutes}`;
 }
 
 export const WEEKDAY_LABELS: readonly string[] = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];

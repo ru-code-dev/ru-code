@@ -7,7 +7,7 @@ import { ChevronRightIcon, TableIcon } from "lucide-react";
 
 import { Badge } from "~/components/ui/badge";
 import { formatDateTime, formatDuration, formatInt, formatTokens } from "../../model/format";
-import type { StatsSession } from "../../model/types";
+import { CATEGORY_LABEL, type StatsSession } from "../../model/types";
 import { WidgetCard } from "../primitives";
 
 function sumRecordValues(record: Readonly<Record<string, number>>): number {
@@ -44,6 +44,7 @@ export function SessionsTableCard({ sessions, onSelect, onExpand, limit = 10 }: 
             <tr className="border-b border-border/60">
               <th className="px-4 py-2 font-medium">Дата</th>
               <th className="px-2 py-2 font-medium">Проект</th>
+              <th className="px-2 py-2 font-medium">Тип</th>
               <th className="px-2 py-2 font-medium">Ветка</th>
               <th className="px-2 py-2 text-right font-medium">Токены</th>
               <th className="px-2 py-2 text-right font-medium">Ходы</th>
@@ -66,8 +67,12 @@ export function SessionsTableCard({ sessions, onSelect, onExpand, limit = 10 }: 
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-foreground">{session.projectLabel}</span>
                       {session.projectKind === "temp" ? <Badge size="sm" variant="outline">temp</Badge> : null}
-                      {session.isBackground ? <Badge size="sm" variant="secondary">фон</Badge> : null}
                     </span>
+                  </td>
+                  <td className="px-2 py-2">
+                    <Badge size="sm" variant={session.category === "dialog" ? "secondary" : "outline"}>
+                      {CATEGORY_LABEL[session.category]}
+                    </Badge>
                   </td>
                   <td className="whitespace-nowrap px-2 py-2 font-mono text-[11px] text-muted-foreground/80">{session.branch}</td>
                   <td className="px-2 py-2 text-right font-mono tabular-nums text-foreground">{formatTokens(visibleTokenTotal(session))}</td>
@@ -87,7 +92,7 @@ export function SessionsTableCard({ sessions, onSelect, onExpand, limit = 10 }: 
             })}
             {visibleSessions.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground/60">
+                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground/60">
                   Нет сессий под текущие фильтры
                 </td>
               </tr>

@@ -18,6 +18,8 @@ export * from "./ru-fork/terminalErrors.ts";
 export * from "./ru-fork/mcp.ts";
 // ru-fork: advanced chat mode — normalized qwen transcript contract.
 export * from "./ru-fork/transcript.ts";
+// ru-fork: stats (analytics) — per-session usage telemetry contract.
+export * from "./ru-fork/stats.ts";
 export * from "./settings.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";

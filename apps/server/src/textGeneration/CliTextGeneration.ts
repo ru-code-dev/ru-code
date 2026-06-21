@@ -31,6 +31,7 @@ import { CLI_TEXT_GENERATION_TIMEOUT_MS } from "../timeouts.ts";
 import { haltOnExit } from "../ru-fork/spawn/haltOnExit.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import { type TextGenerationShape } from "./TextGeneration.ts";
+import { BRANCH_NAME_INSTRUCTION, THREAD_TITLE_INSTRUCTION } from "./instructions.ts";
 import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
@@ -322,7 +323,7 @@ export const makeCliTextGeneration = Effect.fn("makeCliTextGeneration")(function
       operation: "generateBranchName",
       cwd: input.cwd,
       prompt: buildCliSingleStringPrompt({
-        instruction: "You generate concise git branch name fragments.",
+        instruction: BRANCH_NAME_INSTRUCTION,
         responseShape:
           "Reply with the branch name only — 2 to 6 plain words separated by hyphens. No JSON. No quotes. No preamble.",
         message: input.message,
@@ -339,8 +340,7 @@ export const makeCliTextGeneration = Effect.fn("makeCliTextGeneration")(function
       operation: "generateThreadTitle",
       cwd: input.cwd,
       prompt: buildCliSingleStringPrompt({
-        instruction:
-          "You write concise titles for coding conversations. Reply in Russian (Русский язык). Technical identifiers (file names, symbols) may stay in English.",
+        instruction: THREAD_TITLE_INSTRUCTION,
         responseShape:
           "Reply with the title only — 3 to 8 words in Russian. No quotes. No preamble. No JSON. No trailing punctuation.",
         message: input.message,

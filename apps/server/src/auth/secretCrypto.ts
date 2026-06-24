@@ -1,18 +1,29 @@
 // ru-fork #4: at-rest encryption for the ServerSecretStore `.bin` files. Mirrors qwen-code 0.13.1's
-// headless file scheme (file-token-storage.ts): scrypt(host+user) → aes-256-gcm, format
-// `ivHex:authTagHex:cipherHex`. Host+user-derived key matches qwen's threat model (protects a
+// headless file scheme (file-token-storage.ts): scrypt(user) → aes-256-gcm, format
+// `ivHex:authTagHex:cipherHex`. The user-derived key matches qwen's threat model (protects a
 // copied-off-host file, not a local same-user attacker). The MCP feature has never shipped, so there
 // is no legacy plaintext to migrate.
+//
+// ru-fork: the salt was originally `host+user`, but `os.hostname()` is UNSTABLE on non-persistent
+// Citrix/VDI — the roaming profile (and these `.bin` files) lands on a different pooled host each logon,
+// so a prior secret no longer authenticates (GCM failure) and the server crashed on boot. `username`
+// roams WITH the profile and is stable across pooled hosts, so the salt is now username-only. An
+// existing host-bound blob can't be unwrapped under the new key; the regenerable signing key self-heals
+// over it (see `isRegenerableSecret` + ServerSecretStore.get).
 import * as Crypto from "node:crypto";
 import * as os from "node:os";
 
-const deriveKey = (): Buffer => {
-  const salt = `${os.hostname()}-${os.userInfo().username}-qwen-code`;
-  return Crypto.scryptSync("qwen-code-oauth", salt, 32);
-};
+export const deriveKey = (username: string): Buffer =>
+  Crypto.scryptSync("qwen-code-oauth", `${username}-qwen-code`, 32);
 
-// Derived once per process (scrypt is intentionally slow); host/user don't change at runtime.
-const KEY = deriveKey();
+// Derived once per process (scrypt is intentionally slow); the login user doesn't change at runtime.
+const KEY = deriveKey(os.userInfo().username);
+
+// ru-fork: a secret that is safe to discard-and-regenerate — losing it only invalidates existing
+// sessions (users re-login), unlike an MCP/OAuth credential which must NEVER silently vanish. Only these
+// may self-heal over a GCM-auth failure (e.g. a host-bound blob left by the pre-username-salt build, or
+// a wrong-host VDI file); every other secret keeps erroring so a real credential is never dropped.
+export const isRegenerableSecret = (name: string): boolean => name.endsWith("signing-key");
 
 export function encryptSecret(plaintext: Uint8Array): Uint8Array {
   const iv = Crypto.randomBytes(16);

@@ -265,6 +265,13 @@ remove_bin() {
 # it too. Guarded: must exist, end in the app dir name, not a dangerous path.
 remove_legacy_root() {
   [ -n "${LEGACY_ROOT:-}" ] && [ -d "$LEGACY_ROOT" ] || return 0
+  # /home/work/<user> IS the install target, never an orphan to delete. When home
+  # already is /home/work/<user>, the resolver reports LEGACY_ROOT collapsed onto
+  # the fresh install; deleting it would rm -rf the app we just installed. Segment
+  # match (not string ==) so a symlinked home path can't slip past.
+  case "$LEGACY_ROOT" in
+    */work/*) warn "Отказ удалять: $LEGACY_ROOT — это целевой каталог установки (work), не легаси"; return 0 ;;
+  esac
   # Without the app dir name the */<appdir> guard below can't be trusted — skip.
   [ -n "$APP_DIR_NAME" ] || { warn "Отказ удалять: имя каталога приложения не определено"; return 0; }
   case "$LEGACY_ROOT" in

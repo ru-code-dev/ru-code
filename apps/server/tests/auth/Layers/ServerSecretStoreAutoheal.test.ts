@@ -116,4 +116,42 @@ it.layer(NodeServices.layer)("ServerSecretStore autoheal (legacy plaintext)", (i
       expect(error.message).toContain("Failed to decrypt secret mcp-credential");
     }).pipe(Effect.provide(makeSharedLayer())),
   );
+
+  // ru-fork: VDI/Citrix migration self-heal for the REGENERABLE signing key.
+  // ru-fork #4 bound the at-rest key to hostname+username. On non-persistent Citrix the user profile
+  // (and this .bin) roams onto a DIFFERENT pooled hostname each logon ⇒ a VALID-format blob that fails
+  // GCM auth ⇒ boot crashed with "Failed to decrypt secret server-signing-key". Now the salt is username
+  // ONLY (roams with the profile), and any EXISTING hostname-bound blob — un-authenticatable under the
+  // new key — must SELF-HEAL: the signing key is regenerable (loss only resets sessions), so a GCM
+  // failure is treated as ABSENT and re-minted. A tampered blob stands in for that stale wrong-host file.
+  // The contrast with #4 (same shape, mcp name ⇒ STILL errors) is the guardrail: the heal is scoped to
+  // the regenerable signing key, NOT a blanket swallow that would silently drop a real MCP credential.
+  it.effect("#5 RED→GREEN: get() heals a GCM-unauthenticatable signing-key blob to null", () =>
+    Effect.gen(function* () {
+      yield* plantSecretFile("server-signing-key", makeTamperedEncryptedBlob());
+      const secretStore = yield* ServerSecretStore;
+
+      // Today this THROWS SecretStoreError (GCM auth). After the fix the regenerable signing key reads
+      // as absent so getOrCreateRandom can re-mint it.
+      const result = yield* secretStore.get("server-signing-key");
+      expect(result).toBeNull();
+    }).pipe(Effect.provide(makeSharedLayer())),
+  );
+
+  it.effect("#6 RED→GREEN: getOrCreateRandom() self-heals over a stale (wrong-host) signing key", () =>
+    Effect.gen(function* () {
+      yield* plantSecretFile("server-signing-key", makeTamperedEncryptedBlob());
+      const secretStore = yield* ServerSecretStore;
+
+      const key = yield* secretStore.getOrCreateRandom("server-signing-key", 32);
+      expect(key.length).toBe(32);
+
+      // Re-minted, persisted encrypted-at-rest under the new key, and stable on re-read.
+      const reread = yield* secretStore.get("server-signing-key");
+      expect(reread).not.toBeNull();
+      expect(Array.from(reread ?? new Uint8Array())).toEqual(Array.from(key));
+      const again = yield* secretStore.getOrCreateRandom("server-signing-key", 32);
+      expect(Array.from(again)).toEqual(Array.from(key)); // healed once, then stable
+    }).pipe(Effect.provide(makeSharedLayer())),
+  );
 });

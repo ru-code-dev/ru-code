@@ -8,7 +8,12 @@ import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
 
 import { ServerConfig } from "../../config.ts";
-import { decryptSecret, encryptSecret, isLegacySecretFormatError } from "../secretCrypto.ts";
+import {
+  decryptSecret,
+  encryptSecret,
+  isLegacySecretFormatError,
+  isRegenerableSecret,
+} from "../secretCrypto.ts";
 import {
   SecretStoreError,
   ServerSecretStore,
@@ -49,10 +54,14 @@ export const makeServerSecretStore = Effect.gen(function* () {
             ),
       ),
       // ru-fork #4: at-rest decryption runs AFTER the read-error catch — a NotFound stays null. A
-      // LEGACY plaintext blob (a pre-encryption signing key — fails the iv:tag:cipher format check) is
-      // treated as ABSENT so getOrCreateRandom self-heals (mints a fresh encrypted key, no error/log).
-      // Any OTHER decrypt failure (GCM auth: tampered / wrong host-key) stays a typed SecretStoreError,
-      // so a real encrypted secret never silently vanishes.
+      // decrypt failure is treated as ABSENT (so getOrCreateRandom self-heals — mints a fresh encrypted
+      // key, no error/log) in exactly two cases, else it stays a typed SecretStoreError:
+      //   1. a LEGACY plaintext blob (pre-encryption signing key — fails the iv:tag:cipher format check),
+      //      regardless of the secret name; OR
+      //   2. a GCM-auth failure (tampered / wrong host-key — e.g. a host-bound blob left by the old
+      //      host+user salt, or a wrong-host VDI file) ONLY for a regenerable secret (the signing key).
+      // A GCM-auth failure on any NON-regenerable secret (an MCP/OAuth credential) keeps erroring, so a
+      // real credential never silently vanishes.
       Effect.flatMap((bytes) =>
         bytes === null
           ? Effect.succeed(null)
@@ -62,7 +71,7 @@ export const makeServerSecretStore = Effect.gen(function* () {
                 new SecretStoreError({ message: `Failed to decrypt secret ${name}.`, cause }),
             }).pipe(
               Effect.catch((error) =>
-                isLegacySecretFormatError(error.cause)
+                isLegacySecretFormatError(error.cause) || isRegenerableSecret(name)
                   ? Effect.succeed(null)
                   : Effect.fail(error),
               ),

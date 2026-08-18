@@ -1,3 +1,7 @@
+// ru-code: seed the UI language before any component module is imported, so
+// module-level L() constants evaluate against the stored locale. MUST be first.
+import "./ru-code/bootLocale";
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ClerkProvider } from "@clerk/react";

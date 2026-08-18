@@ -36,3 +36,27 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# ru-code localization
+# The build ENGINE (transform, catalog generator, build-verification gate) is fork source and
+# must be tracked. The generic `build/` rule above matches ANY directory named build, so it
+# would otherwise swallow the whole engine — re-include it here (the generated catalog below
+# stays ignored).
+!ru-code/localization/build/
+!ru-code/localization/build/**
+# The catalog is regenerated from the dictionary on every build.
+ru-code/localization/build/catalog.generated.json
+# The dictionary (translation data) and the discovery backlog are kept OUT of the fork so
+# translation edits never become fork commits — they live/accumulate outside git for now
+# (to be promoted to their own repo later). The build reads dict/ straight from disk.
+ru-code/localization/dict/
+ru-code/localization/MISSING.md
+
+# ru-code
+.claude/
+SPECS/
+pnpm-lock.yaml
+.repos/
+# release artifacts (produced by `pnpm prepare-release`; the installer consumes them)
+/dist-bundle/
+/preflight.mjs

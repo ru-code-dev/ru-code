@@ -110,6 +110,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -683,7 +684,11 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         api.dialogs.confirm(
           [
             projectThreads.length > 0
-              ? `Remove project "${targetLabel}" and delete its ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"}?`
+              ? // ru-code: bilingual plural seam
+                L(
+                  `Remove project "${targetLabel}" and delete its ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"}?`,
+                  `Удалить проект "${targetLabel}" и его ${projectThreads.length} ${pluralRu(projectThreads.length, ["диалог", "диалога", "диалогов"])}?`,
+                )
               : `Remove project "${targetLabel}"?`,
             ...(singleMember
               ? [

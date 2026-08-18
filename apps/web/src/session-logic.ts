@@ -22,6 +22,7 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -1366,7 +1367,11 @@ function summarizeToolRawOutput(payload: Record<string, unknown> | null): string
   const totalFiles = asNumber(rawOutput.totalFiles);
   if (totalFiles !== null) {
     const suffix = rawOutput.truncated === true ? "+" : "";
-    return `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}${suffix}`;
+    // ru-code: bilingual plural seam
+    return L(
+      `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}${suffix}`,
+      `${totalFiles.toLocaleString()} ${pluralRu(totalFiles, ["файл", "файла", "файлов"])}${suffix}`,
+    );
   }
 
   const content = asTrimmedString(rawOutput.content);

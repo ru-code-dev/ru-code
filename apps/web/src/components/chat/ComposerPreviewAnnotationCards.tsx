@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import type { ComposerImageAttachment } from "~/composerDraftStore";
 import { formatElementContextLabel, normalizeElementContextSelection } from "~/lib/elementContext";
 import { cn } from "~/lib/utils";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -16,8 +17,18 @@ interface ComposerPreviewAnnotationCardsProps {
   className?: string;
 }
 
-function TargetStat(props: { icon: ReactNode; count: number; label: string }) {
-  const tooltipText = `${props.count} ${props.label}${props.count === 1 ? "" : "s"}`;
+function TargetStat(props: {
+  icon: ReactNode;
+  count: number;
+  label: string;
+  // ru-code: Russian plural forms [one, few, many] for the bilingual seam below
+  forms: readonly [string, string, string];
+}) {
+  // ru-code: bilingual plural seam — keep t3's Tooltip wrapper + our L()/pluralRu()
+  const tooltipText = L(
+    `${props.count} ${props.label}${props.count === 1 ? "" : "s"}`,
+    `${props.count} ${pluralRu(props.count, props.forms)}`,
+  );
   return (
     <Tooltip>
       <TooltipTrigger
@@ -109,6 +120,7 @@ export function ComposerPreviewAnnotationCards({
                       icon={<MousePointerClick className="size-3" />}
                       count={annotation.elements.length}
                       label="element"
+                      forms={["элемент", "элемента", "элементов"]}
                     />
                   ) : null}
                   {annotation.regions.length > 0 ? (
@@ -116,6 +128,7 @@ export function ComposerPreviewAnnotationCards({
                       icon={<Frame className="size-3" />}
                       count={annotation.regions.length}
                       label="region"
+                      forms={["область", "области", "областей"]}
                     />
                   ) : null}
                   {annotation.strokes.length > 0 ? (
@@ -123,6 +136,7 @@ export function ComposerPreviewAnnotationCards({
                       icon={<PenLine className="size-3" />}
                       count={annotation.strokes.length}
                       label="drawing"
+                      forms={["рисунок", "рисунка", "рисунков"]}
                     />
                   ) : null}
                   {annotation.styleChanges.length > 0 ? (
@@ -130,6 +144,7 @@ export function ComposerPreviewAnnotationCards({
                       icon={<Paintbrush className="size-3" />}
                       count={annotation.styleChanges.length}
                       label="style change"
+                      forms={["изменение стиля", "изменения стиля", "изменений стиля"]}
                     />
                   ) : null}
                 </div>

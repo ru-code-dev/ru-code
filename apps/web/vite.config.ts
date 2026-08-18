@@ -8,6 +8,7 @@ import compression from "compression";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
+import { ruCodeLocalizationPlugin } from "@ru-code/localization/build"; // ru-code: bilingual build transform
 import pkg from "./package.json" with { type: "json" };
 
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
@@ -156,6 +157,8 @@ export default defineConfig(() => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
+      // ru-code: inject Russian translations into display strings before other transforms.
+      ruCodeLocalizationPlugin(),
       tanstackRouter(),
       react(),
       babel({

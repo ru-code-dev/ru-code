@@ -73,6 +73,7 @@ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 function KeybindingPill({ value }: { value: string }) {
   const parts = value.split("+");
@@ -1189,8 +1190,11 @@ export function KeybindingsSettingsPanel() {
 
   const bindingsCount = (
     <span className="text-[11px] text-muted-foreground">
-      {rows.length + (isAddingBinding ? 1 : 0)}{" "}
-      {rows.length + (isAddingBinding ? 1 : 0) === 1 ? "binding" : "bindings"}
+      {rows.length + (isAddingBinding ? 1 : 0)} {/* ru-code: bilingual plural seam */}
+      {L(
+        rows.length + (isAddingBinding ? 1 : 0) === 1 ? "binding" : "bindings",
+        pluralRu(rows.length + (isAddingBinding ? 1 : 0), ["сочетание", "сочетания", "сочетаний"]),
+      )}
     </span>
   );
 

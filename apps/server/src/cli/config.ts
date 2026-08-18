@@ -13,6 +13,8 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { Argument, Flag } from "effect/unstable/cli";
 
+import { isLocale, setLocaleOverride } from "@ru-code/localization"; // ru-code: --language flag
+
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
@@ -72,6 +74,12 @@ export const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
 export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
+  Flag.optional,
+);
+// ru-code: choose the UI/CLI language for this run (overrides the stored preference).
+export const languageFlag = Flag.choice("language", ["en", "ru"] as const).pipe(
+  Flag.withDescription("UI/CLI language for this run: `en` or `ru` (default `ru`)."),
+  Flag.withAlias("lang"),
   Flag.optional,
 );
 
@@ -139,6 +147,7 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  language: Config.string("T3CODE_LANG").pipe(Config.option, Config.map(Option.getOrUndefined)),
 });
 
 export interface CliServerFlags {
@@ -154,6 +163,7 @@ export interface CliServerFlags {
   readonly logWebSocketEvents: Option.Option<boolean>;
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
+  readonly language: Option.Option<"en" | "ru">;
 }
 
 export interface CliAuthLocationFlags {
@@ -188,6 +198,7 @@ export const sharedServerCommandFlags = {
   logWebSocketEvents: logWebSocketEventsFlag,
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
+  language: languageFlag,
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;
@@ -233,7 +244,18 @@ export const resolveServerConfig = (
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
       tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
       tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
+      language: flags.language ?? Option.none(),
     } satisfies CliServerFlags;
+
+    // ru-code: --language flag / T3CODE_LANG pin the process locale (flag > env > persisted > ru).
+    const envLanguage = isLocale(env.language) ? env.language : undefined;
+    const languageChoice = resolveOptionPrecedence(
+      normalizedFlags.language,
+      Option.fromUndefinedOr(envLanguage),
+    );
+    if (Option.isSome(languageChoice)) {
+      setLocaleOverride(languageChoice.value);
+    }
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
       bootstrapFd !== undefined
@@ -409,6 +431,7 @@ export const resolveCliAuthConfig = (
       logWebSocketEvents: Option.none(),
       tailscaleServeEnabled: Option.none(),
       tailscaleServePort: Option.none(),
+      language: Option.none(),
     },
     cliLogLevel,
   );

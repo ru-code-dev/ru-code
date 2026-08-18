@@ -3,6 +3,7 @@ packages:
   - infra/*
   - oxlint-plugin-t3code
   - packages/*
+  - ru-code/*
   - scripts
 
 # Successor to onlyBuiltDependencies/ignoredBuiltDependencies (pnpm 11).

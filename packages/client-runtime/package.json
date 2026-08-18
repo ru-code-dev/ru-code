@@ -153,6 +153,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@ru-code/localization": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:"

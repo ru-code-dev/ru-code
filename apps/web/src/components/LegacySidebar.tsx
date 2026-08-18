@@ -199,6 +199,7 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import type { SidebarThreadSummary } from "../types";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 import {
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectSnapshots,
@@ -1506,9 +1507,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   const confirmed = await api.dialogs.confirm(
                     latestProjectThreads.length > 0
                       ? [
-                          `Remove project "${member.title}" and delete its ${latestProjectThreads.length} thread${
-                            latestProjectThreads.length === 1 ? "" : "s"
-                          }?`,
+                          // ru-code: bilingual plural seam
+                          L(
+                            `Remove project "${member.title}" and delete its ${latestProjectThreads.length} thread${
+                              latestProjectThreads.length === 1 ? "" : "s"
+                            }?`,
+                            `Удалить проект "${member.title}" и его ${latestProjectThreads.length} ${pluralRu(latestProjectThreads.length, ["диалог", "диалога", "диалогов"])}?`,
+                          ),
                           `Path: ${member.workspaceRoot}`,
                           ...(member.environmentLabel
                             ? [`Environment: ${member.environmentLabel}`]
@@ -1855,7 +1860,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           [
-            `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+            // ru-code: bilingual plural seam
+            L(
+              `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+              `Удалить ${count} ${pluralRu(count, ["диалог", "диалога", "диалогов"])}?`,
+            ),
             "This permanently clears conversation history for these threads.",
           ].join("\n"),
           { variant: "destructive" },

@@ -15,7 +15,12 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
-import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
+import {
+  resolveThreadStatusPill,
+  THREAD_STATUS_LABEL_RU,
+  type ThreadStatusPill,
+} from "./Sidebar.logic";
+import { L } from "@ru-code/localization"; // ru-code: bilingual status label seam
 import type { SidebarThreadSummary } from "../types";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -354,13 +359,15 @@ export function ThreadStatusLabel({
   status: ThreadStatusPill;
   compact?: boolean;
 }) {
+  // ru-code: bilingual status label — the English union stays logic, Russian via the map
+  const label = L(status.label, THREAD_STATUS_LABEL_RU[status.label]);
   if (compact) {
     return (
       <Tooltip>
         <TooltipTrigger
           render={
             <span
-              aria-label={status.label}
+              aria-label={label}
               className={`inline-flex size-3.5 shrink-0 items-center justify-center ${status.colorClass}`}
             />
           }
@@ -371,7 +378,7 @@ export function ThreadStatusLabel({
             }`}
           />
         </TooltipTrigger>
-        <TooltipPopup side="top">{status.label}</TooltipPopup>
+        <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
     );
   }
@@ -381,7 +388,7 @@ export function ThreadStatusLabel({
       <TooltipTrigger
         render={
           <span
-            aria-label={status.label}
+            aria-label={label}
             className={`inline-flex items-center gap-1 text-[10px] ${status.colorClass}`}
           />
         }
@@ -391,9 +398,9 @@ export function ThreadStatusLabel({
             status.pulse ? "animate-status-pulse" : ""
           }`}
         />
-        <span className="hidden md:inline">{status.label}</span>
+        <span className="hidden md:inline">{label}</span>
       </TooltipTrigger>
-      <TooltipPopup side="top">{status.label}</TooltipPopup>
+      <TooltipPopup side="top">{label}</TooltipPopup>
     </Tooltip>
   );
 }

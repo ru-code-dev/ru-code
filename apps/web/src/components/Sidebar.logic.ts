@@ -131,6 +131,18 @@ export interface ThreadStatusPill {
   pulse: boolean;
 }
 
+// ru-code: Russian display labels for the English status union (consumed as a
+// bilingual seam in ThreadStatusIndicators — the union stays English logic).
+export const THREAD_STATUS_LABEL_RU: Record<ThreadStatusPill["label"], string> = {
+  Working: "Работает",
+  Monitoring: "Наблюдение",
+  Connecting: "Подключение",
+  Completed: "Завершено",
+  "Pending Approval": "Ожидает подтверждения",
+  "Awaiting Input": "Ожидает ввода",
+  "Plan Ready": "План готов",
+};
+
 // Rollup order mirrors the per-thread resolver exactly: attention states,
 // then active work, then the actionable plan prompt, then passive
 // monitoring. A Monitoring sibling must never hide a Plan Ready thread.

@@ -185,6 +185,7 @@ import {
   type ComposerThreadDraftState,
   type DraftSessionState,
 } from "../composerDraftStore";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -2961,7 +2962,11 @@ export default function Sidebar() {
         const confirmed = await settlePromise(() =>
           api.dialogs.confirm(
             [
-              `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+              // ru-code: bilingual plural seam
+              L(
+                `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+                `Удалить ${count} ${pluralRu(count, ["диалог", "диалога", "диалогов"])}?`,
+              ),
               "This permanently clears conversation history for these threads.",
             ].join("\n"),
             { variant: "destructive" },

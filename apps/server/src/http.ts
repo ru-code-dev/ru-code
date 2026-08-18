@@ -39,6 +39,7 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import { injectLocaleBootstrap } from "./ru-code/localeBootstrapHtml.ts"; // ru-code: stamp UI locale into served HTML
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -299,7 +300,9 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       if (!indexData) {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
-      return HttpServerResponse.uint8Array(indexData, {
+      // ru-code: SPA fallback (deep links) — stamp the effective UI locale so the
+      // client boots in the right language regardless of which port it loaded on.
+      return HttpServerResponse.text(injectLocaleBootstrap(new TextDecoder().decode(indexData)), {
         status: 200,
         contentType: "text/html; charset=utf-8",
       });
@@ -309,6 +312,14 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     const data = yield* fileSystem.readFile(filePath).pipe(Effect.orElseSucceed(() => null));
     if (!data) {
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
+    }
+
+    // ru-code: "/" (and any direct index.html hit) also carries the locale seed.
+    if (path.basename(filePath) === "index.html") {
+      return HttpServerResponse.text(injectLocaleBootstrap(new TextDecoder().decode(data)), {
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+      });
     }
 
     return HttpServerResponse.uint8Array(data, {

@@ -1,6 +1,7 @@
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from "@pierre/diffs";
 import type { PullRequestReviewPosition } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 const ReviewCommentSelectionSchema = Schema.Struct({
   start: Schema.Number,
@@ -566,7 +567,13 @@ function formatDiffReviewRangeLabel(lines: ReadonlyArray<DiffReviewLine>): strin
   const firstNumber = firstLine.newLineNumber ?? firstLine.oldLineNumber;
   const lastNumber = lastLine.newLineNumber ?? lastLine.oldLineNumber;
   if (firstNumber === null || lastNumber === null) {
-    return lines.length === 1 ? "line" : `${lines.length} lines`;
+    // ru-code: bilingual plural seam (singular branch handled by the transform)
+    return lines.length === 1
+      ? "line"
+      : L(
+          `${lines.length} lines`,
+          `${lines.length} ${pluralRu(lines.length, ["строка", "строки", "строк"])}`,
+        );
   }
 
   const firstMarker = getDiffChangeMarker(firstLine.change).trim();

@@ -11,6 +11,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 export type ProviderUpdateCandidate = ServerProvider & {
   readonly versionAdvisory: NonNullable<ServerProvider["versionAdvisory"]> & {
@@ -278,9 +279,13 @@ export function getProviderUpdateProgressToastView(input: {
         unchangedProviders.length === 1
           ? "Provider still needs an update"
           : "Providers still need updates",
-      description: `${formatProviderList(unchangedProviders)} ${
-        unchangedProviders.length === 1 ? "still appears" : "still appear"
-      } outdated. Check provider settings for details.`,
+      // ru-code: bilingual plural seam
+      description: L(
+        `${formatProviderList(unchangedProviders)} ${
+          unchangedProviders.length === 1 ? "still appears" : "still appear"
+        } outdated. Check provider settings for details.`,
+        `${formatProviderList(unchangedProviders)} ${pluralRu(unchangedProviders.length, ["всё ещё выглядит устаревшим", "всё ещё выглядят устаревшими", "всё ещё выглядят устаревшими"])}. Подробности — в настройках провайдера.`,
+      ),
     };
   }
 
@@ -424,7 +429,11 @@ export function getProviderUpdateSidebarPillView(
       title:
         activeProviders.length === 1
           ? `Updating ${activeProviderName}`
-          : `Updating ${activeProviders.length} providers`,
+          : // ru-code: bilingual plural seam
+            L(
+              `Updating ${activeProviders.length} providers`,
+              `Обновление ${activeProviders.length} ${pluralRu(activeProviders.length, ["провайдера", "провайдеров", "провайдеров"])}`,
+            ),
       description:
         activeProviders.length === 1
           ? `${formatProviderList(activeProviders)} update in progress.`
@@ -454,7 +463,11 @@ export function getProviderUpdateSidebarPillView(
       title:
         failedProviders.length === 1
           ? getProviderFailedUpdateTitle(failedProvider)
-          : `${failedProviders.length} provider updates failed`,
+          : // ru-code: bilingual plural seam
+            L(
+              `${failedProviders.length} provider updates failed`,
+              `Не удалось обновить ${failedProviders.length} ${pluralRu(failedProviders.length, ["провайдер", "провайдера", "провайдеров"])}`,
+            ),
       description: getFailedProviderUpdateDescription(failedProviders),
       dismissible: true,
     });
@@ -479,10 +492,18 @@ export function getProviderUpdateSidebarPillView(
       title:
         unchangedProviders.length === 1
           ? `${unchangedProviderName} still needs an update`
-          : `${unchangedProviders.length} providers still need updates`,
-      description: `${formatProviderList(unchangedProviders)} ${
-        unchangedProviders.length === 1 ? "still appears" : "still appear"
-      } outdated. Review provider settings for details.`,
+          : // ru-code: bilingual plural seam
+            L(
+              `${unchangedProviders.length} providers still need updates`,
+              `${unchangedProviders.length} ${pluralRu(unchangedProviders.length, ["провайдер", "провайдера", "провайдеров"])} всё ещё требуют обновления`,
+            ),
+      // ru-code: bilingual plural seam
+      description: L(
+        `${formatProviderList(unchangedProviders)} ${
+          unchangedProviders.length === 1 ? "still appears" : "still appear"
+        } outdated. Review provider settings for details.`,
+        `${formatProviderList(unchangedProviders)} ${pluralRu(unchangedProviders.length, ["всё ещё выглядит устаревшим", "всё ещё выглядят устаревшими", "всё ещё выглядят устаревшими"])}. Подробности — в настройках провайдера.`,
+      ),
       dismissible: true,
     });
   }
@@ -504,7 +525,11 @@ export function getProviderUpdateSidebarPillView(
       title:
         succeededProviders.length === 1
           ? getProviderUpdatedTitle(succeededProvider)
-          : `${succeededProviders.length} providers updated`,
+          : // ru-code: bilingual plural seam
+            L(
+              `${succeededProviders.length} providers updated`,
+              `Обновлено ${succeededProviders.length} ${pluralRu(succeededProviders.length, ["провайдер", "провайдера", "провайдеров"])}`,
+            ),
       description: getProviderUpdatedDescription(succeededProviders.length),
       dismissAfterVisibleMs: PROVIDER_UPDATE_SUCCESS_VISIBLE_MS,
     });
@@ -541,7 +566,11 @@ function getProviderUpdateInitialToastTitle(
     const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
     return `Update Available: ${providerName} ${formatVersion(provider.versionAdvisory.latestVersion)}`;
   }
-  return `Updates Available: ${providers.length} providers`;
+  // ru-code: bilingual plural seam
+  return L(
+    `Updates Available: ${providers.length} providers`,
+    `Доступны обновления: ${providers.length} ${pluralRu(providers.length, ["провайдер", "провайдера", "провайдеров"])}`,
+  );
 }
 
 function getFailedProviderUpdateDescription(providers: ReadonlyArray<ServerProvider>): string {

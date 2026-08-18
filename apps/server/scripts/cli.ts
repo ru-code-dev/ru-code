@@ -172,6 +172,19 @@ const buildCmd = Command.make(
       } else {
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
       }
+
+      // ru-code: fail the build if any dictionary translation did not land in the emitted
+      // bundles. Runs here because dist/ now holds BOTH the server bundle (bin.mjs) and the
+      // web bundle (dist/client). This is the gate that catches the transform silently not
+      // running on a target — proof by grep of the shipped JS, not luck.
+      yield* Effect.log("[cli] Verifying localization landed in the build...");
+      yield* runCommand(
+        ChildProcess.make(
+          process.execPath,
+          ["ru-code/localization/build/verifyBuild.mjs", "apps/server/dist"],
+          { cwd: repoRoot, stdout: "inherit", stderr: "inherit", shell: false },
+        ),
+      );
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
 

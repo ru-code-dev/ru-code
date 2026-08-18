@@ -26,6 +26,12 @@ export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"])
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 
+// ru-code: UI language. Persisted server-side so both the web client and the server
+// (which renders some user-facing strings) read the same value. Default Russian.
+export const Locale = Schema.Literals(["ru", "en"]);
+export type Locale = typeof Locale.Type;
+export const DEFAULT_LOCALE: Locale = "ru";
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -577,6 +583,8 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const ServerSettings = Schema.Struct({
+  // ru-code: UI language (default Russian).
+  locale: Locale.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_LOCALE))),
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
   // including prior opt-ins, resets to the buffered default.
@@ -757,6 +765,7 @@ const OpenCodeSettingsPatch = Schema.Struct({
 
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
+  locale: Schema.optionalKey(Locale), // ru-code
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),

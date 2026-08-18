@@ -24,6 +24,7 @@ import {
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
+import { setLocale } from "@ru-code/localization"; // ru-code: keep server-side L() in sync with the UI language
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -572,6 +573,8 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
+      // ru-code: keep the server-side localization module in sync with the stored language.
+      Effect.tap((settings) => Effect.sync(() => setLocale(settings.locale))),
       Effect.flatMap(materializeProviderEnvironmentSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
@@ -584,6 +587,7 @@ const make = Effect.gen(function* () {
             applyServerSettingsPatch(current, patch),
           );
           const next = yield* normalizeServerSettings(nextPersisted);
+          yield* Effect.sync(() => setLocale(next.locale)); // ru-code: sync language on change
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);

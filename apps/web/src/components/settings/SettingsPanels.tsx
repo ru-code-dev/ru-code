@@ -76,7 +76,12 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
+import {
+  primaryServerObservabilityAtom,
+  primaryServerProvidersAtom,
+  serverEnvironment, // ru-code: language toggle persists through the server settings atom
+} from "../../state/server";
+import { usePrimaryEnvironment } from "../../state/environments"; // ru-code: language toggle target
 import { useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
@@ -143,6 +148,8 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { useAtomCommand } from "../../state/use-atom-command"; // ru-code: language toggle persistence
+import { L } from "@ru-code/localization"; // ru-code: bilingual label seam
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -150,10 +157,17 @@ const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, s
   none: "None",
 };
 
+// ru-code: language options — labels shown in their own language, never translated.
+const LANGUAGE_OPTIONS = [
+  { value: "ru", label: "Русский" },
+  { value: "en", label: "English" },
+] as const;
+
+// ru-code: bilingual label seam (key==value collision confuses the transform aligner)
 const TIMESTAMP_FORMAT_LABELS = {
-  locale: "System default",
-  "12-hour": "12-hour",
-  "24-hour": "24-hour",
+  locale: L("System default", "Системный"),
+  "12-hour": L("12-hour", "12-часовой"),
+  "24-hour": L("24-hour", "24-часовой"),
 } as const;
 
 const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<BackgroundActivityProfile, string> = {
@@ -1770,6 +1784,10 @@ export function GeneralSettingsPanel() {
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
+  // ru-code: language is server-owned; the toggle awaits the server write directly
+  // so the next load's server-stamped locale is already the new value (no localStorage).
+  const primaryEnvironment = usePrimaryEnvironment();
+  const persistServerLocale = useAtomCommand(serverEnvironment.updateSettings, "language change");
   const observability = useAtomValue(primaryServerObservabilityAtom);
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const diagnosticsDescription = formatDiagnosticsDescription({
@@ -1852,6 +1870,46 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Project grouping"
             />
+          }
+        />
+
+        {/* ru-code: language toggle */}
+        <SettingsRow
+          title={L("Language", "Язык")}
+          description={L("Choose the interface language.", "Выберите язык интерфейса.")}
+          control={
+            <Select
+              value={settings.locale}
+              onValueChange={(value) => {
+                if (value !== "ru" && value !== "en") return;
+                // ru-code: persist to the server (the source of truth), THEN reload so the
+                // server-stamped <head> locale on the next load is already the new value and
+                // module-level L() constants re-evaluate in the new language. Awaiting avoids
+                // a stale-seed race without any client-side (port-scoped) locale storage.
+                const environmentId = primaryEnvironment?.environmentId;
+                const applied = environmentId
+                  ? persistServerLocale({ environmentId, input: { patch: { locale: value } } })
+                  : Promise.resolve();
+                void applied.finally(() => window.location.reload());
+              }}
+            >
+              <SelectTrigger
+                className="w-full sm:w-40"
+                aria-label={L("Language preference", "Выбор языка")}
+              >
+                <SelectValue>
+                  {LANGUAGE_OPTIONS.find((option) => option.value === settings.locale)?.label ??
+                    "Русский"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {LANGUAGE_OPTIONS.map((option) => (
+                  <SelectItem hideIndicator key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           }
         />
 

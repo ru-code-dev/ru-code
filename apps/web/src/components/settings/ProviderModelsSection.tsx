@@ -24,6 +24,7 @@ import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 /**
  * Placeholder text for the "add a custom model" input, keyed by driver
@@ -188,7 +189,11 @@ export function ProviderModelsSection({
     <div>
       <div className="text-xs font-medium text-foreground">Models</div>
       <div className="mt-1 text-xs text-muted-foreground">
-        {models.length} model{models.length === 1 ? "" : "s"} available.
+        {/* ru-code: bilingual plural seam */}
+        {L(
+          `${models.length} model${models.length === 1 ? "" : "s"} available.`,
+          `Доступно ${models.length} ${pluralRu(models.length, ["модель", "модели", "моделей"])}.`,
+        )}
       </div>
       <div ref={listRef} className="mt-2 max-h-40 overflow-y-auto pb-1">
         {orderedModels.map((model, index) => {

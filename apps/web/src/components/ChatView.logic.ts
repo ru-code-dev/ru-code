@@ -21,6 +21,7 @@ import {
   type TerminalContextDraft,
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import { L } from "@ru-code/localization"; // ru-code: bilingual agreement seam
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -314,12 +315,20 @@ export function buildExpiredTerminalContextToastCopy(
   const noun = count === 1 ? "Expired terminal context" : "Expired terminal contexts";
   if (variant === "empty") {
     return {
-      title: `${noun} won't be sent`,
+      // ru-code: bilingual plural/agreement seam
+      title: L(
+        `${noun} won't be sent`,
+        count === 1 ? `${noun} не будет отправлен` : `${noun} не будут отправлены`,
+      ),
       description: "Remove it or re-add it to include terminal output.",
     };
   }
   return {
-    title: `${noun} omitted from message`,
+    // ru-code: bilingual plural/agreement seam
+    title: L(
+      `${noun} omitted from message`,
+      count === 1 ? `${noun} пропущен в сообщении` : `${noun} пропущены в сообщении`,
+    ),
     description: "Re-add it if you want that terminal output included.",
   };
 }

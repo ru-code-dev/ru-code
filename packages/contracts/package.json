@@ -25,6 +25,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@ru-code/localization": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

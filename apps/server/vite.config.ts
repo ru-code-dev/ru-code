@@ -1,6 +1,7 @@
 import "vite-plus/test/config";
 import { defineConfig, mergeConfig } from "vite-plus";
 
+import { ruCodeLocalizationPlugin } from "@ru-code/localization/build"; // ru-code: bilingual build transform
 import baseConfig from "../../vite.config.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
@@ -26,6 +27,8 @@ const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : 
 export default mergeConfig(
   baseConfig,
   defineConfig({
+    // ru-code: inject Russian translations into server display strings at build time.
+    plugins: [ruCodeLocalizationPlugin()],
     run: {
       tasks: {
         build: {
@@ -40,6 +43,12 @@ export default mergeConfig(
       outDir: "dist",
       sourcemap: true,
       clean: true,
+      // ru-code: the top-level Vite `plugins` above only runs under Vite (the web build).
+      // `vp pack` bundles the server via tsdown/rolldown, which reads its plugins from
+      // THIS pack config — so the localization transform must be wired here too, or every
+      // server-side display string ships English. See ru-code/localization/build/verifyBuild.mjs
+      // for the gate that fails the build if any translation is missing from the bundle.
+      plugins: [ruCodeLocalizationPlugin()],
       deps: {
         // Both halves are required. `alwaysBundle` forces the JS dependencies in
         // (declared deps are external by default, which is what this change is

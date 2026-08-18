@@ -121,6 +121,7 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -1390,6 +1391,11 @@ function WorkGroupToggleTimelineRow({
     : row.hiddenCount === 1
       ? "log entry"
       : "log entries";
+  // ru-code: Russian plural forms [one, few, many] for the hidden-count seam below.
+  // The English side needs no suffix here — labelNoun above is already pluralized.
+  const labelForms = row.onlyToolEntries
+    ? (["вызов инструмента", "вызова инструмента", "вызовов инструмента"] as const)
+    : (["запись журнала", "записи журнала", "записей журнала"] as const);
 
   return (
     <button
@@ -1412,7 +1418,11 @@ function WorkGroupToggleTimelineRow({
         </span>
       ) : (
         <span className="font-medium text-foreground">
-          +{row.hiddenCount} previous {labelNoun}
+          {/* ru-code: bilingual plural seam */}
+          {L(
+            `+${row.hiddenCount} previous ${labelNoun}`,
+            `Ещё ${row.hiddenCount} ${pluralRu(row.hiddenCount, labelForms)}`,
+          )}
         </span>
       )}
     </button>

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { type SlowRpcAckRequest, useSlowRpcAckRequests } from "../rpc/requestLatencyState";
 import { toastManager } from "./ui/toast";
+import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 function describeSlowRequests(requests: ReadonlyArray<SlowRpcAckRequest>): string {
   const count = requests.length;
@@ -10,7 +11,11 @@ function describeSlowRequests(requests: ReadonlyArray<SlowRpcAckRequest>): strin
     Math.min(...requests.map((request) => request.thresholdMs)) / 1000,
   );
 
-  return `${count} request${count === 1 ? "" : "s"} waiting longer than ${thresholdSeconds}s.`;
+  // ru-code: bilingual plural seam
+  return L(
+    `${count} request${count === 1 ? "" : "s"} waiting longer than ${thresholdSeconds}s.`,
+    `${count} ${pluralRu(count, ["запрос", "запроса", "запросов"])} ${pluralRu(count, ["ждёт", "ждут", "ждут"])} дольше ${thresholdSeconds} с.`,
+  );
 }
 
 function SlowRequestDetails({ requests }: { requests: ReadonlyArray<SlowRpcAckRequest> }) {

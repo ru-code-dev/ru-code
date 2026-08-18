@@ -24,6 +24,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+// ru-code: pre-made starter project registered on startup (see install script).
+import { resolveStarterProjectRoot } from "./ru-code/startup/starterProject.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -192,24 +194,29 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   let bootstrapThreadId: ThreadId | undefined;
 
   if (serverConfig.autoBootstrapProjectFromCwd) {
+    // ru-code: register the pre-made `<baseDir>/Project` starter folder (created
+    // by the installer) instead of adopting the launch cwd — the installed app
+    // should never auto-add whatever directory it happens to be started from.
+    const bootstrapWorkspaceRoot = resolveStarterProjectRoot(serverConfig.baseDir, path.join);
     yield* Effect.gen(function* () {
-      const existingProject = yield* projectionReadModelQuery.getActiveProjectByWorkspaceRoot(
-        serverConfig.cwd,
-      );
+      const existingProject =
+        yield* projectionReadModelQuery.getActiveProjectByWorkspaceRoot(bootstrapWorkspaceRoot);
       let nextProjectId: ProjectId;
       let nextProjectDefaultModelSelection: ModelSelection;
 
       if (Option.isNone(existingProject)) {
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         nextProjectId = ProjectId.make(yield* randomUUID);
-        const bootstrapProjectTitle = path.basename(serverConfig.cwd) || "project";
+        const bootstrapProjectTitle = path.basename(bootstrapWorkspaceRoot) || "project";
         nextProjectDefaultModelSelection = getAutoBootstrapDefaultModelSelection();
         yield* orchestrationEngine.dispatch({
           type: "project.create",
           commandId: CommandId.make(yield* randomUUID),
           projectId: nextProjectId,
           title: bootstrapProjectTitle,
-          workspaceRoot: serverConfig.cwd,
+          workspaceRoot: bootstrapWorkspaceRoot,
+          // ru-code: self-heal — recreate the folder if the user removed it.
+          createWorkspaceRootIfMissing: true,
           defaultModelSelection: nextProjectDefaultModelSelection,
           createdAt,
         });

@@ -588,7 +588,9 @@ export const make = Effect.gen(function* () {
       });
       switch (startupState) {
         case "waiting-for-link":
-          yield* Effect.logInfo(
+          // ru-code: T3 Connect is off by default here — demote this permanent
+          // standby line from info to debug so it doesn't clutter normal output.
+          yield* Effect.logDebug(
             "agent activity publishing standby; waiting for T3 Connect link reconciliation",
           );
           break;

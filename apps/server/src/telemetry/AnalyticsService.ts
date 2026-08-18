@@ -29,13 +29,16 @@ interface BufferedAnalyticsEvent {
 }
 
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
-  ),
+  // ru-code: no PostHog project is baked in and telemetry is OFF by default.
+  // Nothing leaves the machine unless an operator explicitly re-wires it by
+  // setting BOTH T3CODE_POSTHOG_KEY (their own project key) and
+  // T3CODE_TELEMETRY_ENABLED=true (see the telemetryActive gate in `make`).
+  posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("")),
   posthogHost: Config.string("T3CODE_POSTHOG_HOST").pipe(
     Config.withDefault("https://us.i.posthog.com"),
   ),
-  enabled: Config.boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  // ru-code: OFF by default — telemetry requires an explicit opt-in (see telemetryActive).
+  enabled: Config.boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
   flushBatchSize: Config.number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -76,6 +79,13 @@ export const make = Effect.gen(function* () {
   const hostPlatform = yield* HostProcessPlatform;
   const hostArchitecture = yield* HostProcessArchitecture;
 
+  // ru-code: telemetry only leaves the machine when explicitly re-wired — it
+  // requires the opt-in flag, a non-empty project key, and a resolved identity.
+  // With the defaults (disabled, empty key) this is always false, so `record`
+  // buffers nothing and `sendBatch` never POSTs.
+  const telemetryActive =
+    telemetryConfig.enabled && telemetryConfig.posthogKey.length > 0 && identifier !== null;
+
   const enqueueBufferedEvent = (event: string, properties?: Readonly<Record<string, unknown>>) =>
     Effect.flatMap(DateTime.now, (now) =>
       Ref.modify(bufferRef, (current) => {
@@ -106,7 +116,7 @@ export const make = Effect.gen(function* () {
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!telemetryConfig.enabled || !identifier) return;
+    if (!telemetryActive) return; // ru-code: off unless key + opt-in flag set
 
     const payload = {
       api_key: telemetryConfig.posthogKey,
@@ -160,7 +170,7 @@ export const make = Effect.gen(function* () {
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      if (!telemetryConfig.enabled || !identifier) return;
+      if (!telemetryActive) return; // ru-code: off unless key + opt-in flag set
 
       const enqueueResult = yield* enqueueBufferedEvent(event, properties);
       if (enqueueResult.dropped) {

@@ -18,6 +18,10 @@ import { isLocale, setLocaleOverride } from "@ru-code/localization"; // ru-code:
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+// ru-code: default base dir = the installed app root (resolver ourRoot).
+import { resolveDefaultBaseDir } from "../ru-code/startup/defaultBaseDir.ts";
+// ru-code: default working dir = the pre-made <baseDir>/Project starter repo.
+import { resolveStarterProjectRoot } from "../ru-code/startup/starterProject.ts";
 
 export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -29,18 +33,21 @@ export const portFlag = Flag.integer("port").pipe(
   Flag.optional,
 );
 export const hostFlag = Flag.string("host").pipe(
-  Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
+  // ru-code: trimmed to the local-install case; the 0.0.0.0/Tailnet hint is dev-only surface.
+  Flag.withDescription("Host/interface to bind (for example 127.0.0.1)."),
   Flag.optional,
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
-  Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
-  ),
+  // ru-code: trimmed + de-branded (was "Explicit T3 Code data directory…"); dict-translated.
+  Flag.withDescription("Application base directory."),
   Flag.optional,
 );
+// ru-code: internal/dev-only flags — kept fully parseable but hidden from --help
+// and completions via Flag.withHidden (not removed).
 export const devUrlFlag = Flag.string("dev-url").pipe(
   Flag.withSchema(Schema.URLFromString),
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
+  Flag.withHidden,
   Flag.optional,
 );
 export const noBrowserFlag = Flag.boolean("no-browser").pipe(
@@ -50,12 +57,14 @@ export const noBrowserFlag = Flag.boolean("no-browser").pipe(
 export const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
   Flag.withSchema(Schema.Int),
   Flag.withDescription("Read one-time bootstrap secrets from the given file descriptor."),
+  Flag.withHidden,
   Flag.optional,
 );
 export const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
   Flag.withDescription(
     "Create a project for the current working directory on startup when missing.",
   ),
+  Flag.withHidden,
   Flag.optional,
 );
 export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
@@ -63,17 +72,20 @@ export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
     "Emit server-side logs for outbound WebSocket push traffic (equivalent to T3CODE_LOG_WS_EVENTS).",
   ),
   Flag.withAlias("log-ws-events"),
+  Flag.withHidden,
   Flag.optional,
 );
 export const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
   Flag.withDescription(
     "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
   ),
+  Flag.withHidden,
   Flag.optional,
 );
 export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
+  Flag.withHidden,
   Flag.optional,
 );
 // ru-code: choose the UI/CLI language for this run (overrides the stored preference).
@@ -187,7 +199,8 @@ export const sharedServerCommandFlags = {
   baseDir: baseDirFlag,
   cwd: Argument.string("cwd").pipe(
     Argument.withDescription(
-      "Working directory for provider sessions (defaults to the current directory).",
+      // ru-code: the installed app defaults its working dir to <baseDir>/Project, not the launch cwd.
+      "Working directory for provider sessions (defaults to the Project directory).",
     ),
     Argument.optional,
   ),
@@ -297,11 +310,18 @@ export const resolveServerConfig = (
       Option.fromUndefinedOr(env.t3Home),
     ).pipe(Option.filter((value) => value.trim().length > 0));
     const baseDir = yield* resolveBaseDir(
+      // ru-code: fall back to the installed app root (ourRoot) instead of the
+      // upstream ~/.t3 default; --base-dir / T3CODE_HOME / bootstrap still win.
       Option.getOrUndefined(
         resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
-      ),
+      ) ?? resolveDefaultBaseDir(),
     );
-    const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
+    // ru-code: default the working dir to the pre-made <baseDir>/Project starter
+    // repo (recreated below via makeDirectory if the user deleted it) rather than
+    // the arbitrary process launch dir. Explicit --cwd still wins.
+    const rawCwd = Option.getOrElse(normalizedFlags.cwd, () =>
+      resolveStarterProjectRoot(baseDir, path.join),
+    );
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
     yield* fs.makeDirectory(cwd, { recursive: true });
     const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl, {

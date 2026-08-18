@@ -32,6 +32,13 @@ if (isElectron) {
   syncDocumentWindowControlsOverlayClass();
 }
 
+// ru-code: register the PWA service worker so browsers offer "Install" (emitted
+// at /sw.js by serviceWorkerPlugin, as an ES module → `type: "module"`). Never in
+// Electron — it loads from a file-backed shell where a service worker has no meaning.
+if (!isElectron && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js", { type: "module" }).catch(() => {});
+}
+
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
 const app = <AppRoot router={router} />;

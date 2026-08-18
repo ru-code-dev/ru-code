@@ -25,6 +25,8 @@ import * as CliError from "effect/unstable/cli/CliError";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
+// ru-code: the CLI program name is branded via APP_COMMAND (replaces upstream "t3").
+import { APP_COMMAND } from "@ru-code/branding";
 import { cli, makeCli } from "./bin.ts";
 import * as ServerConfig from "./config.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -194,7 +196,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       if (error._tag !== "ShowHelp") {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      assert.deepEqual(error.commandPath, ["t3", "connect"]);
+      assert.deepEqual(error.commandPath, [APP_COMMAND, "connect"]);
       assert.include(error.errors[0]?.message ?? "", "missing T3 Connect public configuration");
 
       const output = (yield* TestConsole.errorLines).join("\n");
@@ -423,7 +425,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       if (error._tag !== "ShowHelp") {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      assert.deepEqual(error.commandPath, ["t3", "auth", "pairing", "create"]);
+      assert.deepEqual(error.commandPath, [APP_COMMAND, "auth", "pairing", "create"]);
       const ttlError = error.errors[0] as CliError.CliError | undefined;
       if (!ttlError || ttlError._tag !== "InvalidValue") {
         assert.fail(`Expected InvalidValue, got ${String(ttlError?._tag)}`);
@@ -591,7 +593,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       if (error._tag !== "ShowHelp") {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      assert.deepEqual(error.commandPath, ["t3", "project", "add"]);
+      assert.deepEqual(error.commandPath, [APP_COMMAND, "project", "add"]);
       const optionError = error.errors[0] as CliError.CliError | undefined;
       if (!optionError || optionError._tag !== "UnrecognizedOption") {
         assert.fail(`Expected UnrecognizedOption, got ${String(optionError?._tag)}`);

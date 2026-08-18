@@ -1,6 +1,7 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off -- test builds expected paths with node:os/path
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { assert, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -119,7 +120,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ...defaultObservabilityConfig,
         mode: "desktop",
         port: 4001,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: "0.0.0.0",
@@ -191,7 +193,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ...defaultObservabilityConfig,
         mode: "web",
         port: 8788,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
@@ -265,7 +268,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ...defaultObservabilityConfig,
         mode: "web",
         port: 8788,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
@@ -342,7 +346,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         otlpMetricsUrl: "http://localhost:4318/v1/metrics",
         mode: "desktop",
         port: 4888,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: "127.0.0.2",
@@ -477,7 +482,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ...defaultObservabilityConfig,
         mode: "web",
         port: 8788,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
@@ -547,7 +553,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         otlpMetricsUrl: "http://localhost:4318/v1/metrics",
         mode: "desktop",
         port: 4888,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
@@ -611,7 +618,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ...defaultObservabilityConfig,
         mode: "web",
         port: 3773,
-        cwd: process.cwd(),
+        // ru-code: cwd defaults to <baseDir>/Project (the pre-made starter repo).
+        cwd: NodePath.join(baseDir, "Project"),
         baseDir,
         ...derivedPaths,
         host: undefined,

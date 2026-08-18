@@ -1,8 +1,3 @@
-// @ru-code/branding — single source of truth for product identity: the display
-// name (APP_NAME) and the storage-key namespace (APP_SCOPE). The HTML title, meta
-// description, web manifest, server CLI description and every persisted client key
-// reference these constants instead of hard-coding the product name / prefix.
-
 /**
  * APP_NAME — display name of the application. This is the one and only place
  * the product-name literal lives; everywhere else references this constant.
@@ -36,3 +31,19 @@ export const APP_SCOPE = "ruCode";
 // source tree and the gate would fail on translations that are merely early, not wrong.
 // Flip to `true` only once the series is complete.
 export const FAIL_ON_LOCALIZATION_ERROR = false;
+
+// ── Distribution identity (patch 04) ─────────────────────────────────────────
+// The installed app's command name, home dir, and the bundled CLI's identity.
+// APP_COMMAND brands the CLI program name (--help/--version); APP_HOME_DIRNAME is
+// the default base dir under $HOME; CLI_* identify the embedded Qwen Code binary.
+export const APP_COMMAND = "ru-code";
+
+export const APP_HOME_DIRNAME = `.ru-code`;
+
+export const CLI_ID = "qwen";
+
+export const CLI_DISPLAY_NAME = "Qwen Code";
+
+export const CLI_DIRNAME = ".qwen";
+
+export const SLASH_COMMAND_NOTIFICATION_METHODS: readonly string[] = [`_qwencode/slash_command`];

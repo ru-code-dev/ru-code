@@ -141,11 +141,18 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  // ru-code: migration traces → debug (fork convention: no info-level logs).
+  yield* Effect.logDebug(
+    toMigrationInclusive === undefined
+      ? "Running all migrations..."
+      : `Running migrations 1 through ${toMigrationInclusive}...`,
+  );
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
-    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+    : // ru-code: info → debug (fork convention: no info-level logs at startup)
+      Effect.logDebug("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
 

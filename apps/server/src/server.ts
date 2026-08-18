@@ -663,6 +663,10 @@ export const makeServerLayer = Layer.unwrap(
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,
+      // ru-code: suppress the framework "Listening on <bind address>" info log — redundant
+      // with our own startup output (startupAccess / the pairing line) and it prints the
+      // bind address, not an openable URL.
+      disableListenLog: true,
     }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
     const serverApplicationLayer = Layer.mergeAll(
       routesLayer,

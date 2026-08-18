@@ -6,6 +6,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
 import { brandingAssetsPlugin } from "@ru-code/theme/vite";
+import { serviceWorkerPlugin } from "./src/ru-code/sw/swBuildPlugin";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
@@ -172,6 +173,8 @@ export default defineConfig(() => {
       }),
       tailwindcss(),
       brandingAssetsPlugin(),
+      // ru-code: emits the unhashed root-scoped /sw.js the PWA registers (see sw/swBuildPlugin.ts).
+      serviceWorkerPlugin(),
     ],
     optimizeDeps: {
       include: [

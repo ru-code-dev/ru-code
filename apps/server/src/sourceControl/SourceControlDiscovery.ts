@@ -11,7 +11,9 @@ import * as Option from "effect/Option";
 import { ServerConfig } from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { detailFromCause, firstNonEmptyLine } from "./SourceControlProviderDiscovery.ts";
-import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
+// ru-code[HEAVY]: hosting-provider discovery is disabled (see below); the registry is
+// still wired elsewhere (GitManager / SourceControlRepositoryService) for PR ops.
+// import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 
 interface DiscoveryProbe {
   readonly label: string;
@@ -47,14 +49,16 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
     implemented: true,
     installHint: "Install Git from https://git-scm.com/downloads or with your package manager.",
   },
-  {
-    kind: "jj",
-    label: "Jujutsu",
-    executable: "jj",
-    versionArgs: ["--version"],
-    implemented: false,
-    installHint: "Install Jujutsu with `brew install jj` or from https://github.com/jj-vcs/jj.",
-  },
+  // ru-code[HEAVY]: Jujutsu is hidden from the UI (was a "coming soon" row) and no
+  // `jj --version` probe runs. Restore this entry to bring it back.
+  // {
+  //   kind: "jj",
+  //   label: "Jujutsu",
+  //   executable: "jj",
+  //   versionArgs: ["--version"],
+  //   implemented: false,
+  //   installHint: "Install Jujutsu with `brew install jj` or from https://github.com/jj-vcs/jj.",
+  // },
 ];
 
 export class SourceControlDiscovery extends Context.Service<
@@ -67,7 +71,10 @@ export class SourceControlDiscovery extends Context.Service<
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const process = yield* VcsProcess.VcsProcess;
-  const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  // ru-code[HEAVY]: registry lookup removed here — hosting-provider availability probes
+  // (GitHub/GitLab/Azure/Bitbucket) are disabled. Restore the yield + the
+  // `sourceControlProviders.discover` call below to re-enable.
+  // const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
 
   const probe = <Kind extends VcsDriverKind>(
     input: DiscoveryProbe & { readonly kind: Kind },
@@ -134,7 +141,11 @@ export const make = Effect.gen(function* () {
         VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
         { concurrency: "unbounded" },
       ),
-      sourceControlProviders: sourceControlProviders.discover,
+      // ru-code[HEAVY]: hosting providers disabled — empty list hides the UI section and
+      // skips every gh/glab/az/Bitbucket probe. Restore `sourceControlProviders.discover`.
+      sourceControlProviders: Effect.succeed(
+        [] as SourceControlDiscoveryResult["sourceControlProviders"],
+      ),
     }),
   });
 });

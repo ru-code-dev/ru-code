@@ -135,7 +135,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           ),
         );
 
-        yield* Effect.logInfo("provider.session.reaper.started", {
+        // ru-code: startup trace → debug (fork convention: no info-level logs).
+        yield* Effect.logDebug("provider.session.reaper.started", {
           inactivityThresholdMs,
           sweepIntervalMs,
         });

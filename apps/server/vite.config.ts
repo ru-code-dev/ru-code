@@ -21,6 +21,46 @@ import {
 
 export { shouldBundleCliDependency };
 
+// ru-code: the ONLY deps that cannot be inlined into cli.js — native N-API
+// modules (they load a platform `.node`) plus the Bun runtime builtins. In the
+// release bundle everything else (effect, provider SDKs, shiki, react-dom, …) is
+// bundled INTO cli.js; these ship as prebuilt node_modules (see prepare-release).
+const RELEASE_NATIVE_PACKAGES = [
+  "node-pty",
+  "@ff-labs/fff-node",
+  "ffi-rs",
+  "msgpackr-extract",
+  "bufferutil",
+  "utf-8-validate",
+];
+
+export function isReleaseExternal(id: string): boolean {
+  if (id === "bun" || id.startsWith("bun:")) return true;
+  return RELEASE_NATIVE_PACKAGES.some((name) => id === name || id.startsWith(`${name}/`));
+}
+
+// External matchers for the release bundle: the natives (+ subpaths) and Bun
+// builtins. Everything else is force-bundled via alwaysBundle.
+const RELEASE_NEVER_BUNDLE: RegExp[] = [
+  /^bun(:|$)/,
+  ...RELEASE_NATIVE_PACKAGES.map(
+    (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|$)`),
+  ),
+];
+
+// prepare-release sets RU_CODE_RELEASE_BUNDLE=1 → self-contained cli.js: bundle
+// every JS dep, externalize only the natives + Bun builtins. Default build keeps
+// the normal (thin) externalization for dev / desktop / npx.
+const releaseBundle = process.env.RU_CODE_RELEASE_BUNDLE === "1";
+
+// Release: bundle EVERY JS dep into cli.js (alwaysBundle everything that is not a
+// native / Bun builtin); the natives stay external and ship as prebuilt
+// node_modules (see prepare-release). Default: thin externalization for dev /
+// desktop / npx. Same `deps` shape vite-plus honors in both branches.
+const packDeps = releaseBundle
+  ? { alwaysBundle: /[\s\S]/, neverBundle: RELEASE_NEVER_BUNDLE, onlyBundle: false as const }
+  : { alwaysBundle: shouldBundleCliDependency, onlyBundle: false as const };
+
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
 

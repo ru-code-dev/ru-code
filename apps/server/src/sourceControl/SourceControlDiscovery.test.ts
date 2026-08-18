@@ -50,7 +50,12 @@ const processOutput = (
   stderrTruncated: false,
 });
 
-it.effect("reports implemented tools separately from locally available executables", () => {
+// ru-code: hosting-provider discovery (GitHub/GitLab/Azure/Bitbucket) and the
+// Jujutsu VCS probe are intentionally disabled (SourceControlDiscovery.ts), so
+// these two tests — which assert those providers/jj are surfaced — are skipped.
+// The provider logic itself stays covered by SourceControlProviderRegistry.test.ts
+// and the per-provider tests.
+it.effect.skip("reports implemented tools separately from locally available executables", () => {
   const processMock = {
     run: (input: VcsProcess.VcsProcessInput) => {
       if (input.command === "git") {
@@ -169,7 +174,8 @@ it.effect("reports implemented tools separately from locally available executabl
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("probes provider authentication without exposing token details", () => {
+// ru-code: skipped — hosting-provider discovery is disabled (see note above).
+it.effect.skip("probes provider authentication without exposing token details", () => {
   const processMock = {
     run: (input: VcsProcess.VcsProcessInput) => {
       if (input.args[0] === "--version") {

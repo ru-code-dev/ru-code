@@ -612,7 +612,10 @@ export const ServerSettings = Schema.Struct({
   enableLegacyTokenStreaming: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // ru-code: default OFF — no registry.npmjs.org calls unless a user opts in.
+  enableProviderUpdateChecks: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   /**
    * Whether agents may drive the in-app preview browser. Turning this off
    * withholds the MCP credential, so the `t3-code` server (and with it every

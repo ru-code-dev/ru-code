@@ -132,6 +132,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
     const targets = yield* ServerRuntimeStartup.resolveAutoBootstrapWelcomeTargets.pipe(
       Effect.provideService(ServerConfig.ServerConfig, {
         cwd: "/tmp/startup-project",
+        // ru-code: bootstrap now targets <baseDir>/Project, not cwd.
+        baseDir: "/tmp/startup-home",
         autoBootstrapProjectFromCwd: true,
       } as never),
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
@@ -189,6 +191,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
     const targets = yield* ServerRuntimeStartup.resolveAutoBootstrapWelcomeTargets.pipe(
       Effect.provideService(ServerConfig.ServerConfig, {
         cwd: "/tmp/startup-project",
+        // ru-code: bootstrap now targets <baseDir>/Project, not cwd.
+        baseDir: "/tmp/startup-home",
         autoBootstrapProjectFromCwd: true,
       } as never),
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
@@ -240,6 +244,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
     const error = yield* ServerRuntimeStartup.resolveAutoBootstrapWelcomeTargets.pipe(
       Effect.provideService(ServerConfig.ServerConfig, {
         cwd: "/tmp/startup-project",
+        // ru-code: bootstrap now targets <baseDir>/Project, not cwd.
+        baseDir: "/tmp/startup-home",
         autoBootstrapProjectFromCwd: true,
       } as never),
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {

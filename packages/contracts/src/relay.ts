@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-code/branding";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -1080,7 +1081,7 @@ export const RelayApi = HttpApi.make("RelayApi")
     RelayDpopClientGroup,
     RelayServerGroup,
   )
-  .annotate(OpenApi.Title, "T3 Code Relay API")
+  .annotate(OpenApi.Title, `${APP_NAME} Relay API`)
   .annotate(OpenApi.Version, "1.0.0")
   .annotate(
     OpenApi.Description,

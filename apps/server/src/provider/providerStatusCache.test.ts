@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-code/branding";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   defaultInstanceIdForDriver,
@@ -193,7 +194,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       version: null,
       status: "disabled",
       auth: { status: "unknown" },
-      message: "Codex is disabled in T3 Code settings.",
+      message: `Codex is disabled in ${APP_NAME} settings.`,
     });
 
     assert.deepStrictEqual(

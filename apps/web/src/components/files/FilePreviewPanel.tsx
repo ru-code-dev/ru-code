@@ -1,3 +1,4 @@
+import { APP_SCOPE } from "@ru-code/branding";
 import type {
   EditorId,
   EnvironmentId,
@@ -80,8 +81,8 @@ interface FilePreviewPanelProps {
   onPendingChange: (relativePath: string, pending: boolean) => void;
 }
 
-const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
-const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
+const FILE_EXPLORER_STORAGE_KEY = `${APP_SCOPE}:fileExplorerOpen`;
+const RENDER_MARKDOWN_STORAGE_KEY = `${APP_SCOPE}:renderMarkdown`;
 const FILE_SAVE_DEBOUNCE_MS = 500;
 const FILE_LINK_REVEAL_ATTRIBUTE = "data-file-link-reveal";
 const FILE_LINK_REVEAL_UNSAFE_CSS = `

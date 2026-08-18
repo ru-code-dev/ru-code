@@ -1,3 +1,4 @@
+import { APP_SCOPE } from "@ru-code/branding";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
 import { create } from "zustand";
@@ -124,7 +125,7 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
         }),
     }),
     {
-      name: "t3code:diff-panel-state:v1",
+      name: `${APP_SCOPE}:diff-panel-state:v1`,
       version: 1,
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),

@@ -38,6 +38,7 @@ import {
 } from "../logicalProject";
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
+import { useAppearancePersist } from "../ru-code/theme/useAppearancePersist"; // ru-code: appearance is server-owned
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
@@ -131,6 +132,7 @@ function RootRouteView() {
       <AnchoredToastProvider>
         <DocumentTitleSync />
         <GlassAppearanceSync />
+        <AppearancePersistSync />
         <FontAppearanceSync />
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         <RelayClientInstallDialog />
@@ -148,6 +150,13 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+// ru-code: binds the appearance storage shim to the server-settings write path, so
+// t3's theme engine persists to ServerSettings instead of (port-scoped) localStorage.
+function AppearancePersistSync() {
+  useAppearancePersist();
+  return null;
 }
 
 function GlassAppearanceSync() {

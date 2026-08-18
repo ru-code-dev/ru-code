@@ -1,3 +1,4 @@
+import { APP_SCOPE } from "@ru-code/branding";
 import * as Schema from "effect/Schema";
 import * as Record from "effect/Record";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
@@ -78,7 +79,7 @@ export const removeLocalStorageItem = (key: string) => {
   }
 };
 
-const LOCAL_STORAGE_CHANGE_EVENT = "t3code:local_storage_change";
+const LOCAL_STORAGE_CHANGE_EVENT = `${APP_SCOPE}:local_storage_change`;
 
 interface LocalStorageChangeDetail {
   key: string;

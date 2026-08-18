@@ -1,6 +1,8 @@
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { CLIENT_SETTINGS_STORAGE_KEY } from "./clientPersistenceStorage";
+
 function createLocalStorageStub(): Storage {
   const store = new Map<string, string>();
   return {
@@ -54,7 +56,7 @@ describe("clientPersistenceStorage", () => {
 
   it("reports structured decode failures while preserving the fallback", async () => {
     const testWindow = getTestWindow();
-    testWindow.localStorage.setItem("t3code:client-settings:v1", "not-json");
+    testWindow.localStorage.setItem(CLIENT_SETTINGS_STORAGE_KEY, "not-json");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { readBrowserClientSettings } = await import("./clientPersistenceStorage");
 
@@ -64,7 +66,7 @@ describe("clientPersistenceStorage", () => {
       expect.objectContaining({
         _tag: "LocalStorageOperationError",
         operation: "decode",
-        storageKey: "t3code:client-settings:v1",
+        storageKey: CLIENT_SETTINGS_STORAGE_KEY,
         cause: expect.anything(),
       }),
     );
@@ -73,7 +75,7 @@ describe("clientPersistenceStorage", () => {
   it("defaults word wrap on and discards obsolete wrapping preferences", async () => {
     const testWindow = getTestWindow();
     testWindow.localStorage.setItem(
-      "t3code:client-settings:v1",
+      CLIENT_SETTINGS_STORAGE_KEY,
       JSON.stringify({
         chatWordWrap: false,
         diffWordWrap: false,

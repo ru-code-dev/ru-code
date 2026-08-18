@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-code/branding";
 import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
@@ -368,9 +369,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 startedAt,
                 finishedAt,
                 message: couldNotVerify
-                  ? "Update command completed, but T3 Code could not verify the provider version."
+                  ? `Update command ran, but ${APP_NAME} couldn't verify the provider version.`
                   : stillOutdated
-                    ? "Update command completed, but T3 Code still detects an outdated provider version."
+                    ? `Update command ran, but ${APP_NAME} still detects an outdated provider version.`
                     : "Provider updated.",
                 output: commandOutput(result),
               }),

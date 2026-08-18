@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-code/branding";
 import type { RelayClientDeviceRecord } from "@t3tools/contracts/relay";
 import { SmartphoneIcon } from "lucide-react";
 
@@ -94,8 +95,8 @@ function EmptyMobileClients() {
       <EmptyHeader>
         <EmptyTitle className="text-[1.0625rem] leading-6">No mobile clients</EmptyTitle>
         <EmptyDescription className="text-[0.8125rem] leading-[1.125rem]">
-          Sign in to T3 Code on your iPhone to register it for push notifications and Live
-          Activities.
+          {/* ru-code */}
+          {`Sign in to ${APP_NAME} on your iPhone to register it for push notifications and Live Activities.`}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

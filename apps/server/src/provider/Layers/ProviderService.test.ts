@@ -432,7 +432,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled providers", () 
     );
 
     assert.instanceOf(failure, ProviderValidationError);
-    assert.include(failure.issue, "Provider instance 'claudeAgent' is disabled");
+    assert.include(failure.issue, 'Provider instance "claudeAgent" is disabled');
     assert.equal(claude.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -588,7 +588,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
     );
 
     assert.instanceOf(failure, ProviderValidationError);
-    assert.include(failure.issue, "Provider instance 'codex_personal' is disabled");
+    assert.include(failure.issue, 'Provider instance "codex_personal" is disabled');
     assert.equal(codex.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );

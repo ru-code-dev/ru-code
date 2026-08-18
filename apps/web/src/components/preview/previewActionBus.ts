@@ -1,5 +1,7 @@
 "use client";
 
+import { APP_SCOPE } from "@ru-code/branding";
+
 /**
  * Typed window-event bus for preview-panel actions. Lets the global
  * keybinding handler in `routes/_chat.tsx` reach `ChatView`'s URL-aware
@@ -13,7 +15,7 @@ export type PreviewAction =
   | "zoom-out"
   | "reset-zoom";
 
-const EVENT_NAME = "t3code:preview-action";
+const EVENT_NAME = `${APP_SCOPE}:preview-action`;
 
 export function dispatchPreviewAction(action: PreviewAction): void {
   if (typeof window === "undefined") return;

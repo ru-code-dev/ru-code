@@ -1,5 +1,41 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+// ru-code: appearance moved from localStorage to server-stamped globals. Wrap a window
+// stub so the globals derive from (and write back to) the same storage the upstream test
+// already sets up — every case keeps its exact meaning, throw paths included (R4).
+type RuCodeStorageStub = {
+  readonly localStorage: {
+    getItem(key: string): string | null;
+    setItem?(key: string, value: string): void;
+  };
+};
+function ruCodeWindow<T extends RuCodeStorageStub>(base: T) {
+  const store = base.localStorage;
+  const accessor = (key: string) => ({
+    get: () => store.getItem(key) ?? "",
+    set: (value: string) => store.setItem?.(key, value),
+    enumerable: true,
+    configurable: true,
+  });
+  return Object.defineProperties(
+    { ...base },
+    {
+      __RU_THEME_PREFERENCE__: accessor(THEME_PREFERENCE_KEY),
+      __RU_THEME_APPEARANCE_MODE__: accessor(THEME_APPEARANCE_MODE_KEY),
+      __RU_THEME_FOLLOW_SYSTEM__: accessor(THEME_FOLLOW_SYSTEM_KEY),
+      __RU_THEME_HALVES__: accessor(THEME_HALVES_KEY),
+      __RU_CUSTOM_THEMES__: accessor(CUSTOM_THEMES_KEY),
+    },
+  ) as T;
+}
+import {
+  CUSTOM_THEMES_KEY,
+  THEME_APPEARANCE_MODE_KEY,
+  THEME_FOLLOW_SYSTEM_KEY,
+  THEME_HALVES_KEY,
+  THEME_PREFERENCE_KEY,
+} from "../ru-code/theme/appearanceStore"; // ru-code: appearance is server-owned
+
 function createStorage(overrides: Partial<Storage> = {}): Storage {
   const store = new Map<string, string>();
   return {
@@ -30,16 +66,19 @@ describe("theme failure handling", () => {
   it("preserves exact storage causes and operation context", async () => {
     const readCause = new Error("storage read blocked");
     const writeCause = new Error("storage quota exceeded");
-    vi.stubGlobal("window", {
-      localStorage: createStorage({
-        getItem: () => {
-          throw readCause;
-        },
-        setItem: () => {
-          throw writeCause;
-        },
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: createStorage({
+          getItem: () => {
+            throw readCause;
+          },
+          setItem: () => {
+            throw writeCause;
+          },
+        }),
       }),
-    });
+    );
 
     const { readThemePreference, ThemeStorageError, writeThemePreference } =
       await import("./useTheme");
@@ -51,7 +90,7 @@ describe("theme failure handling", () => {
       expect(error).toBeInstanceOf(ThemeStorageError);
       expect(error).toMatchObject({
         operation: "read",
-        storageKey: "t3code:theme",
+        storageKey: THEME_PREFERENCE_KEY,
         cause: readCause,
       });
     }
@@ -63,7 +102,7 @@ describe("theme failure handling", () => {
       expect(error).toBeInstanceOf(ThemeStorageError);
       expect(error).toMatchObject({
         operation: "write",
-        storageKey: "t3code:theme",
+        storageKey: THEME_PREFERENCE_KEY,
         theme: "dark",
         cause: writeCause,
       });
@@ -71,11 +110,14 @@ describe("theme failure handling", () => {
   });
 
   it("reads the persisted T3 Chat theme preference", async () => {
-    vi.stubGlobal("window", {
-      localStorage: createStorage({
-        getItem: () => "t3-chat",
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: createStorage({
+          getItem: () => "t3-chat",
+        }),
       }),
-    });
+    );
 
     const { readThemePreference } = await import("./useTheme");
 
@@ -85,14 +127,17 @@ describe("theme failure handling", () => {
   it("falls back during initial theme application and logs only safe attributes", async () => {
     const cause = new Error("private browsing storage failure");
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("window", {
-      localStorage: createStorage({
-        getItem: () => {
-          throw cause;
-        },
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: createStorage({
+          getItem: () => {
+            throw cause;
+          },
+        }),
+        matchMedia: () => ({ matches: false }),
       }),
-      matchMedia: () => ({ matches: false }),
-    });
+    );
     vi.stubGlobal("document", {
       documentElement: {
         classList: { toggle: vi.fn() },
@@ -102,10 +147,10 @@ describe("theme failure handling", () => {
     await expect(import("./useTheme")).resolves.toBeDefined();
 
     expect(errorLog).toHaveBeenCalledWith(
-      "Failed to read theme preference for t3code:theme.",
+      `Failed to read theme preference for ${THEME_PREFERENCE_KEY}.`,
       expect.objectContaining({
         operation: "read",
-        storageKey: "t3code:theme",
+        storageKey: THEME_PREFERENCE_KEY,
         errorTag: "ThemeStorageError",
       }),
     );
@@ -119,7 +164,7 @@ describe("theme failure handling", () => {
     const themeGetItem = vi.fn((): string | null => {
       throw cause;
     });
-    const getItem = vi.fn((key: string) => (key === "t3code:theme" ? themeGetItem() : null));
+    const getItem = vi.fn((key: string) => (key === THEME_PREFERENCE_KEY ? themeGetItem() : null));
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     let readSnapshot: (() => unknown) | undefined;
     let subscribeToTheme: ((listener: () => void) => () => void) | undefined;
@@ -136,18 +181,21 @@ describe("theme failure handling", () => {
         return getSnapshot();
       },
     }));
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
-        if (type === "storage") storageHandler = listener;
-      },
-      localStorage: createStorage({ getItem }),
-      matchMedia: () => ({
-        matches: false,
-        addEventListener: () => undefined,
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
+          if (type === "storage") storageHandler = listener;
+        },
+        localStorage: createStorage({ getItem }),
+        matchMedia: () => ({
+          matches: false,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }),
         removeEventListener: () => undefined,
       }),
-      removeEventListener: () => undefined,
-    });
+    );
 
     const { useTheme } = await import("./useTheme");
     useTheme();
@@ -158,7 +206,7 @@ describe("theme failure handling", () => {
     expect(errorLog).toHaveBeenCalledTimes(1);
 
     const unsubscribe = subscribeToTheme?.(() => undefined);
-    storageHandler?.({ key: "t3code:theme" } as StorageEvent);
+    storageHandler?.({ key: THEME_PREFERENCE_KEY } as StorageEvent);
     readSnapshot?.();
 
     expect(themeGetItem).toHaveBeenCalledTimes(2);

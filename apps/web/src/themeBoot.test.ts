@@ -15,10 +15,14 @@ import {
   OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+  THEME_HALVES_STORAGE_KEY, // ru-code
   toCanonicalThemeColor,
 } from "./themePalette";
 
-const THEME_STORAGE_KEY = "t3code:theme";
+import { THEME_PREFERENCE_KEY } from "./ru-code/theme/appearanceStore";
+
+// ru-code: the preference key is branded + server-owned now.
+const THEME_STORAGE_KEY = THEME_PREFERENCE_KEY;
 // A custom theme that omits chrome falls back to the runtime default, so the
 // boot copy of that default stays derived from the real palette.
 const DEFAULT_DARK_CHROME = getDefaultThemeColors("dark").chrome;
@@ -37,6 +41,20 @@ type BootResult = {
   bootVariables: Record<string, string>;
   metaContent: string | null;
 };
+
+// ru-code: appearance moved from localStorage to server-stamped globals (the pre-paint
+// reads window.__RU_*__). Map the tests' storage fixtures onto those globals so every
+// upstream case keeps its meaning — seam-broken port test fixed in place (R4).
+function ruCodeAppearanceGlobals(storage: Record<string, string> | undefined) {
+  const s = storage ?? {};
+  return {
+    __RU_THEME_PREFERENCE__: s[THEME_STORAGE_KEY] ?? "",
+    __RU_THEME_APPEARANCE_MODE__: s[THEME_APPEARANCE_MODE_STORAGE_KEY] ?? "",
+    __RU_THEME_FOLLOW_SYSTEM__: s[THEME_FOLLOW_SYSTEM_STORAGE_KEY] ?? "",
+    __RU_THEME_HALVES__: s[THEME_HALVES_STORAGE_KEY] ?? "",
+    __RU_CUSTOM_THEMES__: s[CUSTOM_THEMES_STORAGE_KEY] ?? "",
+  };
+}
 
 function runBootScript(options: {
   storage?: Record<string, string>;
@@ -75,6 +93,7 @@ function runBootScript(options: {
     querySelectorAll: (selector: string) => (selector === 'meta[name="theme-color"]' ? [meta] : []),
   };
   const fakeWindow = {
+    ...ruCodeAppearanceGlobals(options.storage),
     localStorage: {
       getItem: (key: string): string | null => {
         if (options.storageThrows) throw new Error("storage blocked");
@@ -107,6 +126,7 @@ function runtimeResolvedAppearance(
   prefersDark: boolean,
 ): "light" | "dark" {
   vi.stubGlobal("window", {
+    ...ruCodeAppearanceGlobals(storage),
     localStorage: { getItem: (key: string) => storage[key] ?? null },
     matchMedia: () => ({ matches: prefersDark }),
   });
@@ -370,7 +390,7 @@ describe("index.html boot script", () => {
     const storage = {
       [THEME_STORAGE_KEY]: "t3-chat",
       [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
-      "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
+      [THEME_HALVES_STORAGE_KEY]: JSON.stringify({ dark: GROVE_THEME.id }),
     };
 
     const dark = runBootScript({ storage, prefersDark: true });
@@ -401,7 +421,7 @@ describe("index.html boot script", () => {
             colors: { canvas: "#f8fbff", text: "#10243d", accent: "#5b6cff" },
           },
         ]),
-        "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
+        [THEME_HALVES_STORAGE_KEY]: JSON.stringify({ dark: GROVE_THEME.id }),
       },
       prefersDark: true,
     });
@@ -414,7 +434,7 @@ describe("index.html boot script", () => {
       storage: {
         [THEME_STORAGE_KEY]: "gone-theme",
         [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
-        "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
+        [THEME_HALVES_STORAGE_KEY]: JSON.stringify({ dark: GROVE_THEME.id }),
       },
       prefersDark: true,
     });
@@ -431,7 +451,7 @@ describe("index.html boot script", () => {
       storage: {
         [THEME_STORAGE_KEY]: "t3-chat",
         [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
-        "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-grove" }),
+        [THEME_HALVES_STORAGE_KEY]: JSON.stringify({ dark: "t3-grove" }),
       },
       prefersDark: true,
     });
@@ -447,7 +467,7 @@ describe("index.html boot script", () => {
       storage: {
         [THEME_STORAGE_KEY]: "t3-chat",
         [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
-        "t3code:theme-halves:v1": JSON.stringify({ dark: "gone-theme" }),
+        [THEME_HALVES_STORAGE_KEY]: JSON.stringify({ dark: "gone-theme" }),
       },
       prefersDark: true,
     });

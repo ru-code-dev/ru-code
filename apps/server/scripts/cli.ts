@@ -11,7 +11,8 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
-  DEVELOPMENT_ICON_OVERRIDES,
+  // ru-code: DEVELOPMENT_ICON_OVERRIDES unused — applyDevelopmentIconOverrides is disabled.
+  // DEVELOPMENT_ICON_OVERRIDES,
   resolveWebAssetBrandForPackageVersion,
   resolveWebIconOverrides,
 } from "../../../scripts/lib/brand-assets.ts";
@@ -23,8 +24,9 @@ import serverPackageJson from "../package.json" with { type: "json" };
 import {
   ServerCliBuildAssetMissingError,
   ServerCliCommandExitError,
-  ServerCliDevelopmentIconSourceMissingError,
-  ServerCliDevelopmentIconTargetMissingError,
+  // ru-code: these two unused — applyDevelopmentIconOverrides is disabled.
+  // ServerCliDevelopmentIconSourceMissingError,
+  // ServerCliDevelopmentIconTargetMissingError,
   ServerCliPublishIconSourceMissingError,
   ServerCliPublishIconTargetMissingError,
 } from "./cliErrors.ts";
@@ -112,29 +114,32 @@ const preparePublishIcons = Effect.fn("preparePublishIcons")(function* (
   );
 });
 
-const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")(function* (
-  repoRoot: string,
-  serverDir: string,
-) {
-  const path = yield* Path.Path;
-  const fs = yield* FileSystem.FileSystem;
-
-  for (const override of DEVELOPMENT_ICON_OVERRIDES) {
-    const sourcePath = path.join(repoRoot, override.sourceRelativePath);
-    const targetPath = path.join(serverDir, override.targetRelativePath);
-
-    if (!(yield* fs.exists(sourcePath))) {
-      return yield* new ServerCliDevelopmentIconSourceMissingError({ sourcePath });
-    }
-    if (!(yield* fs.exists(targetPath))) {
-      return yield* new ServerCliDevelopmentIconTargetMissingError({ targetPath });
-    }
-
-    yield* fs.copyFile(sourcePath, targetPath);
-  }
-
-  yield* Effect.log("[cli] Applied development icon overrides to dist/client");
-});
+// ru-code: web build owns its favicons (OS-swap via @ru-code/theme), so the T3
+// channel icon override is disabled — its only call site is commented out in the
+// build subcommand. The implementation is kept (commented) for reference.
+// const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")(function* (
+//   repoRoot: string,
+//   serverDir: string,
+// ) {
+//   const path = yield* Path.Path;
+//   const fs = yield* FileSystem.FileSystem;
+//
+//   for (const override of DEVELOPMENT_ICON_OVERRIDES) {
+//     const sourcePath = path.join(repoRoot, override.sourceRelativePath);
+//     const targetPath = path.join(serverDir, override.targetRelativePath);
+//
+//     if (!(yield* fs.exists(sourcePath))) {
+//       return yield* new ServerCliDevelopmentIconSourceMissingError({ sourcePath });
+//     }
+//     if (!(yield* fs.exists(targetPath))) {
+//       return yield* new ServerCliDevelopmentIconTargetMissingError({ targetPath });
+//     }
+//
+//     yield* fs.copyFile(sourcePath, targetPath);
+//   }
+//
+//   yield* Effect.log("[cli] Applied development icon overrides to dist/client");
+// });
 
 // ---------------------------------------------------------------------------
 // build subcommand
@@ -167,7 +172,8 @@ const buildCmd = Command.make(
 
       if (yield* fs.exists(webDist)) {
         yield* fs.copy(webDist, clientTarget);
-        yield* applyDevelopmentIconOverrides(repoRoot, serverDir);
+        // ru-code: web build owns its favicons (OS-swap via @ru-code/theme); skip the T3 channel icon override.
+        // yield* applyDevelopmentIconOverrides(repoRoot, serverDir);
         yield* Effect.log("[cli] Bundled web app into dist/client");
       } else {
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");

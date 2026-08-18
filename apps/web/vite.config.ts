@@ -5,6 +5,7 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
+import { brandingAssetsPlugin } from "@ru-code/theme/vite";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
@@ -170,6 +171,7 @@ export default defineConfig(() => {
         presets: [reactCompilerPreset()],
       }),
       tailwindcss(),
+      brandingAssetsPlugin(),
     ],
     optimizeDeps: {
       include: [
@@ -264,6 +266,10 @@ export default defineConfig(() => {
       outDir: "dist",
       emptyOutDir: true,
       sourcemap: buildSourcemap,
+      // ru-code: branding assets are provided by brandingAssetsPlugin (@ru-code/theme),
+      // so disable the t3 public/ verbatim copy — this keeps the superseded t3 icons
+      // and the orphaned mockServiceWorker.js out of the production build.
+      copyPublicDir: false,
     },
     test: {
       projects: [defineProject(unitTestProject)],

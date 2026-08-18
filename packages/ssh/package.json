@@ -29,6 +29,8 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@ru-code/branding": "workspace:*",
+    "@ru-code/localization": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:"

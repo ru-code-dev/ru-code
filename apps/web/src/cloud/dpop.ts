@@ -1,3 +1,4 @@
+import { APP_SCOPE } from "@ru-code/branding";
 import {
   computeDpopAccessTokenHash,
   computeDpopJwkThumbprint,
@@ -21,7 +22,7 @@ export class BrowserDpopError extends Data.TaggedError("BrowserDpopError")<{
   readonly cause?: unknown;
 }> {}
 
-const DPOP_DATABASE_NAME = "t3code:cloud-auth";
+const DPOP_DATABASE_NAME = `${APP_SCOPE}:cloud-auth`;
 const DPOP_DATABASE_VERSION = 1;
 const DPOP_KEY_STORE_NAME = "keys";
 const DPOP_KEY_ID = "relay-dpop-proof-key";

@@ -439,7 +439,7 @@ describe("providerMaintenanceRunner", () => {
         const result = yield* updater.updateProvider(CODEX_DRIVER);
 
         assert.strictEqual(result.providers[0]?.updateState?.status, "unchanged");
-        assert.include(result.providers[0]?.updateState?.message ?? "", "still detects");
+        assert.include(result.providers[0]?.updateState?.message ?? "", "detects an outdated");
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

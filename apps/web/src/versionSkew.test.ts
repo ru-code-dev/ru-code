@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-code/branding";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -22,7 +23,7 @@ describe("versionSkew", () => {
     expect(resolveVersionMismatch("9.9.9")).toEqual({
       clientVersion: APP_VERSION,
       serverVersion: "9.9.9",
-      hint: "Version mismatch. Try syncing the client and server to the same T3 Code version.",
+      hint: `Version mismatch. Try syncing the client and server to the same ${APP_NAME} version.`,
     });
   });
 
@@ -74,7 +75,7 @@ describe("versionSkew", () => {
     const mismatch = resolveVersionMismatch("9.9.9");
 
     expect(appendVersionMismatchHint("Socket closed.", mismatch)).toBe(
-      "Socket closed. Hint: Version mismatch. Try syncing the client and server to the same T3 Code version.",
+      `Socket closed. Hint: Version mismatch. Try syncing the client and server to the same ${APP_NAME} version.`,
     );
   });
 

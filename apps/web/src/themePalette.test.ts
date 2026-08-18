@@ -1,6 +1,41 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
+import {
+  CUSTOM_THEMES_KEY,
+  THEME_APPEARANCE_MODE_KEY,
+  THEME_FOLLOW_SYSTEM_KEY,
+  THEME_HALVES_KEY,
+  THEME_PREFERENCE_KEY,
+} from "./ru-code/theme/appearanceStore"; // ru-code: appearance is server-owned
 
+// ru-code: appearance moved from localStorage to server-stamped globals. Wrap a window
+// stub so the globals derive from (and write back to) the same storage the upstream test
+// already sets up — every case keeps its exact meaning, throw paths included (R4).
+type RuCodeStorageStub = {
+  readonly localStorage: {
+    getItem(key: string): string | null;
+    setItem?(key: string, value: string): void;
+  };
+};
+function ruCodeWindow<T extends RuCodeStorageStub>(base: T) {
+  const store = base.localStorage;
+  const accessor = (key: string) => ({
+    get: () => store.getItem(key) ?? "",
+    set: (value: string) => store.setItem?.(key, value),
+    enumerable: true,
+    configurable: true,
+  });
+  return Object.defineProperties(
+    { ...base },
+    {
+      __RU_THEME_PREFERENCE__: accessor(THEME_PREFERENCE_KEY),
+      __RU_THEME_APPEARANCE_MODE__: accessor(THEME_APPEARANCE_MODE_KEY),
+      __RU_THEME_FOLLOW_SYSTEM__: accessor(THEME_FOLLOW_SYSTEM_KEY),
+      __RU_THEME_HALVES__: accessor(THEME_HALVES_KEY),
+      __RU_CUSTOM_THEMES__: accessor(CUSTOM_THEMES_KEY),
+    },
+  ) as T;
+}
 import {
   applyThemeColorPreview,
   applyThemePalette,
@@ -514,15 +549,18 @@ describe("theme files", () => {
       },
     ]);
     let storageHandler: ((event: StorageEvent) => void) | undefined;
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
-        if (type === "storage") storageHandler = listener;
-      },
-      removeEventListener: vi.fn(),
-      localStorage: {
-        getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
+          if (type === "storage") storageHandler = listener;
+        },
+        removeEventListener: vi.fn(),
+        localStorage: {
+          getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     expect(getCustomThemes()).toHaveLength(1);
@@ -540,29 +578,35 @@ describe("theme files", () => {
   });
 
   it("preserves valid imported-theme collections and drops malformed metadata", () => {
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) =>
-          key === CUSTOM_THEMES_STORAGE_KEY
-            ? JSON.stringify([
-                {
-                  id: "github-dark",
-                  label: "GitHub Dark",
-                  appearance: "dark",
-                  colors: { canvas: "#0d1117" },
-                  collection: { id: "open-vsx:github.github-vscode-theme", label: "GitHub Theme" },
-                },
-                {
-                  id: "github-light",
-                  label: "GitHub Light",
-                  appearance: "light",
-                  colors: { canvas: "#ffffff" },
-                  collection: { id: "bad collection id", label: "GitHub Theme" },
-                },
-              ])
-            : null,
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) =>
+            key === CUSTOM_THEMES_STORAGE_KEY
+              ? JSON.stringify([
+                  {
+                    id: "github-dark",
+                    label: "GitHub Dark",
+                    appearance: "dark",
+                    colors: { canvas: "#0d1117" },
+                    collection: {
+                      id: "open-vsx:github.github-vscode-theme",
+                      label: "GitHub Theme",
+                    },
+                  },
+                  {
+                    id: "github-light",
+                    label: "GitHub Light",
+                    appearance: "light",
+                    colors: { canvas: "#ffffff" },
+                    collection: { id: "bad collection id", label: "GitHub Theme" },
+                  },
+                ])
+              : null,
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     expect(getCustomThemes()).toMatchObject([
@@ -607,12 +651,15 @@ describe("theme files", () => {
       ],
     ]);
     const setItem = vi.fn((key: string, value: string) => stored.set(key, value));
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) => stored.get(key) ?? null,
-        setItem,
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) => stored.get(key) ?? null,
+          setItem,
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     const expectedCollection = getStoredCustomThemeCollection(collection.id);
@@ -685,12 +732,15 @@ describe("theme files", () => {
         ]),
       ],
     ]);
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) => stored.get(key) ?? null,
-        setItem: (key: string, value: string) => stored.set(key, value),
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) => stored.get(key) ?? null,
+          setItem: (key: string, value: string) => stored.set(key, value),
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     const replacement = {
@@ -721,12 +771,16 @@ describe("theme files", () => {
       futureMetadata: { version: 2 },
     };
     stored.set(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify([untouchedTheme]));
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) => stored.get(key) ?? null,
-        setItem: (key: string, value: string) => stored.set(key, value),
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        // ru-code
+        localStorage: {
+          getItem: (key: string) => stored.get(key) ?? null,
+          setItem: (key: string, value: string) => stored.set(key, value),
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     const createdTheme = installCustomTheme(
@@ -803,12 +857,15 @@ describe("theme files", () => {
       ],
     ]);
     const setItem = vi.fn((key: string, value: string) => stored.set(key, value));
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) => stored.get(key) ?? null,
-        setItem,
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) => stored.get(key) ?? null,
+          setItem,
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     removeCustomThemes(["demo-light", "demo-dark"]);
@@ -834,16 +891,19 @@ describe("theme files", () => {
     const setItem = vi.fn((_key: string, value: string) => {
       storedThemes = value;
     });
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: () => {
-          readCount += 1;
-          if (readCount > 1) throw new Error("transient read failure");
-          return storedThemes;
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: () => {
+            readCount += 1;
+            if (readCount > 1) throw new Error("transient read failure");
+            return storedThemes;
+          },
+          setItem,
         },
-        setItem,
-      },
-    });
+      }),
+    );
 
     invalidateCustomThemes();
     expect(getCustomThemes()).toHaveLength(1);
@@ -867,14 +927,17 @@ describe("theme files", () => {
 
   it("refuses to overwrite a theme library that could not be read", () => {
     const setItem = vi.fn();
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: () => {
-          throw new Error("storage unavailable");
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: () => {
+            throw new Error("storage unavailable");
+          },
+          setItem,
         },
-        setItem,
-      },
-    });
+      }),
+    );
 
     invalidateCustomThemes();
     expect(getCustomThemes()).toEqual([]);
@@ -898,12 +961,15 @@ describe("theme files", () => {
   it("rejects malformed stored entries that reuse an installed theme id", () => {
     const storedThemes = JSON.stringify([{ id: "aurora", malformed: true }]);
     const setItem = vi.fn();
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: () => storedThemes,
-        setItem,
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: () => storedThemes,
+          setItem,
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     expect(() =>
@@ -936,12 +1002,15 @@ describe("theme files", () => {
       CUSTOM_THEMES_STORAGE_KEY,
       JSON.stringify([theme, { id: "aurora", malformed: true }, untouchedTheme]),
     );
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) => stored.get(key) ?? null,
-        setItem: (key: string, value: string) => stored.set(key, value),
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) => stored.get(key) ?? null,
+          setItem: (key: string, value: string) => stored.set(key, value),
+        },
+      }),
+    );
 
     invalidateCustomThemes();
     const installedTheme = getCustomThemes()[0]!;
@@ -977,12 +1046,15 @@ describe("stored theme preferences", () => {
       appearance: "light",
       colors: { canvas: "#f8fbff" },
     });
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) =>
-          key === CUSTOM_THEMES_STORAGE_KEY ? JSON.stringify([lightOnly]) : null,
-      },
-    });
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) =>
+            key === CUSTOM_THEMES_STORAGE_KEY ? JSON.stringify([lightOnly]) : null,
+        },
+      }),
+    );
     invalidateCustomThemes();
     try {
       expect(resolveThemeAppearance("paper", true, true)).toBe("light");
@@ -1045,12 +1117,16 @@ describe("stored theme preferences", () => {
       { id: "aurora", label: "Duplicate", appearance: "dark", colors: {} },
     ]);
     const setItem = vi.fn();
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
-        setItem,
-      },
-    });
+    // ru-code: re-derived — wrap t3's replacement test in ruCodeWindow
+    vi.stubGlobal(
+      "window",
+      ruCodeWindow({
+        localStorage: {
+          getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
+          setItem,
+        },
+      }),
+    );
     invalidateCustomThemes();
 
     const themes = getCustomThemes();

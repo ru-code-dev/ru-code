@@ -25,6 +25,7 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { setLocale } from "@ru-code/localization"; // ru-code: keep server-side L() in sync with the UI language
+import { appearanceFromSettings, setBootstrapAppearance } from "./ru-code/clientBootstrapState.ts"; // ru-code: keep the HTML theme seed in sync
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -557,7 +558,12 @@ const make = Effect.gen(function* () {
     const startup = Effect.gen(function* () {
       yield* startWatcher;
       yield* Cache.invalidate(settingsCache, cacheKey);
-      yield* getSettingsFromCache;
+      const settings = yield* getSettingsFromCache;
+      // ru-code: seed the HTML appearance holder BEFORE the server starts serving, so the
+      // first index.html (incl. after a reinstall / on a fresh port) injects the persisted
+      // theme/palette and there is no flash. The getSettings tap that normally syncs the
+      // holder is not on this startup path (getSettingsFromCache is the un-tapped read).
+      yield* Effect.sync(() => setBootstrapAppearance(appearanceFromSettings(settings)));
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -573,8 +579,14 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
-      // ru-code: keep the server-side localization module in sync with the stored language.
-      Effect.tap((settings) => Effect.sync(() => setLocale(settings.locale))),
+      // ru-code: keep the server-side localization module + HTML appearance seed in sync
+      // with the stored language/theme (see http.ts inject* + apps/server/.../clientBootstrapState).
+      Effect.tap((settings) =>
+        Effect.sync(() => {
+          setLocale(settings.locale);
+          setBootstrapAppearance(appearanceFromSettings(settings));
+        }),
+      ),
       Effect.flatMap(materializeProviderEnvironmentSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
@@ -587,7 +599,10 @@ const make = Effect.gen(function* () {
             applyServerSettingsPatch(current, patch),
           );
           const next = yield* normalizeServerSettings(nextPersisted);
-          yield* Effect.sync(() => setLocale(next.locale)); // ru-code: sync language on change
+          yield* Effect.sync(() => {
+            setLocale(next.locale); // ru-code: sync language on change
+            setBootstrapAppearance(appearanceFromSettings(next)); // ru-code: sync theme/palette seed
+          });
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);

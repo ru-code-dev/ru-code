@@ -1,0 +1,20 @@
+{
+  "name": "@ru-code/theme",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./vite": {
+      "types": "./src/vite.ts",
+      "import": "./src/vite.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@ru-code/branding": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "catalog:"
+  }
+}

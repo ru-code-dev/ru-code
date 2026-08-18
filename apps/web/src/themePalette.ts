@@ -15,6 +15,21 @@ import {
   type ThemeDefinition,
   type ThemeVariants,
 } from "@t3tools/shared/themePalettes";
+// ru-code[HEAVY]: appearance storage backend swap. Every `window.localStorage` call in
+// this file's theme accessors is redirected to `appearanceStorage` (ru-code/theme/appearanceStore),
+// which resolves the server-stamped globals instead. WHY: localStorage is scoped to
+// host+PORT and the server takes a fresh port on most launches, so appearance silently
+// reset. t3's logic, error handling and control flow are UNCHANGED — only the store moves.
+// Reversible: substitute `window.localStorage` back for `appearanceStorage`.
+// Hotspot — every `appearanceStorage.` line below is a seam. See the seam map:
+// SPECS/features/appearance-locale-seam-map.md
+import {
+  appearanceStorage,
+  CUSTOM_THEMES_KEY,
+  THEME_APPEARANCE_MODE_KEY,
+  THEME_FOLLOW_SYSTEM_KEY,
+  THEME_HALVES_KEY,
+} from "./ru-code/theme/appearanceStore"; // ru-code: appearance is server-owned
 
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
@@ -30,10 +45,10 @@ export const EMBER_THEME_LABEL = "Ember";
 export const IRIS_THEME_ID = "iris" as const;
 export const IRIS_THEME_LABEL = "Iris";
 export const THEME_FILE_VERSION = 1 as const;
-export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
-export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
-export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
-export const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
+export const CUSTOM_THEMES_STORAGE_KEY = CUSTOM_THEMES_KEY; // ru-code: server-owned
+export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = THEME_FOLLOW_SYSTEM_KEY; // ru-code
+export const THEME_APPEARANCE_MODE_STORAGE_KEY = THEME_APPEARANCE_MODE_KEY; // ru-code
+export const THEME_HALVES_STORAGE_KEY = THEME_HALVES_KEY; // ru-code
 
 const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
@@ -206,7 +221,7 @@ function readCustomThemeLibrarySnapshot(): CustomThemeLibrarySnapshot {
 
   let raw: string | null;
   try {
-    raw = window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY);
+    raw = appearanceStorage.getItem(CUSTOM_THEMES_STORAGE_KEY); // ru-code[HEAVY]
   } catch (cause) {
     return { status: "unavailable", reason: "storage-unavailable", cause };
   }
@@ -1490,7 +1505,7 @@ function saveCustomThemes(
 ): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(storedThemes));
+    appearanceStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(storedThemes)); // ru-code[HEAVY]
     customThemeLibrarySnapshot = { status: "ready", storedThemes, themes };
   } catch (cause) {
     throw new ThemeLibraryStorageError({

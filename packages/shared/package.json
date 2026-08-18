@@ -235,6 +235,7 @@
   "dependencies": {
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
+    "@ru-code/branding": "workspace:*",
     "@ru-code/localization": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:",

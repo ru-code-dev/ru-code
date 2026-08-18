@@ -25,6 +25,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@ru-code/branding": "workspace:*",
     "@ru-code/localization": "workspace:*",
     "effect": "catalog:"
   },

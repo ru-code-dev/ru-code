@@ -1,3 +1,4 @@
+import { APP_NAME } from "@ru-code/branding";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
@@ -486,7 +487,7 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Server URL",
-        description: "Leave blank to let T3 Code spawn the server when needed.",
+        description: `Leave blank to let ${APP_NAME} spawn the server when needed.`,
         providerSettingsForm: {
           placeholder: "http://127.0.0.1:4096",
           clearWhenEmpty: "omit",
@@ -585,6 +586,26 @@ export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 export const ServerSettings = Schema.Struct({
   // ru-code: UI language (default Russian).
   locale: Locale.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_LOCALE))),
+  // ru-code: appearance — server-owned so it is correct on any origin. localStorage is
+  // scoped to host+PORT and the server takes a fresh port on most launches, so a
+  // client-stored theme silently resets. These mirror t3's five appearance keys 1:1;
+  // t3's theme engine is untouched, only its storage backend moves here.
+  // Stamped into the served HTML for a synchronous, flicker-free first paint.
+  //
+  // t3 `t3code:theme` — the selected theme id (built-in or custom), an arbitrary string:
+  themePreference: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // t3 `t3code:theme-appearance-mode`:
+  themeAppearanceMode: Schema.Literals(["light", "dark", "system"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("system" as const)),
+  ),
+  // t3 `t3code:theme-follow-system`:
+  themeFollowSystem: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // t3 `t3code:theme-halves:v1` — raw JSON ({light?,dark?}); kept opaque so t3's
+  // parseThemeHalves stays the single validator and contracts never drift from it:
+  themeHalves: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // t3 `t3code:themes:v1` — raw JSON array of user-authored/imported ThemeDefinitions,
+  // opaque for the same reason (t3's parseStoredTheme validates):
+  customThemes: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
   // including prior opt-ins, resets to the buffered default.
@@ -766,6 +787,11 @@ const OpenCodeSettingsPatch = Schema.Struct({
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   locale: Schema.optionalKey(Locale), // ru-code
+  themePreference: Schema.optionalKey(TrimmedString), // ru-code
+  themeAppearanceMode: Schema.optionalKey(Schema.Literals(["light", "dark", "system"])), // ru-code
+  themeFollowSystem: Schema.optionalKey(Schema.Boolean), // ru-code
+  themeHalves: Schema.optionalKey(TrimmedString), // ru-code
+  customThemes: Schema.optionalKey(TrimmedString), // ru-code
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),

@@ -55,8 +55,11 @@ ru-code/localization/MISSING.md
 # ru-code
 .claude/
 SPECS/
+WORKFLOW/
 pnpm-lock.yaml
 .repos/
+apps/web/src/routeTree.gen.ts
+apps/desktop/src/preview/AnnotationStyles.generated.ts
 # release artifacts (produced by `pnpm prepare-release`; the installer consumes them)
 /dist-bundle/
 /preflight.mjs

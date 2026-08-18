@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildThreadFeed, type ThreadFeedActivity } from "../../mobile/src/lib/threadActivity.ts";
+// ru-code: mobile import removed — apps/mobile deleted (patch 02 strip)
 import { deriveLatestContextWindowSnapshot } from "../../web/src/lib/contextWindow.ts";
 import { deriveWorkLogEntries } from "../../web/src/session-logic.ts";
 import {
@@ -135,26 +135,7 @@ const fixtures = [
 ] satisfies ReadonlyArray<OrchestrationThreadActivity>;
 
 describe("projectActivityPayload", () => {
-  function comparableActivity(activity: ThreadFeedActivity) {
-    return {
-      ...activity,
-      fullDetail: activity.getFullDetail(),
-      copyText: activity.getCopyText(),
-      getFullDetail: undefined,
-      getCopyText: undefined,
-    };
-  }
-
-  function comparableThreadFeed(activities: ReadonlyArray<OrchestrationThreadActivity>) {
-    return buildThreadFeed(makeThread(activities)).map((entry) =>
-      entry.type === "activity-group"
-        ? {
-            ...entry,
-            activities: entry.activities.map(comparableActivity),
-          }
-        : entry,
-    );
-  }
+  // ru-code: comparableActivity + comparableThreadFeed removed — only served the mobile parity assertion below
 
   it("drops unread bulk while retaining command, file, tool, and summary inputs", () => {
     const projected = projectActivityPayload(fixtures[0]!);
@@ -216,7 +197,7 @@ describe("projectActivityPayload", () => {
         continue;
       }
       expect(deriveWorkLogEntries([projected])).toEqual(deriveWorkLogEntries([activity]));
-      expect(comparableThreadFeed([projected])).toEqual(comparableThreadFeed([activity]));
+      // ru-code: mobile parity assertion removed (comparableThreadFeed — apps/mobile deleted)
     }
   });
 

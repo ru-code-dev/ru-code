@@ -30,6 +30,11 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  // ru-code: when true, the reactor applies a runtime-mode change LIVE (the adapter
+  // re-sends setMode on the next turn) instead of respawning the session. Optional and
+  // default-false, so every adapter that does not set it keeps respawning on a mode
+  // change exactly as before — non-qwen behavior is byte-identical.
+  readonly supportsInSessionRuntimeMode?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -69,6 +74,14 @@ export interface ProviderAdapterShape<TError> {
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
 
   /**
+   * ru-code: run a hidden context compaction on the thread's live session (no
+   * user message; the adapter reports the result via runtime events). Optional
+   * — only providers with an in-session compaction affordance (qwen's
+   * `/compress`) implement it; ProviderService fails the call for the rest.
+   */
+  readonly compactContext?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
    * Respond to an interactive approval request.
    */
   readonly respondToRequest: (
@@ -100,6 +113,15 @@ export interface ProviderAdapterShape<TError> {
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
+   * ru-code: whether this adapter is currently holding a parked permission /
+   * plan / user-input Deferred for the thread. The orchestration command
+   * reactor checks this to auto-interrupt a parked session before starting a
+   * new turn (the send-while-parked deadlock guard). Optional: adapters that
+   * never park requests omit it and the caller treats absence as `false`.
+   */
+  readonly hasParkedRequests?: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
    * Read a provider thread snapshot.

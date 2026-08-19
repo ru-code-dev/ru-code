@@ -3,6 +3,9 @@ import { type ProviderDriverKind } from "@t3tools/contracts";
 
 import { PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 import { cn } from "~/lib/utils";
+// ru-code: brand-profile mark (custom fork / stock qwen), resolved from our one icon place.
+import { type CliProfileId } from "@ru-code/branding";
+import { iconForProfile } from "~/ru-code/cliProfiles/icons";
 
 export function providerInstanceInitials(label: string): string {
   const words = label.replace(/[_-]+/g, " ").split(/\s+/u).filter(Boolean);
@@ -16,6 +19,8 @@ export function providerInstanceInitials(label: string): string {
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
+  // ru-code: when set, render the brand-profile mark instead of the kind mark.
+  profile?: CliProfileId | undefined;
   displayName: string;
   accentColor?: string | undefined;
   showBadge?: boolean;
@@ -26,7 +31,10 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   statusDotClassName?: string;
   indicatorBackground?: string;
 }) {
-  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  // ru-code: brand-profile mark wins when provided; else the per-kind mark.
+  const Icon = props.profile
+    ? iconForProfile(props.profile)
+    : (PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null);
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentStyle = props.accentColor
     ? ({ "--provider-accent": props.accentColor } as CSSProperties)

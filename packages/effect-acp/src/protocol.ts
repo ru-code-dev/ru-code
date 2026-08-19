@@ -16,6 +16,9 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import { CLIENT_METHODS } from "./_generated/meta.gen.ts";
 import * as AcpError from "./errors.ts";
+// ru-code: coerce qwen's plain JSON-RPC error `Die`s into typed `Fail`s so the
+// recognizer registry keeps working (see the helper for the full rationale).
+import { coerceProtocolErrorDefects } from "./ru-code/protocol/coerceProtocolErrorDefects.ts";
 const isAcpError = Schema.is(AcpError.AcpError);
 
 export interface AcpProtocolLogEvent {
@@ -344,7 +347,10 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       Effect.flatMap((pending) => {
         const pendingRequest = pending.get(String(message.requestId));
         if (!pendingRequest) {
-          return Queue.offer(clientQueue, message).pipe(Effect.asVoid);
+          // ru-code: rewrite any protocol-shaped `Die` into a `Fail` before the
+          // RpcClient decodes it, so qwen's core-method errors keep their code/data
+          // and reach the classifier as typed AcpRequestErrors, not opaque defects.
+          return Queue.offer(clientQueue, coerceProtocolErrorDefects(message)).pipe(Effect.asVoid);
         }
         if (message.exit._tag === "Success") {
           return completeExtPendingSuccess(message.requestId, message.exit.value);

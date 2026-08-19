@@ -9,8 +9,10 @@ import {
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 
-const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
+// ru-code: default normalization kind derived from the single-source default-provider id (no codex).
+const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID);
 
 export interface SelectableModelOption {
   slug: string;

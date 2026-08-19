@@ -11,17 +11,27 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   pendingCount,
 }: ComposerPendingApprovalPanelProps) {
   const approvalSummary =
-    approval.requestKind === "command"
-      ? "Command approval requested"
-      : approval.requestKind === "file-read"
-        ? "File-read approval requested"
-        : "File-change approval requested";
+    // ru-code: qwen exit_plan_mode held approval — no command/file requestKind.
+    approval.requestType === "plan_approval"
+      ? "Plan ready to implement"
+      : approval.requestKind === "command"
+        ? "Command approval requested"
+        : approval.requestKind === "file-read"
+          ? "File-read approval requested"
+          : approval.requestKind === "file-change"
+            ? "File-change approval requested"
+            : // ru-code: generic fallback for any "other" forward-compat kind.
+              "Action approval requested";
   const detailLabel =
-    approval.requestKind === "command"
-      ? "Command"
-      : approval.requestKind === "file-read"
-        ? "File to read"
-        : "File change";
+    approval.requestType === "plan_approval"
+      ? "Plan"
+      : approval.requestKind === "command"
+        ? "Command"
+        : approval.requestKind === "file-read"
+          ? "File to read"
+          : approval.requestKind === "file-change"
+            ? "File change"
+            : "Details";
 
   return (
     <div className="min-w-0 px-4 py-3.5 sm:px-5 sm:py-4">

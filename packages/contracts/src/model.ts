@@ -1,3 +1,4 @@
+import { QWEN_KIND } from "@ru-code/branding";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -132,6 +133,8 @@ const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+// ru-code: derived from branding so the "qwen" kind-id literal exists exactly once.
+const QWEN_DRIVER_KIND = ProviderDriverKind.make(QWEN_KIND);
 
 export const DEFAULT_MODEL = "gpt-5.6-sol";
 
@@ -153,6 +156,8 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CURSOR_DRIVER_KIND]: "auto",
   [GROK_DRIVER_KIND]: "grok-build",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  // ru-code: no qwen entry — a hardcoded slug goes stale; the qwen resolver
+  // falls back to the instance's first served model instead.
 };
 
 /** Per-provider text generation model defaults. */
@@ -163,6 +168,7 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  // ru-code: no qwen entry — see DEFAULT_MODEL_BY_PROVIDER.
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
@@ -222,4 +228,5 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [CURSOR_DRIVER_KIND]: "Cursor",
   [GROK_DRIVER_KIND]: "Grok",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
+  [QWEN_DRIVER_KIND]: "Qwen", // ru-code
 };

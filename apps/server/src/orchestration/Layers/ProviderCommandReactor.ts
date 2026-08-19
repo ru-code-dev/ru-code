@@ -21,7 +21,9 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
@@ -57,6 +59,7 @@ type ProviderIntentEvent = Extract<
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.context-compact-requested" // ru-code
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
@@ -227,8 +230,11 @@ export function providerErrorLabelFromInstanceHint(input: {
   );
 }
 
+// ru-code: widened Cause<ProviderServiceError> → Cause<unknown> so the classified
+// start-failure path can reuse this finder with its differently-typed cause. The two
+// legacy callers still pass ProviderServiceError causes (assignable to unknown).
 function findProviderAdapterRequestError(
-  cause: Cause.Cause<ProviderServiceError>,
+  cause: Cause.Cause<unknown>,
 ): ProviderAdapterRequestError | undefined {
   const failReason = cause.reasons.find(Cause.isFailReason);
   return isProviderAdapterRequestError(failReason?.error) ? failReason.error : undefined;
@@ -299,6 +305,9 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 }
 
 const make = Effect.gen(function* () {
+  // ru-code: the start() scope — long-running compressions fork into it so
+  // they outlive a single worker step but still die with the reactor.
+  const compactForkScopeRef = yield* Ref.make(Option.none<Scope.Scope>());
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -331,6 +340,7 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.context.compact.failed" // ru-code
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -654,8 +664,13 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
-      const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
-        .sessionModelSwitch;
+      const capabilities = yield* providerService.getCapabilities(desiredInstanceId);
+      const sessionModelSwitch = capabilities.sessionModelSwitch;
+      // ru-code: a capable adapter (qwen) applies runtime-mode changes live via per-turn
+      // setMode, so it must NOT respawn on a mode change. Every other adapter leaves the
+      // flag unset ⇒ shouldRestartForRuntimeMode === runtimeModeChanged ⇒ respawns as before.
+      const shouldRestartForRuntimeMode =
+        runtimeModeChanged && capabilities.supportsInSessionRuntimeMode !== true;
       const modelChanged =
         requestedModelSelection !== undefined &&
         requestedModelSelection.model !== activeSession?.model;
@@ -670,7 +685,7 @@ const make = Effect.gen(function* () {
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
       if (
-        !runtimeModeChanged &&
+        !shouldRestartForRuntimeMode &&
         !cwdChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
@@ -778,6 +793,9 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      // ru-code: forward the thread's live runtime mode so a capable adapter (qwen)
+      // applies it via setMode this turn without a respawn; other adapters ignore it.
+      runtimeMode: thread.runtimeMode,
     };
   });
 
@@ -1083,6 +1101,32 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // ru-code: send-while-parked guard. If the active session is holding a
+    // permission/plan/user-input Deferred (e.g. a plan approval still parked
+    // from a previous turn the user navigated away from), starting a new turn
+    // now would deadlock against qwen's in-flight prompt() RPC. Interrupt first
+    // so the held Deferred settles, the previous turn ends, and the new turn
+    // starts on a clean session.
+    const isParked = yield* providerService
+      .hasParkedRequests(event.payload.threadId)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (isParked) {
+      yield* Effect.logDebug(
+        "provider command reactor auto-interrupting parked session before turn start",
+        { threadId: event.payload.threadId, messageId: event.payload.messageId },
+      );
+      yield* providerService
+        .interruptTurn({ threadId: event.payload.threadId })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError(
+              "provider command reactor auto-interrupt before turn-start failed; proceeding anyway",
+              { threadId: event.payload.threadId, cause: Cause.pretty(cause) },
+            ),
+          ),
+        );
+    }
+
     const isFirstUserMessageTurn =
       thread.messages.filter((entry) => entry.role === "user").length === 1;
     if (isFirstUserMessageTurn) {
@@ -1119,6 +1163,14 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }
       const detail = formatFailureDetail(cause);
+      // ru-code: when the start-failure is a classified provider error (e.g. a qwen
+      // session-start/B3 spawn failure remapped to `ProviderAdapterRequestError` by
+      // the adapter), use its classified detail as the timeline row summary too —
+      // not the generic "Provider turn start failed". Falls back to the generic
+      // summary for the `Cause.pretty` case (no provider detail), so non-qwen /
+      // unclassified failures are unaffected.
+      const classifiedSummary =
+        findProviderAdapterRequestError(cause)?.detail ?? "Provider turn start failed";
       return setThreadSessionErrorOnTurnStartFailure({
         threadId: event.payload.threadId,
         detail,
@@ -1128,7 +1180,7 @@ const make = Effect.gen(function* () {
           appendProviderFailureActivity({
             threadId: event.payload.threadId,
             kind: "provider.turn.start.failed",
-            summary: "Provider turn start failed",
+            summary: classifiedSummary,
             detail,
             turnId: null,
             createdAt: event.payload.createdAt,
@@ -1194,6 +1246,62 @@ const make = Effect.gen(function* () {
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
     yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+  });
+
+  // ru-code: hidden context compaction — run `/compress` on the live provider
+  // session with no user message. The adapter is the single writer of the
+  // success surfaces (timeline "Context compacted" row + token-usage update); this
+  // reactor owns the failure surface (a timeline failure row), mirroring the
+  // interrupt handler above.
+  const processContextCompactRequested = Effect.fn("processContextCompactRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.context-compact-requested" }>,
+  ) {
+    const threadExists = yield* resolveThread(event.payload.threadId);
+    if (!threadExists) {
+      return;
+    }
+    // ru-code: no live-session pre-check here (unlike the interrupt handler
+    // above — interrupting nothing is meaningless, compacting a RESUMABLE
+    // thread is not). A confirmed compression retires the session on purpose
+    // (stale-chat fix; see QwenAdapter.compactContext), so compact must work
+    // on a stopped-but-resumable thread: ProviderService.compactContext routes
+    // with allowRecovery and resumes via session/load exactly like a turn
+    // would. A thread with genuinely nothing to recover (no persisted cursor)
+    // fails there with a typed error, which the catchCause below turns into
+    // the same timeline failure row this guard used to emit.
+
+    // ru-code: a compression can run for minutes — awaiting it here would
+    // stall the reactor's single sequential worker: every later intent parks
+    // behind it (the send that must hit the adapter's "Compacting…"
+    // fail-fast, other threads' approvals and turn starts). The adapter owns
+    // re-entrancy, the fail-fast guard and the row closure (incl. interrupt
+    // via onExit), so the reactor only LAUNCHES the compression; the fiber
+    // lives in the start() scope, so reactor teardown still interrupts it
+    // (→ the closing "Compaction interrupted." row).
+    const runCompaction = providerService.compactContext({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return yield* Effect.failCause(cause);
+          }
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.context.compact.failed",
+            summary: "Could not compact the context",
+            detail: formatFailureDetail(cause),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          });
+        }),
+      ),
+    );
+    const compactForkScope = yield* Ref.get(compactForkScopeRef);
+    if (Option.isSome(compactForkScope)) {
+      yield* runCompaction.pipe(Effect.forkIn(compactForkScope.value));
+      return;
+    }
+    // No start() scope (handlers driven directly in unit tests) — run inline.
+    yield* runCompaction;
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1349,6 +1457,10 @@ const make = Effect.gen(function* () {
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
         return;
+      // ru-code: hidden context compaction.
+      case "thread.context-compact-requested":
+        yield* processContextCompactRequested(event);
+        return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
         return;
@@ -1377,6 +1489,10 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
+    // ru-code: remember the start scope for the forked compaction handler.
+    yield* Effect.scope.pipe(
+      Effect.flatMap((scope) => Ref.set(compactForkScopeRef, Option.some(scope))),
+    );
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1394,6 +1510,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.context-compact-requested" || // ru-code
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested"

@@ -16,6 +16,9 @@
 // under the web package's DOM config without lib conflicts. It has NO imports;
 // keep it import-free so the plugin can emit it as one self-contained file.
 
+// The empty export keeps this import-free file a MODULE (its declarations must
+// stay file-local, not global) — required, so the lint rule is waived here.
+// oxlint-disable-next-line require-module-specifiers
 export {};
 
 /** The subset of `ServiceWorkerGlobalScope` this worker actually uses. */

@@ -31,6 +31,9 @@ import {
   type VcsStatusInput,
   type VcsStatusResult,
 } from "@t3tools/contracts";
+// ru-code: fork seam helpers (raw UTF-8 git paths; Windows reserved-name excludes).
+import { withRawUtf8Paths } from "../ru-code/vcs/rawUtf8Paths.ts";
+import { windowsReservedExcludes } from "../ru-code/vcs/reservedNames.ts";
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -429,7 +432,9 @@ const gitCommand = (
   process.run({
     operation,
     command: "git",
-    args: ["-C", cwd, ...args],
+    // ru-code: raw UTF-8 pathnames in ALL git output (non-ASCII names were
+    // octal-escaped and leaked into every parser/UI) — see rawUtf8Paths.ts.
+    args: ["-C", cwd, ...withRawUtf8Paths(args)],
     cwd,
     spawnCwd: globalThis.process.cwd(),
     ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
@@ -735,7 +740,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          // ru-code: a stray Windows reserved-name file (`nul`, ...) aborts the
+          // whole add and kills the checkpoint snapshot — see reservedNames.ts.
+          args: ["add", "-A", "--", ".", ...(yield* windowsReservedExcludes)],
           env: commitEnv,
         });
 

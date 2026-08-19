@@ -11,6 +11,10 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
+// ru-code: gate the additive union off for authoritative (qwen) snapshots so a
+// deleted / old-profile model persisted in a prior cache file cannot resurrect
+// on boot. See ru-code/qwen/modelsAuthoritative.ts.
+import { isModelsAuthoritative } from "../ru-code/qwen/modelsAuthoritative.ts";
 
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerProviderSchema),
@@ -19,7 +23,14 @@ const decodeProviderStatusCache = Schema.decodeUnknownEffect(
 const mergeProviderModels = (
   fallbackModels: ReadonlyArray<ServerProvider["models"][number]>,
   cachedModels: ReadonlyArray<ServerProvider["models"][number]>,
+  // ru-code: qwen — the freshly-built fallback IS the current model set; drop the
+  // cached models entirely so ghosts persisted before a removal / profile change
+  // never come back at boot.
+  modelsAuthoritative = false,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
+  if (modelsAuthoritative) {
+    return fallbackModels;
+  }
   const fallbackSlugs = new Set(fallbackModels.map((model) => model.slug));
   return [...fallbackModels, ...cachedModels.filter((model) => !fallbackSlugs.has(model.slug))];
 };
@@ -59,7 +70,12 @@ export const hydrateCachedProvider = (input: {
   const { message: _fallbackMessage, ...fallbackWithoutMessage } = input.fallbackProvider;
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
-    models: mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models),
+    // ru-code: authoritative (qwen) → fallback wins outright, no cached carry-over.
+    models: mergeProviderModels(
+      input.fallbackProvider.models,
+      input.cachedProvider.models,
+      isModelsAuthoritative(input.fallbackProvider.driver),
+    ),
     installed: input.cachedProvider.installed,
     version: input.cachedProvider.version,
     status: input.cachedProvider.status,

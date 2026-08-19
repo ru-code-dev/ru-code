@@ -20,11 +20,15 @@
  *
  * @module provider/builtInDrivers
  */
-import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
-import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
-import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
+// ru-code: temporarily limited to qwen + opencode. To restore a driver,
+// uncomment its import, its `BuiltInDriversEnv` member, and its
+// `BUILT_IN_DRIVERS` entry below.
+// import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
+// import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
+// import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
+// import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver.ts";
+import { QwenDriver, type QwenDriverEnv } from "../ru-code/qwen/QwenDriver.ts"; // ru-code
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
 /**
@@ -33,11 +37,12 @@ import type { AnyProviderDriver } from "./ProviderDriver.ts";
  * layer must provide every service in this union.
  */
 export type BuiltInDriversEnv =
-  | ClaudeDriverEnv
-  | CodexDriverEnv
-  | CursorDriverEnv
-  | GrokDriverEnv
-  | OpenCodeDriverEnv;
+  // ru-code: temporarily limited to qwen + opencode.
+  // | ClaudeDriverEnv
+  // | CodexDriverEnv
+  // | CursorDriverEnv
+  // | GrokDriverEnv
+  OpenCodeDriverEnv | QwenDriverEnv; // ru-code
 
 /**
  * Ordered list of built-in drivers. Order matters only for tie-breaking in
@@ -45,9 +50,11 @@ export type BuiltInDriversEnv =
  * iteration order has no functional effect on instance lookup.
  */
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
-  CodexDriver,
-  ClaudeDriver,
-  CursorDriver,
-  GrokDriver,
+  // ru-code: temporarily limited to qwen + opencode.
+  // CodexDriver,
+  // ClaudeDriver,
+  // CursorDriver,
+  // GrokDriver,
   OpenCodeDriver,
+  QwenDriver, // ru-code
 ];

@@ -16,6 +16,8 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+// ru-code: fork seam helper (registered project roots are trusted diff cwds).
+import { makeIsCwdWithinRegisteredProjectRoot } from "../ru-code/review/registeredProjectRoots.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -62,6 +64,15 @@ export const make = Effect.gen(function* () {
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
   };
 
+  // ru-code: fork projects may live anywhere on disk; a cwd inside a
+  // REGISTERED project root is as trusted as the workspace root (see
+  // ru-code/review/registeredProjectRoots.ts — optional dependency, fails
+  // closed to the port's original behavior).
+  const isCwdWithinRegisteredProjectRoot = yield* makeIsCwdWithinRegisteredProjectRoot({
+    canonicalizePath,
+    isWithinRoot,
+  });
+
   const assertWorkspaceBoundCwd = Effect.fn("ReviewService.assertWorkspaceBoundCwd")(function* (
     operation: "ReviewService.getDiffPreview" | "ReviewService.getDiffFileContents",
     cwd: string,
@@ -73,6 +84,11 @@ export const make = Effect.gen(function* () {
     ]);
 
     if (isWithinRoot(candidate, workspaceRoot) || isWithinRoot(candidate, worktreesRoot)) {
+      return;
+    }
+
+    // ru-code: registered project roots are trusted too (multi-project model).
+    if (yield* isCwdWithinRegisteredProjectRoot(candidate)) {
       return;
     }
 

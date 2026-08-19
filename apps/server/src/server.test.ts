@@ -444,6 +444,9 @@ const buildAppUnderTest = (options?: {
       host: "127.0.0.1",
       cwd: process.cwd(),
       baseDir,
+      cliJs: `${baseDir}/cli.js`, // ru-code
+      cliConfigDir: baseDir, // ru-code
+      cliDetected: true, // ru-code
       ...derivedPaths,
       staticDir: undefined,
       devUrl,

@@ -3,10 +3,13 @@
 // version bump in constants.ts propagates into the "please update" copy).
 import { describe, expect, it } from "vite-plus/test";
 
-import { CLI_DISPLAY_NAME } from "@ru-code/branding";
+import { CLI_PROFILES, DEFAULT_CLI_PROFILE_ID } from "@ru-code/branding";
 
 import { CLI_MIN_VERSION, NODE_ENGINE_RANGE } from "../../preflight/common/constants.ts";
 import { MESSAGES } from "../../preflight/common/messages.ts";
+
+// ru-code: preflight labels the CLI-status lines with the default profile name.
+const CLI_LABEL = CLI_PROFILES[DEFAULT_CLI_PROFILE_ID].name;
 
 describe("MESSAGES", () => {
   it("every entry is a non-empty string", () => {
@@ -27,13 +30,13 @@ describe("MESSAGES", () => {
     expect(MESSAGES.NODE_LOW).toContain(NODE_ENGINE_RANGE);
   });
 
-  it("CLI_LOW embeds the min version and the CLI to update", () => {
+  it("CLI_LOW embeds the min version and the CLI label to update", () => {
     expect(MESSAGES.CLI_LOW).toContain(CLI_MIN_VERSION);
-    expect(MESSAGES.CLI_LOW).toContain(CLI_DISPLAY_NAME);
+    expect(MESSAGES.CLI_LOW).toContain(CLI_LABEL);
   });
 
-  it("CLI_TOO_SLOW references the CLI name", () => {
-    expect(MESSAGES.CLI_TOO_SLOW).toContain(CLI_DISPLAY_NAME);
+  it("CLI_TOO_SLOW references the CLI label", () => {
+    expect(MESSAGES.CLI_TOO_SLOW).toContain(CLI_LABEL);
   });
 
   it("path-probe messages read as prompts for a trailing path list", () => {

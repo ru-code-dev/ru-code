@@ -1,12 +1,14 @@
 import { FolderGit2Icon, FolderGitIcon, FolderIcon, HistoryIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
+import { type EnvMode } from "./BranchToolbar.logic";
+// ru-code: the workspace option + folder-glyph mapping is one pure model (R6).
 import {
-  resolveCurrentWorkspaceLabel,
-  resolveEnvModeLabel,
-  resolveLockedWorkspaceLabel,
-  type EnvMode,
-} from "./BranchToolbar.logic";
+  resolveEnvModeSelectorItems,
+  resolveEnvModeTriggerIcon,
+  resolveLockedEnvMode,
+  type EnvFolderIcon,
+} from "../ru-code/branchToolbar/envModeControls";
 import {
   Select,
   SelectGroup,
@@ -28,6 +30,19 @@ interface BranchToolbarEnvModeSelectorProps {
   onUsePreviousWorktree?: () => void;
 }
 
+// ru-code: named glyph → lucide component, so the pure model stays icon-free.
+const ENV_FOLDER_ICON: Record<EnvFolderIcon, typeof FolderIcon> = {
+  "worktree-new": FolderGit2Icon,
+  "worktree-checkout": FolderGitIcon,
+  local: FolderIcon,
+  history: HistoryIcon,
+};
+
+function EnvFolderGlyph({ icon }: { icon: EnvFolderIcon }) {
+  const Icon = ENV_FOLDER_ICON[icon];
+  return <Icon className="size-3" />;
+}
+
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
   envLocked,
   effectiveEnvMode,
@@ -38,33 +53,24 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
 }: BranchToolbarEnvModeSelectorProps) {
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
   const envModeItems = useMemo(
-    () => [
-      { value: "local", label: resolveCurrentWorkspaceLabel(activeWorktreePath) },
-      { value: "worktree", label: resolveEnvModeLabel("worktree") },
-      ...(showPreviousWorktree && previousWorktreeLabel
-        ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
-        : []),
-    ],
+    () =>
+      resolveEnvModeSelectorItems({
+        activeWorktreePath,
+        showPreviousWorktree,
+        previousWorktreeLabel,
+      }),
     [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree],
   );
 
   if (envLocked) {
+    const locked = resolveLockedEnvMode(activeWorktreePath);
     return (
       <span
         className="inline-flex h-7 shrink-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
         data-composer-context-control
       >
-        {activeWorktreePath ? (
-          <>
-            <FolderGitIcon className="size-3" />
-            {resolveLockedWorkspaceLabel(activeWorktreePath)}
-          </>
-        ) : (
-          <>
-            <FolderIcon className="size-3" />
-            {resolveLockedWorkspaceLabel(activeWorktreePath)}
-          </>
-        )}
+        <EnvFolderGlyph icon={locked.icon} />
+        {locked.label}
       </span>
     );
   }
@@ -89,13 +95,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         aria-label="Workspace"
         data-composer-context-control
       >
-        {effectiveEnvMode === "worktree" ? (
-          <FolderGit2Icon className="size-3" />
-        ) : activeWorktreePath ? (
-          <FolderGitIcon className="size-3" />
-        ) : (
-          <FolderIcon className="size-3" />
-        )}
+        <EnvFolderGlyph icon={resolveEnvModeTriggerIcon(effectiveEnvMode, activeWorktreePath)} />
         <span
           data-composer-label
           className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
@@ -111,30 +111,14 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <SelectPopup>
         <SelectGroup>
           <SelectGroupLabel>Workspace</SelectGroupLabel>
-          <SelectItem value="local">
-            <span className="inline-flex items-center gap-1.5">
-              {activeWorktreePath ? (
-                <FolderGitIcon className="size-3" />
-              ) : (
-                <FolderIcon className="size-3" />
-              )}
-              {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-            </span>
-          </SelectItem>
-          <SelectItem value="worktree">
-            <span className="inline-flex items-center gap-1.5">
-              <FolderGit2Icon className="size-3" />
-              {resolveEnvModeLabel("worktree")}
-            </span>
-          </SelectItem>
-          {showPreviousWorktree && previousWorktreeLabel ? (
-            <SelectItem value={PREVIOUS_WORKTREE_SELECT_VALUE}>
+          {envModeItems.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
               <span className="inline-flex items-center gap-1.5">
-                <HistoryIcon className="size-3" />
-                {previousWorktreeLabel}
+                <EnvFolderGlyph icon={item.icon} />
+                {item.label}
               </span>
             </SelectItem>
-          ) : null}
+          ))}
         </SelectGroup>
       </SelectPopup>
     </Select>

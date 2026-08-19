@@ -263,7 +263,10 @@ describe("resolveProviderDriverKindForInstanceSelection", () => {
     ).toBe("claudeAgent");
   });
 
-  it("does not guess a provider kind when the instance selection is unknown", () => {
+  // ru-code: an unknown/removed instance selection now resolves to the first enabled kind
+  // (safety net from providerInstances.ts §5d), so the composer never falls through to a
+  // hardcoded default kind. It is only `undefined` when nothing is enabled.
+  it("resolves an unknown instance selection to the first enabled kind (safety net)", () => {
     const providers = [
       provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex", enabled: false }),
       provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
@@ -276,7 +279,7 @@ describe("resolveProviderDriverKindForInstanceSelection", () => {
         providers,
         ProviderInstanceId.make("removed_instance"),
       ),
-    ).toBeUndefined();
+    ).toBe("claudeAgent");
   });
 });
 

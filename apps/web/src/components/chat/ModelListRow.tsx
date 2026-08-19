@@ -7,6 +7,10 @@ import {
   type ModelEsque,
   PROVIDER_ICON_BY_PROVIDER,
 } from "./providerIconUtils";
+// ru-code: brand-profile mark (custom fork / stock qwen), resolved from our one icon
+// place — same resolution ProviderInstanceIcon uses, so flat rows match trigger/sidebar.
+import { type CliProfileId } from "@ru-code/branding";
+import { iconForProfile } from "~/ru-code/cliProfiles/icons";
 import { ComboboxItem } from "../ui/combobox";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
@@ -21,6 +25,10 @@ export const ModelListRow = memo(function ModelListRow(props: {
   instanceId: ProviderInstanceId;
   /** Driver kind of the instance — used for the provider icon glyph. */
   driverKind: ProviderDriverKind;
+  // ru-code: brand profile of the instance (qwen only); when set it selects the
+  // profile mark instead of the kind glyph, so a custom-fork model doesn't show
+  // the stock OpenAI icon. Undefined for every non-profile driver → kind glyph.
+  profile?: CliProfileId | undefined;
   /**
    * Display name to show in the secondary line (provider footer). Usually
    * the instance's configured `displayName` so custom instances like
@@ -38,7 +46,10 @@ export const ModelListRow = memo(function ModelListRow(props: {
   disabledReason?: string | null;
   onToggleFavorite: () => void;
 }) {
-  const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  // ru-code: profile mark wins when provided; else the per-kind mark.
+  const ProviderIcon = props.profile
+    ? iconForProfile(props.profile)
+    : (PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null);
   const providerLabel = props.model.subProvider
     ? `${props.providerDisplayName} · ${props.model.subProvider}`
     : props.providerDisplayName;

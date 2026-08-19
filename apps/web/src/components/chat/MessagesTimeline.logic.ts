@@ -387,6 +387,15 @@ function deriveTurnFolds(input: {
     if (group.hasStreamingMessage) {
       continue;
     }
+    // ru-code: the LATEST turn stays open when it contains an error row — the
+    // failure is visible right when it matters; the next message makes a newer
+    // turn the latest and this one folds like any other.
+    if (
+      turnId === input.latestTurn?.turnId &&
+      group.entries.some((entry) => entry.kind === "work" && entry.entry.tone === "error")
+    ) {
+      continue;
+    }
     const hiddenEntryIds = new Set<string>();
     for (const entry of group.entries) {
       if (entry.id === group.terminalEntry?.id) {
@@ -505,6 +514,11 @@ export function deriveMessagesTimelineRows(input: {
 
     if (timelineEntry.kind === "work") {
       const groupedEntries = [timelineEntry.entry];
+      // ru-code: a work run never crosses a turn boundary (turn-less rows such
+      // as a context compaction count as their own boundary) — otherwise the
+      // "+N more" cap counts a foreign turn's rows against an unrelated row and
+      // re-inserts them inside it on expand.
+      const runTurnId = timelineEntry.entry.turnId ?? null;
       let cursor = index + 1;
       while (cursor < input.timelineEntries.length) {
         const nextEntry = input.timelineEntries[cursor];
@@ -512,7 +526,8 @@ export function deriveMessagesTimelineRows(input: {
           !nextEntry ||
           nextEntry.kind !== "work" ||
           collapsedEntryIds.has(nextEntry.id) ||
-          foldsByAnchorEntryId.has(nextEntry.id)
+          foldsByAnchorEntryId.has(nextEntry.id) ||
+          (nextEntry.entry.turnId ?? null) !== runTurnId
         ) {
           break;
         }
@@ -534,31 +549,44 @@ export function deriveMessagesTimelineRows(input: {
           const groupId = `work-group:${timelineEntry.id}`;
           const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
           // Agent-spawn CTA rows are always visible: a running fleet must
-          // never hide behind a "+N tool calls" toggle. Selection is by
-          // membership (spawn OR recent-tail), preserving the group's
+          // never hide behind a "+N tool calls" toggle.
+          // ru-code: an error row of the LATEST turn never hides behind the
+          // "+N more" toggle either — the failure stays visible without a
+          // click while the turn is current; older turns keep the stock cap
+          // behavior. Selection is by membership, preserving the group's
           // chronological order in both collapsed and expanded states
           // (review finding: concatenating two filtered lists moved a
           // mid-group spawn row above earlier tool rows).
-          const overflowCandidates = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn === undefined,
+          const latestTurnId = input.latestTurn?.turnId ?? null;
+          const isExemptFromCap = (entry: WorkLogEntry) =>
+            entry.agentSpawn !== undefined ||
+            (entry.tone === "error" && entry.turnId != null && entry.turnId === latestTurnId);
+          const cappableEntries = visibleGroupedEntries.filter((entry) => !isExemptFromCap(entry));
+          const hiddenEntries = cappableEntries.slice(0, -MAX_VISIBLE_WORK_LOG_ENTRIES);
+          const hiddenEntryIdSet = new Set(hiddenEntries.map((entry) => entry.id));
+          const collapsedVisibleEntries = visibleGroupedEntries.filter(
+            (entry) => !hiddenEntryIdSet.has(entry.id),
           );
-          const hiddenEntries = overflowCandidates.slice(0, -MAX_VISIBLE_WORK_LOG_ENTRIES);
-          const hiddenIds = new Set(hiddenEntries.map((entry) => entry.id));
-          const visibleEntries = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn !== undefined || !hiddenIds.has(entry.id),
-          );
-          const renderedEntries = expanded ? visibleGroupedEntries : visibleEntries;
 
-          for (const workEntry of renderedEntries) {
+          if (hiddenEntries.length === 0) {
             nextRows.push({
               kind: "work",
-              id: workEntry.id,
-              createdAt: workEntry.createdAt,
-              groupedEntries: [workEntry],
+              id: timelineEntry.id,
+              createdAt: timelineEntry.createdAt,
+              groupedEntries: visibleGroupedEntries,
             });
-          }
+          } else {
+            const renderedEntries = expanded ? visibleGroupedEntries : collapsedVisibleEntries;
 
-          if (hiddenEntries.length > 0) {
+            for (const workEntry of renderedEntries) {
+              nextRows.push({
+                kind: "work",
+                id: workEntry.id,
+                createdAt: workEntry.createdAt,
+                groupedEntries: [workEntry],
+              });
+            }
+
             nextRows.push({
               kind: "work-toggle",
               id: `work-toggle:${timelineEntry.id}`,

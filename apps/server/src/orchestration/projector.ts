@@ -4,6 +4,8 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  // ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
+  isSyntheticAssistantMessageId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -571,7 +573,13 @@ export function projectEvent(
 
         // Leaving the "running" session status is the turn-end signal: settle
         // a still-running latest turn so its duration reflects the whole turn.
-        const settledTurnState = settledTurnStateForSessionStatus(session.status);
+        // ru-code: an explicit user-stop settle (payload.settledTurnState)
+        // wins — the session stays "ready" but the turn reads "interrupted".
+        const settledTurnState =
+          payload.settledTurnState === "interrupted"
+            ? "interrupted"
+            : settledTurnStateForSessionStatus(session.status);
+
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
@@ -606,7 +614,16 @@ export function projectEvent(
                       // "running" is the authoritative turn end.
                       completedAt: session.updatedAt,
                     }
-                  : thread.latestTurn,
+                  : // ru-code: a racing event may settle the user-stopped turn
+                    // as "completed" before the explicit settle arrives — the
+                    // relabel is scoped to that exact turn and never touches a
+                    // newer running turn or an error label.
+                    thread.latestTurn !== null &&
+                      payload.settledTurnState === "interrupted" &&
+                      payload.settledTurnId === thread.latestTurn.turnId &&
+                      thread.latestTurn.state === "completed"
+                    ? { ...thread.latestTurn, state: "interrupted" }
+                    : thread.latestTurn,
             updatedAt: event.occurredAt,
           }),
         };
@@ -657,6 +674,18 @@ export function projectEvent(
           return nextBase;
         }
 
+        // ru-code: a SYNTHETIC attachment id ("assistant:<id>") must never
+        // overwrite real information — prefer the turn's projected assistant
+        // message, then the previously recorded checkpoint attachment.
+        const attachedAssistantMessageId = isSyntheticAssistantMessageId(payload.assistantMessageId)
+          ? (thread.messages
+              .toReversed()
+              .find((entry) => entry.role === "assistant" && entry.turnId === payload.turnId)?.id ??
+            thread.checkpoints.find((entry) => entry.turnId === payload.turnId)
+              ?.assistantMessageId ??
+            payload.assistantMessageId)
+          : payload.assistantMessageId;
+
         const checkpoint = yield* decodeForEvent(
           OrchestrationCheckpointSummary,
           {
@@ -665,7 +694,7 @@ export function projectEvent(
             checkpointRef: payload.checkpointRef,
             status: payload.status,
             files: payload.files,
-            assistantMessageId: payload.assistantMessageId,
+            assistantMessageId: attachedAssistantMessageId,
             completedAt: payload.completedAt,
           },
           event.type,
@@ -702,7 +731,14 @@ export function projectEvent(
               ? thread.latestTurn
               : {
                   turnId: payload.turnId,
-                  state: checkpointStatusToLatestTurnState(payload.status),
+                  // ru-code: a checkpoint on a user-stopped turn must not
+                  // relabel it as a normal completion — "interrupted" wins.
+                  state:
+                    thread.latestTurn?.turnId === payload.turnId &&
+                    thread.latestTurn.state === "interrupted" &&
+                    payload.status === "ready"
+                      ? "interrupted"
+                      : checkpointStatusToLatestTurnState(payload.status),
                   requestedAt:
                     thread.latestTurn?.turnId === payload.turnId
                       ? thread.latestTurn.requestedAt
@@ -712,7 +748,7 @@ export function projectEvent(
                       ? (thread.latestTurn.startedAt ?? payload.completedAt)
                       : payload.completedAt,
                   completedAt: payload.completedAt,
-                  assistantMessageId: payload.assistantMessageId,
+                  assistantMessageId: attachedAssistantMessageId,
                 },
             updatedAt: event.occurredAt,
           }),

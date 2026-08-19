@@ -10,12 +10,23 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
+// ru-code: shared mode-control catalogs + change guard (R6) — no duplicated option JSX.
+import {
+  INTERACTION_MODE_OPTIONS,
+  resolveRuntimeModeOptions,
+  shouldApplyModeControlChange,
+} from "../../ru-code/composer/modeControls";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
+  // ru-code (M6): lock the mode radio groups while a turn streams.
+  // ru-code (M5): additionally lock the full-access option for providers that
+  // forbid it. Both default to enabled/allowed for every non-qwen provider.
+  modeControlsDisabled: boolean;
+  fullAccessDisabled: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
@@ -45,13 +56,17 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
             <MenuRadioGroup
               value={props.interactionMode}
+              disabled={props.modeControlsDisabled}
               onValueChange={(value) => {
-                if (!value || value === props.interactionMode) return;
+                if (!shouldApplyModeControlChange(value, props.interactionMode)) return;
                 props.onToggleInteractionMode();
               }}
             >
-              <MenuRadioItem value="default">Chat</MenuRadioItem>
-              <MenuRadioItem value="plan">Plan</MenuRadioItem>
+              {INTERACTION_MODE_OPTIONS.map((option) => (
+                <MenuRadioItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuRadioItem>
+              ))}
             </MenuRadioGroup>
             <MenuDivider />
           </>
@@ -59,15 +74,20 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
         <MenuRadioGroup
           value={props.runtimeMode}
+          disabled={props.modeControlsDisabled}
           onValueChange={(value) => {
-            if (!value || value === props.runtimeMode) return;
+            if (!shouldApplyModeControlChange(value, props.runtimeMode)) return;
             props.onRuntimeModeChange(value as RuntimeMode);
           }}
         >
-          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-          <MenuRadioItem value="auto">Auto</MenuRadioItem>
-          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+          {/* ru-code (M5): full-access locked for providers that forbid it. */}
+          {resolveRuntimeModeOptions({ fullAccessDisabled: props.fullAccessDisabled }).map(
+            (option) => (
+              <MenuRadioItem key={option.value} value={option.value} disabled={option.disabled}>
+                {option.label}
+              </MenuRadioItem>
+            ),
+          )}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>

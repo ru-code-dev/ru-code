@@ -7,9 +7,9 @@
 //   {appdata}      process.env.APPDATA
 //   {localappdata} process.env.LOCALAPPDATA
 //
-// CLI_DIRNAME is the single source of truth for the CLI config dir name.
+// PREFLIGHT_CLI_PROBE_DIRNAME is the single source of truth for the CLI config dir name.
 
-import { CLI_DIRNAME } from "@ru-code/branding";
+import { PREFLIGHT_CLI_PROBE_DIRNAME } from "@ru-code/branding";
 
 import type { PlatformKey } from "./common/types.ts";
 
@@ -20,9 +20,9 @@ import type { PlatformKey } from "./common/types.ts";
  * record inside the config dir.
  */
 export const CONFIG: Record<PlatformKey, ReadonlyArray<string>> = {
-  darwin: [`{home}/${CLI_DIRNAME}`],
-  linux: [`{home}/${CLI_DIRNAME}`],
-  win32: [`{home}/${CLI_DIRNAME}`],
+  darwin: [`{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}`],
+  linux: [`{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}`],
+  win32: [`{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}`],
 };
 
 /**

@@ -321,3 +321,40 @@ describe("instance-scoped model selection", () => {
     });
   });
 });
+
+// ru-code: served per-model context windows (`nTokens`) must survive the
+// snapshot → AppModelOption mapping — the meter denominator and the picker
+// capacity gate both read `contextWindowTokens` off the option.
+describe("model option context windows", () => {
+  it("maps a served nTokens onto contextWindowTokens and leaves it absent otherwise", () => {
+    const qwenProvider: ServerProvider = {
+      ...provider({ provider: ProviderDriverKind.make("qwen"), instanceId: "qwen" }),
+      models: [
+        {
+          slug: "giga/coder-xl-256k",
+          name: "Giga Coder XL 256K",
+          isCustom: false,
+          capabilities: {},
+          nTokens: 262144,
+        },
+        {
+          slug: "giga/chat-mini",
+          name: "Giga Chat Mini",
+          isCustom: false,
+          capabilities: {},
+        },
+      ],
+    };
+    const entries = deriveProviderInstanceEntries([qwenProvider]);
+    const qwenEntry = entries.find((entry) => entry.instanceId === "qwen")!;
+    const optionsBySlug = new Map(
+      getAppModelOptionsForInstance(DEFAULT_UNIFIED_SETTINGS, qwenEntry).map(
+        (option) => [option.slug, option] as const,
+      ),
+    );
+
+    expect(optionsBySlug.get("giga/coder-xl-256k")?.contextWindowTokens).toBe(262144);
+    // No nTokens served ⇒ the key is ABSENT (not 0/null) — unknown stays unknown.
+    expect("contextWindowTokens" in optionsBySlug.get("giga/chat-mini")!).toBe(false);
+  });
+});

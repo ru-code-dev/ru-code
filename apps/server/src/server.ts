@@ -32,6 +32,8 @@ import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionD
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
+import { QwenModelDiscoveryStore } from "./ru-code/qwen/discovery/QwenModelDiscoveryStore.ts"; // ru-code
+import { QwenCompactionHistory } from "./ru-code/qwen/compaction/QwenCompactionHistory.ts"; // ru-code
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -391,7 +393,23 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // `ProviderService` (canonical stream, written after event normalization).
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
-  Layer.provideMerge(ProviderEventLoggers.layer),
+  // ru-code: the qwen fork services ride the same provideMerge as the event
+  // loggers (Layer.mergeAll) — the assembly pipe is at its argument cap.
+  // QwenModelDiscoveryStore: per-instance qwen model discovery persistence —
+  // written by the qwen adapter (session-start advertisements, model-error
+  // corrections), read by the qwen snapshot builders. One store for all
+  // qwen instances.
+  // QwenCompactionHistory: read-only window into persisted thread activities
+  // for the auto-compact circuit breaker. `OrchestrationLayerLive` is the same
+  // module-level reference composed into `ProviderRuntimeLayerLive`, so Layer
+  // memoization shares one engine/query instance.
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ProviderEventLoggers.layer,
+      QwenModelDiscoveryStore.layer(),
+      QwenCompactionHistory.layer().pipe(Layer.provide(OrchestrationLayerLive)),
+    ),
+  ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and

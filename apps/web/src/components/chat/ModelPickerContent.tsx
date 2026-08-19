@@ -16,7 +16,6 @@ import {
   parseModelPickerModelKey,
 } from "./modelPickerKeys";
 import { isModelPickerNewModel } from "./modelPickerModelHighlights";
-import { buildModelPickerSearchText, scoreModelPickerSearch } from "./modelPickerSearch";
 import {
   Combobox,
   ComboboxEmpty,
@@ -35,25 +34,20 @@ import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings"
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import { TooltipProvider } from "../ui/tooltip";
+import { type ProviderInstanceEntry } from "../../providerInstances";
+import { providerModelKey } from "../../modelOrdering";
+// ru-code: instance-visibility + initial-rail decisions live in one pure module (R6).
 import {
-  isProviderInstancePickerReady,
-  isProviderInstancePickerVisible,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
-import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
-
-type ModelPickerItem = {
-  slug: string;
-  name: string;
-  shortName?: string;
-  subProvider?: string;
-  instanceId: ProviderInstanceId;
-  driverKind: ProviderDriverKind;
-  instanceDisplayName: string;
-  instanceAccentColor?: string | undefined;
-  continuationGroupKey?: string | undefined;
-  isLegacy?: boolean | undefined;
-};
+  resolveInitialModelPickerInstance,
+  resolveModelPickerInstanceView,
+} from "../../ru-code/modelPicker/instanceView";
+// ru-code: flatten + search/rail list decisions live in one pure module.
+import {
+  CONTEXT_OVERFLOW_DISABLED_REASON,
+  filterModelPickerModels,
+  flattenModelPickerModels,
+  type ModelPickerItem,
+} from "../../ru-code/modelPicker/modelListView";
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
 
@@ -88,6 +82,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * model set but are free to diverge via customModels).
    */
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  // ru-code: raw history usage — models whose served window can't hold it
+  // render disabled (the active model and unknown-window models never do).
+  usedTokens?: number | null;
   terminalOpen: boolean;
   onRequestClose?: () => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
@@ -108,14 +105,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const highlightedModelKeyRef = useRef<string | null>(null);
   const favorites = useClientSettings((s) => s.favorites ?? []);
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | "favorites">(
-    () => {
-      if (props.lockedProvider !== null) {
-        // When locked, prime the sidebar to the currently-active instance
-        // so jumping into the picker keeps the focused instance visible.
-        return props.activeInstanceId;
-      }
-      return favorites.length > 0 ? "favorites" : props.activeInstanceId;
-    },
+    () =>
+      // ru-code: locked ⇒ keep the active instance focused; else Favorites when any, else active.
+      resolveInitialModelPickerInstance({
+        lockedProvider: props.lockedProvider,
+        activeInstanceId: props.activeInstanceId,
+        hasFavorites: favorites.length > 0,
+      }),
   );
   const [expandedLegacyInstances, setExpandedLegacyInstances] = useState(
     () =>
@@ -179,203 +175,85 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     () => new Map(instanceEntries.map((entry) => [entry.instanceId, entry])),
     [instanceEntries],
   );
-  const matchesLockedProvider = useCallback(
-    (entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">): boolean => {
-      if (props.lockedProvider === null) return true;
-      if (entry.driverKind !== props.lockedProvider) return false;
-      if (!props.lockedContinuationGroupKey) return true;
-      return entry.continuationGroupKey === props.lockedContinuationGroupKey;
-    },
-    [props.lockedContinuationGroupKey, props.lockedProvider],
+  // ru-code: rail entries (ordered), locked-out ids, and ready set — one pure decision.
+  const instanceView = useMemo(
+    () =>
+      resolveModelPickerInstanceView({
+        instanceEntries,
+        lockedProvider: props.lockedProvider,
+        lockedContinuationGroupKey: props.lockedContinuationGroupKey,
+      }),
+    [instanceEntries, props.lockedContinuationGroupKey, props.lockedProvider],
+  );
+  const readyInstanceSet = instanceView.readyInstanceIds;
+
+  // ru-code: flatten models into a searchable array — pure decision in modelListView.
+  // Carries the capacity-gate inputs so rows the chat no longer fits into
+  // arrive pre-flagged (`disabledByContext`).
+  const flatModels = useMemo(
+    () =>
+      flattenModelPickerModels({
+        modelOptionsByInstance,
+        entryByInstanceId,
+        readyInstanceIds: readyInstanceSet,
+        usedTokens: props.usedTokens ?? null,
+        activeInstanceId: props.activeInstanceId,
+        activeModelSlug: props.model,
+      }),
+    [
+      modelOptionsByInstance,
+      entryByInstanceId,
+      readyInstanceSet,
+      props.usedTokens,
+      props.activeInstanceId,
+      props.model,
+    ],
   );
 
-  const readyInstanceSet = useMemo(() => {
-    const ready = new Set<ProviderInstanceId>();
-    for (const entry of instanceEntries) {
-      if (isProviderInstancePickerReady(entry)) {
-        ready.add(entry.instanceId);
-      }
-    }
-    return ready;
-  }, [instanceEntries]);
-
-  // Flatten models into a searchable array. One pass over the
-  // instance-keyed map; each model carries its instance id + driver kind
-  // so the list row can render the right icon and display name without
-  // another lookup.
-  const flatModels = useMemo(() => {
-    const out: ModelPickerItem[] = [];
-    for (const [instanceId, models] of modelOptionsByInstance) {
-      const entry = entryByInstanceId.get(instanceId);
-      if (!entry) {
-        // Instance disappeared between renders (configuration change). Skip
-        // its models — stale options shouldn't appear in the picker.
-        continue;
-      }
-      if (!readyInstanceSet.has(instanceId)) {
-        continue;
-      }
-      for (const model of models) {
-        out.push({
-          slug: model.slug,
-          name: model.name,
-          ...(model.shortName ? { shortName: model.shortName } : {}),
-          ...(model.subProvider ? { subProvider: model.subProvider } : {}),
-          ...(model.isLegacy ? { isLegacy: true } : {}),
-          instanceId,
-          driverKind: entry.driverKind,
-          instanceDisplayName: entry.displayName,
-          ...(entry.accentColor ? { instanceAccentColor: entry.accentColor } : {}),
-          ...(entry.continuationGroupKey
-            ? { continuationGroupKey: entry.continuationGroupKey }
-            : {}),
-        });
-      }
-    }
-    return out;
-  }, [modelOptionsByInstance, entryByInstanceId, readyInstanceSet]);
+  // ru-code: keys of context-disabled rows — selection + jump shortcuts skip them.
+  const contextDisabledModelKeys = useMemo(
+    () =>
+      new Set(
+        flatModels
+          .filter((model) => model.disabledByContext)
+          .map((model) => `${model.instanceId}:${model.slug}`),
+      ),
+    [flatModels],
+  );
 
   const isLocked = props.lockedProvider !== null;
   const isSearching = searchQuery.trim().length > 0;
-  const lockedDisabledInstanceIds = useMemo(() => {
-    if (!isLocked) {
-      return undefined;
-    }
-    const disabled = new Set<ProviderInstanceId>();
-    for (const entry of instanceEntries) {
-      if (!matchesLockedProvider(entry)) {
-        disabled.add(entry.instanceId);
-      }
-    }
-    return disabled;
-  }, [instanceEntries, isLocked, matchesLockedProvider]);
-  const sidebarInstanceEntries = useMemo(() => {
-    const enabledEntries = instanceEntries.filter(isProviderInstancePickerVisible);
-    if (!isLocked) {
-      return enabledEntries;
-    }
-    const available: ProviderInstanceEntry[] = [];
-    const disabled: ProviderInstanceEntry[] = [];
-    for (const entry of enabledEntries) {
-      if (matchesLockedProvider(entry)) {
-        available.push(entry);
-      } else {
-        disabled.push(entry);
-      }
-    }
-    return [...available, ...disabled];
-  }, [instanceEntries, isLocked, matchesLockedProvider]);
+  const lockedDisabledInstanceIds = instanceView.disabledInstanceIds;
+  const sidebarInstanceEntries = instanceView.sidebarInstanceEntries;
   const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
   const instanceOrder = useMemo(
     () => instanceEntries.map((entry) => entry.instanceId),
     [instanceEntries],
   );
 
-  // Filter models based on search query and selected instance
-  const filteredModels = useMemo(() => {
-    let result = flatModels;
-
-    // Apply tokenized fuzzy search across the combined provider/model search fields.
-    if (searchQuery.trim()) {
-      const rankedMatches = result
-        .map((model) => ({
-          model,
-          score: scoreModelPickerSearch(
-            {
-              name: model.name,
-              ...(model.shortName ? { shortName: model.shortName } : {}),
-              ...(model.subProvider ? { subProvider: model.subProvider } : {}),
-              driverKind: model.driverKind,
-              providerDisplayName: model.instanceDisplayName,
-              isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
-            },
-            searchQuery,
-          ),
-          isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
-          tieBreaker: buildModelPickerSearchText({
-            name: model.name,
-            ...(model.shortName ? { shortName: model.shortName } : {}),
-            ...(model.subProvider ? { subProvider: model.subProvider } : {}),
-            driverKind: model.driverKind,
-            providerDisplayName: model.instanceDisplayName,
-          }),
-        }))
-        .filter(
-          (
-            rankedModel,
-          ): rankedModel is {
-            model: ModelPickerItem;
-            score: number;
-            isFavorite: boolean;
-            tieBreaker: string;
-          } => rankedModel.score !== null,
-        );
-
-      // When searching, we only respect locked provider (by driver kind),
-      // ignoring sidebar selection so account-scoped searches can find a
-      // model before the user chooses a specific instance rail item.
-      if (props.lockedProvider !== null) {
-        const lockedProviderMatches: Array<(typeof rankedMatches)[number]> = [];
-        for (const rankedModel of rankedMatches) {
-          if (matchesLockedProvider(rankedModel.model)) {
-            lockedProviderMatches.push(rankedModel);
-          }
-        }
-        return lockedProviderMatches
-          .toSorted((a, b) => {
-            const scoreDelta = a.score - b.score;
-            if (scoreDelta !== 0) {
-              return scoreDelta;
-            }
-            if (a.isFavorite !== b.isFavorite) {
-              return a.isFavorite ? -1 : 1;
-            }
-            return a.tieBreaker.localeCompare(b.tieBreaker);
-          })
-          .map((rankedModel) => rankedModel.model);
-      }
-
-      return rankedMatches
-        .toSorted((a, b) => {
-          const scoreDelta = a.score - b.score;
-          if (scoreDelta !== 0) {
-            return scoreDelta;
-          }
-          if (a.isFavorite !== b.isFavorite) {
-            return a.isFavorite ? -1 : 1;
-          }
-          return a.tieBreaker.localeCompare(b.tieBreaker);
-        })
-        .map((rankedModel) => rankedModel.model);
-    }
-
-    if (props.lockedProvider !== null) {
-      result = result.filter((m) => matchesLockedProvider(m));
-      if (selectedInstanceId === "favorites") {
-        result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
-      } else {
-        result = result.filter((m) => m.instanceId === selectedInstanceId);
-      }
-    } else if (selectedInstanceId === "favorites") {
-      result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
-    } else {
-      result = result.filter((m) => m.instanceId === selectedInstanceId);
-    }
-
-    return sortProviderModelItems(result, {
-      favoriteModelKeys: favoritesSet,
-      groupFavorites: selectedInstanceId !== "favorites",
-      instanceOrder: selectedInstanceId === "favorites" ? instanceOrder : [],
-    });
-  }, [
-    favoritesSet,
-    flatModels,
-    instanceOrder,
-    matchesLockedProvider,
-    props.lockedProvider,
-    searchQuery,
-    selectedInstanceId,
-  ]);
+  // ru-code: filter models based on search query and selected instance — pure
+  // decision in modelListView.
+  const filteredModels = useMemo(
+    () =>
+      filterModelPickerModels({
+        flatModels,
+        searchQuery,
+        favoriteModelKeys: favoritesSet,
+        lockedProvider: props.lockedProvider,
+        lockedContinuationGroupKey: props.lockedContinuationGroupKey,
+        selectedInstanceId,
+        instanceOrder,
+      }),
+    [
+      favoritesSet,
+      flatModels,
+      instanceOrder,
+      props.lockedContinuationGroupKey,
+      props.lockedProvider,
+      searchQuery,
+      selectedInstanceId,
+    ],
+  );
 
   const legacySection = useMemo(() => {
     if (isSearching || selectedInstanceId === "favorites") {
@@ -421,6 +299,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       if (getModelDisabledReason?.(instanceId, modelSlug)) {
         return;
       }
+      // ru-code: context-disabled rows can't be committed through any path
+      // (click, Enter on highlight, jump shortcut).
+      if (contextDisabledModelKeys.has(`${instanceId}:${modelSlug}`)) {
+        return;
+      }
       const options = modelOptionsByInstance.get(instanceId);
       if (!options) {
         return;
@@ -437,7 +320,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         onInstanceModelChange(instanceId, resolvedModel);
       }
     },
-    [entryByInstanceId, getModelDisabledReason, modelOptionsByInstance, onInstanceModelChange],
+    [
+      contextDisabledModelKeys,
+      entryByInstanceId,
+      getModelDisabledReason,
+      modelOptionsByInstance,
+      onInstanceModelChange,
+    ],
   );
 
   const toggleFavorite = useCallback(
@@ -461,7 +350,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     >();
     let selectableModelIndex = 0;
     for (const model of visibleModels) {
-      if (getModelDisabledReason?.(model.instanceId, model.slug)) {
+      // ru-code: context-disabled rows get no jump shortcut either.
+      if (getModelDisabledReason?.(model.instanceId, model.slug) || model.disabledByContext) {
         continue;
       }
       const jumpCommand = modelPickerJumpCommandForIndex(selectableModelIndex);
@@ -747,8 +637,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     if (!model) {
                       return null;
                     }
+                    // ru-code: capacity gate — the chat no longer fits into this
+                    // model's window, so the row is disabled with a tooltip.
                     const disabledReason =
-                      getModelDisabledReason?.(model.instanceId, model.slug) ?? null;
+                      getModelDisabledReason?.(model.instanceId, model.slug) ??
+                      (model.disabledByContext ? CONTEXT_OVERFLOW_DISABLED_REASON : null);
                     return (
                       <ModelListRow
                         key={modelKey}
@@ -756,6 +649,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         model={model}
                         instanceId={model.instanceId}
                         driverKind={model.driverKind}
+                        profile={model.instanceProfile}
                         providerDisplayName={model.instanceDisplayName}
                         providerAccentColor={model.instanceAccentColor}
                         isFavorite={favoritesSet.has(

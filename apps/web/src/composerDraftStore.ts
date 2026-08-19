@@ -1,7 +1,5 @@
 import { APP_SCOPE } from "@ru-code/branding";
 import {
-  DEFAULT_MODEL,
-  DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   ModelSelection,
@@ -18,6 +16,9 @@ import {
   type ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
+import { seedModelForDriver } from "~/ru-code/modelPicker/seedModelForDriver"; // ru-code
+// ru-code: single-source default-provider instance id.
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import {
   parseScopedProjectKey,
   parseScopedThreadKey,
@@ -881,7 +882,8 @@ function normalizeModelSelection(
   // into a driver kind here; they get generic default normalization.
   const driverKindHint =
     normalizeProviderDriverKind(candidate?.provider ?? legacy?.provider) ??
-    ProviderDriverKind.make("codex");
+    // ru-code: single-source default normalization kind (no codex).
+    ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID);
   const model = normalizeModelSlug(rawModel, driverKindHint);
   if (!model) {
     return null;
@@ -981,7 +983,7 @@ function legacyToModelSelectionByProvider(
           instanceKey,
           modelSelection?.instanceId === instanceKey
             ? modelSelection.model
-            : (DEFAULT_MODEL_BY_PROVIDER[driverKind] ?? DEFAULT_MODEL),
+            : seedModelForDriver(driverKind), // ru-code
           options,
         );
       }
@@ -2783,7 +2785,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               if (opts && opts.length > 0) {
                 nextMap[instanceKey] = createModelSelection(
                   instanceKey,
-                  current?.model ?? DEFAULT_MODEL_BY_PROVIDER[driverKind] ?? DEFAULT_MODEL,
+                  current?.model ?? seedModelForDriver(driverKind), // ru-code
                   opts,
                 );
               } else if (current?.options) {
@@ -2819,8 +2821,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           const instanceKey = options?.instanceId ?? defaultInstanceIdForDriver(normalizedProvider);
           const fallbackModel =
             normalizeModelSlug(options?.model, normalizedProvider) ??
-            DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ??
-            DEFAULT_MODEL;
+            seedModelForDriver(normalizedProvider); // ru-code
           const providerOpts =
             nextProviderOptions && nextProviderOptions.length > 0 ? nextProviderOptions : undefined;
 

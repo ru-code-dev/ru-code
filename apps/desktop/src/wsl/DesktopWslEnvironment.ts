@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- ru-code: pristine upstream file; style-only suggestion noise
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

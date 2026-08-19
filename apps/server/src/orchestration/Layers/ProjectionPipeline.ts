@@ -4,6 +4,8 @@ import {
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
+  // ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
+  isSyntheticAssistantMessageId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -975,7 +977,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
-            turnId: event.payload.turnId,
+            // ru-code: a turn-less completion (e.g. a provider's trailing
+            // item-close consumed after its turn settled) must not erase the
+            // turn the message is already bound to — every turnId join
+            // (checkpoint attach, healing, chat fold) depends on it.
+            turnId: event.payload.turnId ?? previousMessage?.turnId ?? null,
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
@@ -1175,7 +1181,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // Leaving the "running" session status is the turn-end signal:
             // settle still-running turns so their duration reflects the whole
             // turn rather than the last assistant message.
-            const settledTurnState = settledTurnStateForSessionStatus(event.payload.session.status);
+            // ru-code: an explicit user-stop settle wins — the session stays
+            // "ready" (no phase change) but the turn must read "interrupted".
+            const settledTurnState =
+              event.payload.settledTurnState === "interrupted"
+                ? "interrupted"
+                : settledTurnStateForSessionStatus(event.payload.session.status);
             if (settledTurnState === null) {
               return;
             }
@@ -1407,6 +1418,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
           });
+          // ru-code: a checkpoint on a user-stopped turn must not relabel it
+          // as a normal completion — an existing "interrupted" wins.
           const nextState = event.payload.status === "error" ? "error" : "completed";
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,
@@ -1414,11 +1427,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointTurnCount: event.payload.checkpointTurnCount,
           });
 
+          // ru-code: a SYNTHETIC attachment id ("assistant:<id>", minted when
+          // the capture could not see the message yet) is not information —
+          // it must never overwrite a real id resolved earlier (message-sent
+          // back-fills it), or the chat diff chip/revert detach permanently.
+          const attachedAssistantMessageId =
+            isSyntheticAssistantMessageId(event.payload.assistantMessageId) &&
+            Option.isSome(existingTurn) &&
+            existingTurn.value.assistantMessageId !== null
+              ? existingTurn.value.assistantMessageId
+              : event.payload.assistantMessageId;
           if (Option.isSome(existingTurn)) {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
-              assistantMessageId: event.payload.assistantMessageId,
-              state: turnStillRunning ? existingTurn.value.state : nextState,
+              assistantMessageId: attachedAssistantMessageId,
+              state: turnStillRunning
+                ? existingTurn.value.state
+                : existingTurn.value.state === "interrupted" && nextState === "completed"
+                  ? "interrupted"
+                  : nextState,
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
               checkpointStatus: event.payload.status,

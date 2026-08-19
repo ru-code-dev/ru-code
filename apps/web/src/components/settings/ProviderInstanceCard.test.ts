@@ -29,7 +29,9 @@ describe("deriveProviderModelsForDisplay", () => {
     expect(
       deriveProviderModelsForDisplay({
         liveModels,
-        customModels: ["kept-custom"],
+        // ru-code: customModels entries are now `{ slug, authType? }` (qwen carries
+        // the auth method); slugs alone still resolve the built-in vs custom rows.
+        customModels: [{ slug: "kept-custom" }],
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
   });

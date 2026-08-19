@@ -43,6 +43,8 @@ export type ComposerCommandItem =
       command: ServerProviderSlashCommand;
       label: string;
       description: string;
+      // ru-code: grayed + unselectable (e.g. /compress while composing a draft).
+      disabled?: boolean;
     }
   | {
       id: string;
@@ -208,22 +210,27 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
 }) {
   const skillSourceLabel =
     props.item.type === "skill" ? formatProviderSkillInstallSource(props.item.skill) : null;
+  // ru-code: disabled items render gray and never select/highlight.
+  const itemDisabled = props.item.type === "provider-slash-command" && props.item.disabled === true;
 
   return (
     <CommandItem
       value={props.item.id}
       data-composer-item-id={props.item.id}
+      disabled={itemDisabled}
       className={cn(
         "cursor-pointer select-none gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit",
         props.isActive && "bg-accent! text-accent-foreground!",
+        itemDisabled && "cursor-default opacity-50",
       )}
       onMouseMove={() => {
-        if (!props.isActive) props.onHighlight(props.item.id);
+        if (!props.isActive && !itemDisabled) props.onHighlight(props.item.id);
       }}
       onMouseDown={(event) => {
         event.preventDefault();
       }}
       onClick={() => {
+        if (itemDisabled) return;
         props.onSelect(props.item);
       }}
     >

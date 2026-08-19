@@ -16,11 +16,20 @@ import {
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+
+import type { AuthMethodId } from "@ru-code/branding";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
-import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+// ru-code: per-model auth method (qwen). The Select + label share one source of truth.
+import {
+  AUTO_AUTH_METHOD,
+  CliAuthMethodSelect,
+  authMethodLabel,
+} from "~/ru-code/cliProfiles/CliAuthMethodSelect";
+// ru-code: the whole add decision (parse inline `slug(auth)` → normalize → validate
+// → commit shape) as a pure, tested function; this component just dispatches it.
+import { resolveCustomModelAddition } from "~/ru-code/cliProfiles/resolveCustomModelAddition";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -72,6 +81,14 @@ interface ProviderModelsSectionProps {
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
+  /**
+   * ru-code: qwen only. When set, each model row shows its auth method and the add
+   * form gains an auth-method dropdown; new models commit via {@link onAddModelWithAuth}.
+   * The value is the instance's EFFECTIVE default auth method (override ?? profile) —
+   * what "Auto" resolves to — so the per-model Auto hint matches the server.
+   */
+  readonly authFallback?: AuthMethodId;
+  readonly onAddModelWithAuth?: (slug: string, authMethod: string) => void;
 }
 
 /**
@@ -97,9 +114,13 @@ export function ProviderModelsSection({
   onHiddenModelsChange,
   onFavoriteModelsChange,
   onModelOrderChange,
+  authFallback,
+  onAddModelWithAuth,
 }: ProviderModelsSectionProps) {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // ru-code: auth method chosen for the NEXT custom model (qwen). "" ⇒ Auto.
+  const [authMethodInput, setAuthMethodInput] = useState<string>(AUTO_AUTH_METHOD);
   const listRef = useRef<HTMLDivElement | null>(null);
   const hiddenModelSet = useMemo(() => new Set(hiddenModels), [hiddenModels]);
   const favoriteModelSet = useMemo(() => new Set(favoriteModels), [favoriteModels]);
@@ -112,25 +133,28 @@ export function ProviderModelsSection({
   }, [favoriteModelSet, modelOrder, models]);
 
   const handleAdd = () => {
-    const normalized = normalizeCustomModelSlug(input);
-    if (!normalized) {
-      setError("Enter a model slug.");
-      return;
-    }
-    if (models.some((model) => !model.isCustom && model.slug === normalized)) {
-      setError("That model is already built in.");
-      return;
-    }
-    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-      setError(`Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`);
-      return;
-    }
-    if (customModels.includes(normalized)) {
-      setError("That custom model is already saved.");
+    const result = resolveCustomModelAddition({
+      raw: input,
+      driverKind,
+      models,
+      customModels,
+      authFallback,
+      authMethodInput,
+    });
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
 
-    onChange([...customModels, normalized]);
+    // ru-code: qwen (auth on) commits `{ slug, authMethod }` via onAddModelWithAuth
+    // — the resolver already peeled any inline `slug(auth)` and picked the auth to
+    // store; other drivers append the plain slug through onChange.
+    if (result.authMethod !== undefined && onAddModelWithAuth) {
+      onAddModelWithAuth(result.slug, result.authMethod);
+      setAuthMethodInput(AUTO_AUTH_METHOD);
+    } else {
+      onChange([...customModels, result.slug]);
+    }
     setInput("");
     setError(null);
 
@@ -281,6 +305,12 @@ export function ProviderModelsSection({
                 {model.isCustom ? (
                   <span className="text-[10px] text-muted-foreground">custom</span>
                 ) : null}
+                {/* ru-code: qwen — the auth method this model dispatches with. */}
+                {authFallback ? (
+                  <span className="shrink-0 text-[10px] text-muted-foreground/80">
+                    {authMethodLabel(model.authType ?? AUTO_AUTH_METHOD, authFallback)}
+                  </span>
+                ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-0.5">
                 <Tooltip>
@@ -397,6 +427,15 @@ export function ProviderModelsSection({
           placeholder={driverKind ? CUSTOM_MODEL_PLACEHOLDER_BY_KIND[driverKind] : "model-slug"}
           spellCheck={false}
         />
+        {/* ru-code: qwen — choose the auth method the new model dispatches with. */}
+        {authFallback ? (
+          <CliAuthMethodSelect
+            value={authMethodInput}
+            fallbackAuthMethod={authFallback}
+            onChange={setAuthMethodInput}
+            ariaLabel="New model's authentication method"
+          />
+        ) : null}
         <Button className="shrink-0" variant="outline" onClick={handleAdd}>
           <PlusIcon className="size-3.5" />
           Add

@@ -141,6 +141,7 @@ export const CanonicalRequestType = Schema.Literals([
   "tool_user_input",
   "dynamic_tool_call",
   "auth_tokens_refresh",
+  "plan_approval", // ru-code: qwen exit_plan_mode held-approval request
   "unknown",
 ]);
 export type CanonicalRequestType = typeof CanonicalRequestType.Type;
@@ -368,6 +369,11 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  // ru-code: gate the red notification banner (session.lastError). The qwen
+  // error classifier sets this to true ONLY for the Notification surface (T+N);
+  // Timeline-only (T) failed turns carry errorMessage for the timeline row but
+  // leave this false/absent so no banner fires. Decouples banner from timeline.
+  showNotification: Schema.optional(Schema.Boolean),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -642,6 +648,14 @@ const TaskCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   typedUsage: Schema.optional(RuntimeTaskUsage),
   ...taskAgentLinkageFields,
+  // ru-code: optional row-tone override for a non-failed completion (e.g. a
+  // context compaction that barely shrank anything → warning). Additive +
+  // optional, so old persisted events decode unchanged.
+  tone: Schema.optional(Schema.Literals(["info", "warning"])),
+  // ru-code: optional long-form body. When present, `summary` is the row's
+  // visible title and `detail` its expandable explanation. Additive +
+  // optional — single-string events keep the legacy shape.
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 

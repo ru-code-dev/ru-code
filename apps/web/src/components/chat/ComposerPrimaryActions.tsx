@@ -1,11 +1,17 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
+import type { ApprovalRequestId } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
+// ru-code: pure plan-primary-action decision (M2), shared + tested.
+import { selectPlanPrimaryAction } from "~/ru-code/composer/planActions";
+// ru-code: send blocked + tooltip while a hidden context compaction runs.
+import { COMPACTING_CONTEXT_TOOLTIP } from "~/ru-code/workLog/contextCompaction";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface PendingActionState {
   questionIndex: number;
@@ -19,11 +25,21 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  /**
+   * ru-code (M7): true when the session is parked waiting on the user — a held
+   * approval or a held user-input question. phase stays "running" but the user
+   * has an action to take, not a Stop to issue, so we suppress the red Stop and
+   * render the regular Send button (letting them queue a follow-up).
+   */
+  isParkedOnUser: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
   sendDisabledReason: string | null;
   isConnecting: boolean;
+  // ru-code: true while a hidden context compaction runs — send is blocked
+  // with the "Compacting the context…" tooltip until task.completed lands.
+  isCompactingContext?: boolean;
   isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
@@ -32,8 +48,24 @@ interface ComposerPrimaryActionsProps {
    * be the only primary action and a running turn could not be steered. */
   showSendWhileRunning?: boolean;
   onPreviousPendingQuestion: () => void;
+  /**
+   * ru-code (M8): submits the active pending user-input request with an empty
+   * answers payload (`{}`). Rendered as a destructive-outline button next to
+   * the submit button while a user-input request is parked; the server turns
+   * the empty answer into a cancelled outcome that resumes the turn.
+   */
+  onSkipPendingUserInput?: () => void;
   onInterrupt: () => void;
+  /**
+   * ru-code (M2): live requestId for the server-held plan_approval Deferred.
+   * Non-null (qwen only) ⇒ the primary action approves in-place; null ⇒ the
+   * port's existing same-thread submit / new-thread fallback (today's
+   * behaviour for every non-qwen provider).
+   */
+  pendingPlanApprovalRequestId: ApprovalRequestId | null;
   onImplementPlanInNewThread: () => void;
+  /** ru-code (M2): responds to the held plan_approval Deferred in the same thread. */
+  onApproveInSameThread: () => void;
 }
 
 export const formatPendingPrimaryActionLabel = (input: {
@@ -62,19 +94,24 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  isParkedOnUser,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
   sendDisabledReason,
   isConnecting,
+  isCompactingContext = false, // ru-code
   isEnvironmentUnavailable,
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
   showSendWhileRunning = false,
   onPreviousPendingQuestion,
+  onSkipPendingUserInput,
   onInterrupt,
+  pendingPlanApprovalRequestId,
   onImplementPlanInNewThread,
+  onApproveInSameThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -136,6 +173,19 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             </Button>
           )
         ) : null}
+        {onSkipPendingUserInput ? (
+          <Button
+            size="sm"
+            variant="destructive-outline"
+            className={cn("rounded-full", compact ? "px-3" : "px-4")}
+            {...pointerFocusProps}
+            onClick={onSkipPendingUserInput}
+            disabled={pendingAction.isResponding}
+            title="Send an empty response — let the model decide what to do next"
+          >
+            I'd rather not answer
+          </Button>
+        ) : null}
         <Button
           type="submit"
           size="sm"
@@ -172,21 +222,48 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8",
           )}
           {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+          // ru-code: auto-compact fires at turn end — exactly when this UI
+          // shows; blocked like every other send affordance.
+          disabled={
+            isSendBusy ||
+            isSendDisabled ||
+            isConnecting ||
+            isEnvironmentUnavailable ||
+            isCompactingContext
+          }
         >
           {isConnecting || isSendBusy ? "Sending..." : "Refine"}
         </Button>
       );
     }
 
+    // ru-code (M2): when the server still holds a plan_approval Deferred (qwen
+    // only) the primary approves it in-place (`onApproveInSameThread`, no form
+    // submit) instead of starting a fresh turn. With no live Deferred (every
+    // non-qwen provider) `handlerKind` is "new-thread" ⇒ we keep the port's
+    // existing same-thread submit button + new-thread dropdown, byte-identical
+    // to today's behaviour. The label stays "Implement" in both states — the
+    // helper's null-branch label is only consumed by the pure-helper contract
+    // (the port routes new-thread through the dropdown, not the primary label).
+    const isPlanApprovalLive =
+      selectPlanPrimaryAction({ pendingPlanApprovalRequestId }).handlerKind === "same-thread";
+    // ru-code: isCompactingContext — a press mid-compaction was a silent no-op.
+    const planActionsDisabled =
+      isSendBusy ||
+      isSendDisabled ||
+      isConnecting ||
+      isEnvironmentUnavailable ||
+      isCompactingContext;
+
     return (
       <div data-chat-composer-implement-actions="true" className="flex items-center justify-end">
         <Button
-          type="submit"
+          type={isPlanApprovalLive ? "button" : "submit"}
           size="sm"
           className="h-9 rounded-l-full rounded-r-none bg-message-action px-4 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
           {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+          disabled={planActionsDisabled}
+          {...(isPlanApprovalLive ? { onClick: () => onApproveInSameThread() } : {})}
         >
           {isConnecting || isSendBusy ? "Sending..." : "Implement"}
         </Button>
@@ -199,7 +276,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 className="h-9 rounded-l-none rounded-r-full border-l-message-action-foreground/20 bg-message-action px-2 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
                 aria-label="Implementation actions"
                 {...pointerFocusProps}
-                disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+                disabled={planActionsDisabled}
               />
             }
           >
@@ -207,7 +284,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           </MenuTrigger>
           <MenuPopup align="end" side="top">
             <MenuItem
-              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+              disabled={planActionsDisabled}
               onClick={() => void onImplementPlanInNewThread()}
             >
               Implement in a new thread
@@ -232,21 +309,24 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         isSendBusy ||
         isSendDisabled ||
         isConnecting ||
+        isCompactingContext ||
         isEnvironmentUnavailable ||
         !hasSendableContent
       }
       aria-label={
         isEnvironmentUnavailable
           ? "Environment disconnected"
-          : sendDisabledReason
-            ? sendDisabledReason
-            : isConnecting
-              ? "Connecting"
-              : isPreparingWorktree
-                ? "Preparing worktree"
-                : isSendBusy
-                  ? "Sending"
-                  : "Send message"
+          : isCompactingContext
+            ? COMPACTING_CONTEXT_TOOLTIP
+            : sendDisabledReason
+              ? sendDisabledReason
+              : isConnecting
+                ? "Connecting"
+                : isPreparingWorktree
+                  ? "Preparing worktree"
+                  : isSendBusy
+                    ? "Sending"
+                    : "Send message"
       }
     >
       {stageBackdropVariant ? (
@@ -270,8 +350,21 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </button>
   );
 
-  if (!isRunning) {
-    return sendButton;
+  // ru-code (M7): parked-on-user takes precedence over isRunning so the user
+  // gets a Send button (not the red Stop) while CLI holds a permission / plan /
+  // user-input Deferred. When not parked this is byte-identical to `isRunning`.
+  if (!isRunning || isParkedOnUser) {
+    // ru-code: while a compaction runs the button is disabled (pointer-events
+    // none), so the tooltip triggers on a wrapper span, not the button itself.
+    if (!isCompactingContext) {
+      return sendButton;
+    }
+    return (
+      <Tooltip>
+        <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
+        <TooltipPopup side="top">{COMPACTING_CONTEXT_TOOLTIP}</TooltipPopup>
+      </Tooltip>
+    );
   }
 
   return (

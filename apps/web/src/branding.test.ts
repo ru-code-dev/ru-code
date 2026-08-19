@@ -1,4 +1,3 @@
-import { APP_NAME } from "@ru-code/branding";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   resolveServerBackedAppDisplayName,
@@ -48,7 +47,11 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe(`${APP_NAME} (Nightly)`);
+    // ru-code: assert the composed shape from the brand constant, not a hardcoded
+    // product literal (the base name lives only in @ru-code/branding).
+    expect(branding.APP_DISPLAY_NAME).toBe(
+      `${branding.APP_BASE_NAME} (${branding.APP_STAGE_LABEL})`,
+    );
   });
 
   it("does not label the latest hosted app channel", async () => {
@@ -59,7 +62,9 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
-    expect(branding.APP_DISPLAY_NAME).toBe(APP_NAME);
+    // ru-code: assert against the brand constant, not a hardcoded product literal
+    // (matches the composed-shape assertion above; 05 dropped the APP_NAME import).
+    expect(branding.APP_DISPLAY_NAME).toBe(branding.APP_BASE_NAME);
   });
 
   it("ignores unknown hosted app channels", async () => {

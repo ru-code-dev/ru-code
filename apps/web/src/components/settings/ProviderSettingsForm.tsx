@@ -10,6 +10,8 @@ import type {
 } from "@t3tools/contracts";
 
 import { cn } from "../../lib/utils";
+// ru-code: profile-aware placeholder override (empty for the fork profile).
+import { withProfilePlaceholders } from "~/ru-code/cliProfiles/profileForm";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
@@ -281,7 +283,13 @@ export function ProviderSettingsForm({
   variant,
   onChange,
 }: ProviderSettingsFormProps) {
-  const fields = useMemo(() => deriveProviderSettingsFields(definition), [definition]);
+  const fields = useMemo(
+    // ru-code: swap qwen bin/dir placeholders to the active profile's default (empty
+    // for the fork, so an unset field reads "auto-detect").
+    () =>
+      withProfilePlaceholders(deriveProviderSettingsFields(definition), definition.value, value),
+    [definition, value],
+  );
 
   if (fields.length === 0) {
     return null;

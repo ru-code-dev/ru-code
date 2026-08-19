@@ -13,7 +13,7 @@ import {
   checkNodeEngine,
   collectDiagnostics,
   MESSAGES,
-  resolveCli,
+  resolveQwenCli,
 } from "./common/index.ts";
 import type { CheckResult } from "./common/index.ts";
 
@@ -43,7 +43,7 @@ const main = async (): Promise<void> => {
   const tryFindCli = process.env.TRY_TO_FIND_CLI !== "0";
 
   // STEP 1–3 — resolve config dir, cli.js, our install root.
-  const resolution = resolveCli({ tryFindCli });
+  const resolution = resolveQwenCli({ tryFindCli });
   if (!resolution.ok) {
     if (resolution.configDir) writeInfo(`CLI config dir : ${resolution.configDir}`);
     writeError(resolution.reason);

@@ -18,6 +18,16 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
+// ru-code: single-source default-provider instance id.
+import { QWEN_KIND } from "@ru-code/branding";
+import { buildComposerSlashCommandMenuItems } from "../../ru-code/slash-commands/composerSlashMenu"; // ru-code
+import { shouldBlockComposerSend } from "../../ru-code/composer/sendGate"; // ru-code
+import {
+  type ComposerRuntimeMode,
+  RUNTIME_MODE_OPTIONS,
+  resolveRuntimeModeOptions,
+} from "../../ru-code/composer/modeControls"; // ru-code
+import { deriveIsCompactingContext } from "../../ru-code/workLog/contextCompaction"; // ru-code
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
@@ -95,7 +105,6 @@ import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
-import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
@@ -207,11 +216,15 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
-  SparklesIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
-import { getProviderInteractionModeToggle } from "../../providerModels";
+import {
+  getProviderAllowsFullAccess,
+  getProviderInteractionModeToggle,
+} from "../../providerModels";
+// ru-code: pure mode-controls gating (M5/M6), shared + tested.
+import { deriveComposerModeControlsState } from "../../ru-code/composer/planActions";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -227,38 +240,35 @@ import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
+// ru-code: the meter follows the SELECTED model's served window.
+import {
+  applySelectedModelWindow,
+  emptyContextWindowSnapshot,
+  modelContextWindowTokens,
+} from "../../ru-code/tokens-usage/selectedModelContextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 
-const runtimeModeConfig: Record<
-  RuntimeMode,
-  { label: string; description: string; icon: LucideIcon }
-> = {
-  "approval-required": {
-    label: "Supervised",
-    description: "Ask before commands and file changes.",
-    icon: LockIcon,
-  },
-  "auto-accept-edits": {
-    label: "Auto-accept edits",
-    description: "Auto-approve edits, ask before other actions.",
-    icon: PenLineIcon,
-  },
-  auto: {
-    label: "Auto",
-    description: "Supported providers approve routine actions; others still ask.",
-    icon: SparklesIcon,
-  },
-  "full-access": {
-    label: "Full access",
-    description: "Allow commands and edits without prompts.",
-    icon: LockOpenIcon,
-  },
+// ru-code: labels/descriptions/order come from the ONE tested catalog
+// (RUNTIME_MODE_OPTIONS) both composer variants share; only the icons are
+// presentational and stay here. Keyed by ComposerRuntimeMode (the catalog's own 3-mode
+// type, C-05-014 Option A) rather than the full 4-member contracts `RuntimeMode` — "auto"
+// is deliberately not in this menu, so the map does not need (and must not fake) an entry
+// for it.
+const runtimeModeIcons: Record<ComposerRuntimeMode, LucideIcon> = {
+  "approval-required": LockIcon,
+  "auto-accept-edits": PenLineIcon,
+  "full-access": LockOpenIcon,
 };
 
-const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
+const runtimeModeConfig = Object.fromEntries(
+  RUNTIME_MODE_OPTIONS.map((option) => [
+    option.value,
+    { label: option.label, description: option.description, icon: runtimeModeIcons[option.value] },
+  ]),
+) as Record<RuntimeMode, { label: string; description: string; icon: LucideIcon }>;
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -303,10 +313,19 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
+  // ru-code (M6): lock the runtime-mode / plan / interaction controls while a
+  // turn streams. ru-code (M5): additionally lock the full-access option for
+  // providers that forbid it.
+  modeControlsDisabled: boolean;
+  fullAccessDisabled: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
-  const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
+  // ru-code: runtimeModeConfig is built from the 3-entry catalog (ComposerRuntimeMode);
+  // a persisted "auto" thread (RuntimeMode's 4th member, never written by a shipped
+  // driver, but not statically excludable) would otherwise deref to undefined here.
+  const runtimeModeOption =
+    runtimeModeConfig[props.runtimeMode] ?? runtimeModeConfig["approval-required"];
   const RuntimeModeIcon = runtimeModeOption.icon;
   const interactionModeTooltip =
     props.interactionMode === "plan"
@@ -327,6 +346,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                   : "text-secondary-label hover:text-foreground",
               )}
               type="button"
+              disabled={props.modeControlsDisabled}
               onClick={props.onToggleInteractionMode}
               aria-label={interactionModeTooltip}
             />
@@ -353,6 +373,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       <Tooltip>
         <Select
           value={props.runtimeMode}
+          disabled={props.modeControlsDisabled}
           onValueChange={(value) => props.onRuntimeModeChange(value!)}
         >
           <TooltipTrigger
@@ -362,25 +383,33 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             <SelectValue>{runtimeModeOption.label}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
-            {runtimeModeOptions.map((mode) => {
-              const option = runtimeModeConfig[mode];
-              const OptionIcon = option.icon;
-              return (
-                <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
-                      </span>
+            {/* ru-code: full-access locking rides the shared tested resolver. */}
+            {resolveRuntimeModeOptions({ fullAccessDisabled: props.fullAccessDisabled }).map(
+              (option) => {
+                const OptionIcon = runtimeModeIcons[option.value];
+                return (
+                  <SelectItem
+                    key={option.value}
+                    value={option.value}
+                    hideIndicator
+                    className="min-w-64 py-2"
+                    disabled={option.disabled ? true : undefined}
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="grid min-w-0 flex-1 gap-0.5">
+                        <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                          <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          {option.label}
+                        </span>
+                        <span className="text-muted-foreground text-xs leading-4">
+                          {option.description}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </SelectItem>
-              );
-            })}
+                  </SelectItem>
+                );
+              },
+            )}
           </SelectPopup>
         </Select>
         <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
@@ -395,6 +424,10 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeThreadModelDisplayName: string | null;
+  // ru-code: manual context compaction (meter popover button). Null ⇒ the
+  // active thread's provider kind has no hidden-compress affordance.
+  onCompactContext: (() => void) | null;
+  compactContextDisabled: boolean;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -404,18 +437,25 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  // ru-code (M7/M8/M2): parked state + skip + same-thread plan approve.
+  isParkedOnUser: boolean;
+  pendingPlanApprovalRequestId: ApprovalRequestId | null;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
   sendDisabledReason: string | null;
   isConnecting: boolean;
+  // ru-code: hidden compaction blocks send (tooltip "Compacting the context…").
+  isCompactingContext: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   showSendWhileRunning?: boolean;
   onPreviousPendingQuestion: () => void;
+  onSkipPendingUserInput: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  onApproveInSameThread: () => void;
 }) {
   return (
     <>
@@ -423,6 +463,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         <ContextWindowMeter
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
+          onCompactContext={props.onCompactContext}
+          compactDisabled={props.compactContextDisabled}
         />
       ) : null}
       {props.isPreparingWorktree ? (
@@ -432,19 +474,24 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        isParkedOnUser={props.isParkedOnUser}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
         sendDisabledReason={props.sendDisabledReason}
         isConnecting={props.isConnecting}
+        isCompactingContext={props.isCompactingContext}
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         showSendWhileRunning={props.showSendWhileRunning ?? false}
+        pendingPlanApprovalRequestId={props.pendingPlanApprovalRequestId}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
+        onSkipPendingUserInput={props.onSkipPendingUserInput}
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
+        onApproveInSameThread={props.onApproveInSameThread}
       />
     </>
   );
@@ -575,16 +622,25 @@ export interface ChatComposerProps {
   composerElementContextsRef: React.RefObject<ElementContextDraft[]>;
   composerRef: React.RefObject<ChatComposerHandle | null>;
 
+  // ru-code (M2): live plan_approval requestId + same-thread approve handler.
+  pendingPlanApprovalRequestId: ApprovalRequestId | null;
+
   // Callbacks
   onSend: (e?: { preventDefault: () => void }) => void;
   onInterrupt: () => void;
+  // ru-code: manual context compaction (meter popover) — dispatches the hidden
+  // `/compress` command for the active thread.
+  onCompactContext: () => void;
   onImplementPlanInNewThread: () => void;
+  onApproveInSameThread: () => void;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<unknown>;
   onSelectActivePendingUserInputOption: (questionId: string, optionLabel: string) => void;
   onAdvanceActivePendingUserInput: () => void;
+  // ru-code (M8): submit an empty answer to the active pending user-input.
+  onSkipActivePendingUserInput: () => void;
   onPreviousActivePendingUserInputQuestion: () => void;
   onChangeActivePendingUserInputCustomAnswer: (
     questionId: string,
@@ -658,12 +714,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerImagesRef,
     composerTerminalContextsRef,
     composerElementContextsRef,
+    pendingPlanApprovalRequestId,
     onSend,
     onInterrupt,
     onImplementPlanInNewThread,
+    onApproveInSameThread,
+    onCompactContext,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
     onAdvanceActivePendingUserInput,
+    onSkipActivePendingUserInput,
     onPreviousActivePendingUserInputQuestion,
     onChangeActivePendingUserInputCustomAnswer,
     onProviderModelSelect,
@@ -804,6 +864,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return match.instanceId;
       }
     }
+    if (explicitSelectedInstanceId) {
+      // ru-code: only honor a persisted/explicit instance id when it is enabled.
+      // A disabled default (e.g. `codex` while codex is off) must fall
+      // through to the first-enabled fallback below rather than pinning the
+      // composer to a provider the user cannot select.
+      const enabledExplicit = providerInstanceEntries.find(
+        (entry) => entry.instanceId === explicitSelectedInstanceId && entry.enabled,
+      );
+      if (enabledExplicit) return enabledExplicit.instanceId;
+    }
     const compatibleEntries = providerInstanceEntries.filter(
       (entry) =>
         (!lockedProvider || entry.driverKind === lockedProvider) &&
@@ -920,6 +990,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByInstance, selectedInstanceId, selectedModelForPicker, selectedProvider]);
+  // ru-code: the SELECTED model's served window (null when the provider
+  // doesn't report one, or for "Default model" with no served options).
+  const selectedModelContextWindow = useMemo(() => {
+    const currentOptions = modelOptionsByInstance.get(selectedInstanceId) ?? [];
+    const selectedOption = currentOptions.find(
+      (option) => option.slug === selectedModelForPickerWithCustomFallback,
+    );
+    return modelContextWindowTokens(selectedOption);
+  }, [modelOptionsByInstance, selectedInstanceId, selectedModelForPickerWithCustomFallback]);
 
   // ------------------------------------------------------------------
   // Context window
@@ -933,6 +1012,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [activeThreadModelSelection, modelOptionsByInstance],
   );
 
+  // ru-code: METER-ONLY snapshot view — maxTokens swapped to the selected
+  // model's window so the ring re-computes the moment the model changes.
+  // Every other consumer keeps the raw history snapshot. With NO usage history
+  // (a draft, or a thread before its first turn) the meter still renders
+  // immediately at 0 / <selected model window>.
+  const meterContextWindow = useMemo(
+    () =>
+      applySelectedModelWindow(activeContextWindow, selectedModelContextWindow) ??
+      emptyContextWindowSnapshot(selectedModelContextWindow),
+    [activeContextWindow, selectedModelContextWindow],
+  );
+  // ru-code: send + "Compact context" stay blocked while a hidden compaction runs.
+  const isCompactingContext = useMemo(
+    () => deriveIsCompactingContext(activeThreadActivities ?? []),
+    [activeThreadActivities],
+  );
+  const activeThreadProviderEntry = useMemo(
+    () =>
+      activeThreadModelSelection
+        ? (providerStatuses.find(
+            (status) => status.instanceId === activeThreadModelSelection.instanceId,
+          ) ?? null)
+        : null,
+    [providerStatuses, activeThreadModelSelection],
+  );
   // ------------------------------------------------------------------
   // Composer-local state
   // ------------------------------------------------------------------
@@ -1045,49 +1149,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }));
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = [
-        {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: "Switch response model for this thread",
-        },
-        ...(planModeUiEnabled
-          ? ([
-              {
-                id: "slash:plan",
-                type: "slash-command",
-                command: "plan",
-                label: "/plan",
-                description: "Switch this thread into plan mode",
-              },
-              {
-                id: "slash:default",
-                type: "slash-command",
-                command: "default",
-                label: "/default",
-                description: "Switch this thread back to normal build mode",
-              },
-            ] as const)
-          : []),
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const providerSlashCommandItems = (selectedProviderStatus?.slashCommands ?? []).map(
-        (command) => ({
-          id: `provider-slash-command:${selectedProvider}:${command.name}`,
-          type: "provider-slash-command" as const,
-          provider: selectedProvider,
-          command,
-          label: `/${command.name}`,
-          description: command.description ?? command.input?.hint ?? "Run provider command",
-        }),
-      );
-      const query = composerTrigger.query.trim().toLowerCase();
-      const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
-      if (!query) {
-        return slashCommandItems;
-      }
-      return searchSlashCommandItems(slashCommandItems, query);
+      // ru-code: the whole `/` menu (built-ins + qwen + provider + search) is
+      // one tested composite.
+      return buildComposerSlashCommandMenuItems({
+        selectedProvider,
+        providerSlashCommands: selectedProviderStatus?.slashCommands ?? [],
+        query: composerTrigger.query,
+        // ru-code: /compress is offered disabled while composing a draft.
+        isDraftThread: routeKind === "draft",
+        planModeEnabled: planModeUiEnabled,
+      });
     }
     if (composerTrigger.kind === "skill") {
       return searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
@@ -1108,6 +1179,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [
     composerTrigger,
     planModeUiEnabled,
+    routeKind,
     selectedProvider,
     selectedProviderStatus,
     workspaceEntries.entries,
@@ -1239,15 +1311,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
+  // ru-code: same shared send gate ChatView.onSend consults.
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
-    isSendBusy ||
-    isSendDisabled ||
-    isConnecting ||
-    noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
-    !composerSendState.hasSendableContent;
+    shouldBlockComposerSend({
+      isRunningTurn: phase === "running",
+      isSendBusy,
+      isSendDisabled,
+      isConnecting,
+      isCompactingContext,
+      noProviderAvailable,
+      isEnvironmentUnavailable: environmentUnavailable !== null,
+      hasSendableContent: composerSendState.hasSendableContent,
+    });
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
@@ -1681,6 +1757,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
+      // ru-code: disabled picker items (e.g. /compress in a draft) never apply —
+      // covers the Enter path; the menu item blocks the click path itself.
+      if (item.type === "provider-slash-command" && item.disabled === true) return;
       if (composerSelectLockRef.current) return;
       composerSelectLockRef.current = true;
       window.requestAnimationFrame(() => {
@@ -2493,6 +2572,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
     void onImplementPlanInNewThread();
   }, [onImplementPlanInNewThread]);
+  // ru-code (M2): approve the held plan_approval Deferred in the same thread.
+  const handleApproveInSameThreadPrimaryAction = useCallback(() => {
+    void onApproveInSameThread();
+  }, [onApproveInSameThread]);
+  // ru-code (M7): the session is parked waiting on the user (a held approval or
+  // user-input question) while phase stays "running". Suppresses the red Stop
+  // so the user can queue a follow-up; never true for a genuinely streaming
+  // turn, so non-parked rendering is unchanged.
+  const isParkedOnUser = pendingApprovals.length > 0 || pendingUserInputs.length > 0;
+  // ru-code: manual compaction is a CLI-kind affordance (hidden `/compress`).
+  // The handler is offered only for qwen-kind threads (any profile) and is
+  // disabled while the serial session is busy or parked.
+  // In a draft there is no active thread entry yet — gate on the SELECTED kind
+  // so the popover still shows the (disabled) Compact button.
+  const compactContextHandler =
+    activeThreadProviderEntry?.driver === QWEN_KIND ||
+    (routeKind === "draft" && selectedProvider === QWEN_KIND)
+      ? onCompactContext
+      : null;
+  const compactContextDisabled =
+    phase === "running" ||
+    isSendBusy ||
+    isConnecting ||
+    isParkedOnUser ||
+    isCompactingContext ||
+    // ru-code: a draft has no thread — nothing to compact yet.
+    routeKind === "draft";
+  // ru-code (M5/M6): lock the mode controls while a turn streams (phase running)
+  // and lock the full-access option for providers that forbid it. Both default
+  // to today's behaviour (enabled / allowed) for every non-qwen provider.
+  const { modeControlsDisabled, fullAccessDisabled } = deriveComposerModeControlsState({
+    phase,
+    allowsFullAccess: getProviderAllowsFullAccess(providerStatuses, selectedProvider),
+  });
   const scheduleComposerCollapseCheck = useCallback(() => {
     if (!isMobileViewport) {
       return;
@@ -2806,6 +2919,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       compact
                       pendingAction={pendingPrimaryAction}
                       isRunning={false}
+                      isParkedOnUser={false}
                       showPlanFollowUpPrompt={false}
                       promptHasText={false}
                       isSendBusy={isSendBusy}
@@ -2819,9 +2933,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       isPreparingWorktree={false}
                       hasSendableContent={false}
                       preserveComposerFocusOnPointerDown
+                      pendingPlanApprovalRequestId={null}
                       onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                      onSkipPendingUserInput={onSkipActivePendingUserInput}
                       onInterrupt={handleInterruptPrimaryAction}
                       onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                      onApproveInSameThread={handleApproveInSameThreadPrimaryAction}
                     />
                   ) : null}
                 </div>
@@ -3089,6 +3206,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact
                     pendingAction={pendingPrimaryAction}
                     isRunning={false}
+                    isParkedOnUser={false}
                     showPlanFollowUpPrompt={false}
                     promptHasText={false}
                     isSendBusy={isSendBusy}
@@ -3102,9 +3220,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isPreparingWorktree={false}
                     hasSendableContent={false}
                     preserveComposerFocusOnPointerDown
+                    pendingPlanApprovalRequestId={null}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                    onSkipPendingUserInput={onSkipActivePendingUserInput}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                    onApproveInSameThread={handleApproveInSameThreadPrimaryAction}
                   />
                 </div>
               ) : null}
@@ -3159,6 +3280,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     keybindings={keybindings}
                     modelOptionsByInstance={modelOptionsByInstance}
                     triggerClassName="-ms-2.5"
+                    // ru-code: raw history usage feeds the picker's capacity gate.
+                    usedTokens={activeContextWindow?.usedTokens ?? null}
                     terminalOpen={terminalOpen}
                     open={isComposerModelPickerOpen}
                     {...(composerProviderState.modelPickerIconClassName
@@ -3181,6 +3304,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
+                    modeControlsDisabled={modeControlsDisabled}
+                    fullAccessDisabled={fullAccessDisabled}
                     onToggleInteractionMode={toggleInteractionMode}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
@@ -3196,6 +3321,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       interactionMode={interactionMode}
                       runtimeMode={runtimeMode}
+                      modeControlsDisabled={modeControlsDisabled}
+                      fullAccessDisabled={fullAccessDisabled}
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />
@@ -3213,15 +3340,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
-                  activeContextWindow={activeContextWindow}
+                  // ru-code: meter reads the selected-model-window view.
+                  activeContextWindow={meterContextWindow}
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
+                  onCompactContext={compactContextHandler}
+                  compactContextDisabled={compactContextDisabled}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
+                  isParkedOnUser={isParkedOnUser}
+                  pendingPlanApprovalRequestId={pendingPlanApprovalRequestId}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}
                   sendDisabledReason={sendDisabledReason}
                   isConnecting={isConnecting}
+                  isCompactingContext={isCompactingContext}
                   isEnvironmentUnavailable={
                     environmentUnavailable !== null ||
                     noProviderAvailable ||
@@ -3232,8 +3365,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   showSendWhileRunning={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                  onSkipPendingUserInput={onSkipActivePendingUserInput}
                   onInterrupt={handleInterruptPrimaryAction}
                   onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                  onApproveInSameThread={handleApproveInSameThreadPrimaryAction}
                 />
               </div>
             </div>

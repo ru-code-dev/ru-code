@@ -1,6 +1,4 @@
 import {
-  DEFAULT_MODEL,
-  DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   type ModelCapabilities,
@@ -8,12 +6,16 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { seedModelForDriver } from "~/ru-code/modelPicker/seedModelForDriver"; // ru-code
 import { createModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
+// ru-code: single-source default-provider instance id.
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+// ru-code: default driver kind derived from the single-source default-provider instance id.
+const DEFAULT_DRIVER_KIND = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID);
 
 export function formatProviderDriverKindLabel(provider: ProviderDriverKind): string {
   return provider
@@ -51,6 +53,16 @@ export function getProviderInteractionModeToggle(
   provider: ProviderDriverKind,
 ): boolean {
   return getProviderSnapshot(providers, provider)?.showInteractionModeToggle ?? true;
+}
+
+// ru-code: whether the provider permits the "full-access" runtime mode. Absent
+// ⇒ true (today's behaviour for every provider); qwen stamps `false` so the UI
+// locks the full-access option (M5).
+export function getProviderAllowsFullAccess(
+  providers: ReadonlyArray<ServerProvider>,
+  provider: ProviderDriverKind,
+): boolean {
+  return getProviderSnapshot(providers, provider)?.allowsFullAccess ?? true;
 }
 
 export function isProviderEnabled(
@@ -91,11 +103,13 @@ export function getDefaultServerModel(
   provider: ProviderDriverKind,
 ): string {
   const models = getProviderModels(providers, provider);
+  // ru-code: the terminal fallback is the shared seed rule — providers with
+  // no registered default (qwen) resolve to "" (CLI-defaults mode), never to
+  // a foreign hardcoded slug.
   return (
     models.find((model) => model.isDefault && !model.isCustom)?.slug ??
     models.find((model) => !model.isCustom)?.slug ??
     models[0]?.slug ??
-    DEFAULT_MODEL_BY_PROVIDER[provider] ??
-    DEFAULT_MODEL
+    seedModelForDriver(provider)
   );
 }

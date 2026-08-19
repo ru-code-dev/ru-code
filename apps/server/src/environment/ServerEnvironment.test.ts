@@ -54,6 +54,9 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     otlpServiceName: "t3-server",
     cwd: process.cwd(),
     baseDir,
+    cliJs: `${baseDir}/cli.js`, // ru-code
+    cliConfigDir: baseDir, // ru-code
+    cliDetected: true, // ru-code
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,

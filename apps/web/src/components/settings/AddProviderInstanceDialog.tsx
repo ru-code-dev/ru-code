@@ -29,6 +29,19 @@ import { RadioGroup } from "../ui/radio-group";
 import { toastManager } from "../ui/toast";
 import { DRIVER_OPTION_BY_VALUE, DRIVER_OPTIONS } from "./providerDriverMeta";
 import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSettingsForm";
+// ru-code: brand-profile picker (custom fork vs stock qwen) for the new instance.
+import { DEFAULT_CLI_PROFILE_ID, DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
+import { CliProfileSelect } from "~/ru-code/cliProfiles/CliProfileSelect";
+// ru-code: disabled drivers rendered as non-selectable "On request" cards.
+import {
+  ON_REQUEST_BADGE_LABEL,
+  ON_REQUEST_DRIVER_OPTIONS,
+} from "~/ru-code/provider-catalog/onRequestDrivers";
+import {
+  isCliProfileDriver,
+  rawProfileId,
+  writeProfile,
+} from "~/ru-code/cliProfiles/profileConfig";
 import { AnimatedHeight } from "../AnimatedHeight";
 import {
   ADD_PROVIDER_WIZARD_STEPS,
@@ -68,7 +81,8 @@ function deriveInstanceId(driver: ProviderDriverKind, label: string): string {
 }
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+// ru-code: default driver kind derived from the single-source default-provider instance id.
+const DEFAULT_DRIVER_KIND = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID);
 const DEFAULT_DRIVER_OPTION = DRIVER_OPTIONS[0]!;
 const EMPTY_CONFIG_DRAFT: Record<string, unknown> = {};
 interface ComingSoonDriverOption {
@@ -191,7 +205,15 @@ export function AddProviderInstanceDialog({
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null) return;
 
-    const config = configByDriver[driver] ?? {};
+    // ru-code: a NEW qwen instance carries the wizard's profile — the dropdown choice,
+    // or the default profile (`custom`) when untouched — so the created instance
+    // matches what the dropdown showed. One source of truth (@ru-code/branding).
+    const config = isCliProfileDriver(driver)
+      ? writeProfile(
+          configByDriver[driver] ?? {},
+          rawProfileId(configByDriver[driver]) ?? DEFAULT_CLI_PROFILE_ID,
+        )
+      : (configByDriver[driver] ?? {});
     const hasConfig = Object.keys(config).length > 0;
     const normalizedAccentColor = normalizeProviderAccentColor(accentColor);
 
@@ -236,7 +258,7 @@ export function AddProviderInstanceDialog({
             <DialogTitle>Add provider instance</DialogTitle>
             <DialogDescription>
               Configure an additional provider instance on {environmentLabel} — for example, a
-              second Codex install pointed at a different workspace.
+              second CLI install pointed at a different workspace.
             </DialogDescription>
             <AddProviderInstanceWizardSteps
               currentStep={wizardStep}
@@ -284,6 +306,33 @@ export function AddProviderInstanceDialog({
                             {option.badgeLabel}
                           </Badge>
                         ) : null}
+                      </RadioPrimitive.Root>
+                    );
+                  })}
+                  {/* ru-code: disabled drivers as non-selectable "On request"
+                      cards — same treatment as Coming Soon (see
+                      ru-code/provider-catalog/onRequestDrivers.ts). */}
+                  {ON_REQUEST_DRIVER_OPTIONS.map((option) => {
+                    const IconComponent = option.icon;
+                    return (
+                      <RadioPrimitive.Root
+                        key={option.value}
+                        value={option.value}
+                        disabled
+                        className={cn(
+                          "relative flex cursor-not-allowed items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-left opacity-55 outline-none",
+                        )}
+                      >
+                        <IconComponent
+                          className="size-5 shrink-0 text-muted-foreground"
+                          aria-hidden
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                          {option.label}
+                        </span>
+                        <Badge variant="warning" size="sm">
+                          {ON_REQUEST_BADGE_LABEL}
+                        </Badge>
                       </RadioPrimitive.Root>
                     );
                   })}
@@ -396,6 +445,13 @@ export function AddProviderInstanceDialog({
 
               {driverSettingsFields.length > 0 ? (
                 <div className={cn("grid gap-4", wizardStep !== 2 && "hidden")}>
+                  {/* ru-code: choose the CLI brand profile for this new qwen instance. */}
+                  {isCliProfileDriver(driver) ? (
+                    <CliProfileSelect
+                      value={rawProfileId(configDraft) ?? DEFAULT_CLI_PROFILE_ID}
+                      onChange={(id) => setConfigDraft(writeProfile(configDraft, id))}
+                    />
+                  ) : null}
                   <ProviderSettingsForm
                     definition={driverOption}
                     value={configDraft}

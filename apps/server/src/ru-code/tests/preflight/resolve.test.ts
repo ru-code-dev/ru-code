@@ -1,4 +1,4 @@
-// ru-code: focused coverage of the pure `resolveCli` state machine. The
+// ru-code: focused coverage of the pure `resolveQwenCli` state machine. The
 // resolver reads the real filesystem via `node:fs`, so to stay deterministic we
 // pin `os.homedir()` at an ISOLATED temp dir (homedir() honours $HOME on POSIX)
 // and only assert the `ok:false` STOP shapes that are reachable without any real
@@ -13,9 +13,9 @@ import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { MESSAGES } from "../../preflight/common/messages.ts";
-import { resolveCli } from "../../preflight/common/resolve.ts";
+import { resolveQwenCli } from "../../preflight/common/resolve.ts";
 
-const CONFIG_DIRNAME = ".qwen"; // CLI_DIR = CLI_DIRNAME = ".qwen"
+const CONFIG_DIRNAME = ".qwen"; // CLI_DIR = PREFLIGHT_CLI_PROBE_DIRNAME = ".qwen"
 
 let tempHome = "";
 let savedHome: string | undefined;
@@ -37,10 +37,10 @@ afterEach(() => {
   NodeFS.rmSync(tempHome, { recursive: true, force: true });
 });
 
-describe("resolveCli — ok:false STOP shapes", () => {
+describe("resolveQwenCli — ok:false STOP shapes", () => {
   it("config dir missing → CONFIG_NOT_FOUND with probed paths", () => {
     // tempHome has no `.qwen` subdir → CONFIG[platformKey] never matches.
-    const result = resolveCli({ platform: "linux", env: {} });
+    const result = resolveQwenCli({ platform: "linux", env: {} });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe(MESSAGES.CONFIG_NOT_FOUND);
@@ -51,7 +51,7 @@ describe("resolveCli — ok:false STOP shapes", () => {
   it("config present, no cli.js, TRY_TO_FIND_CLI off → CLI_NOT_FOUND fallback STOP", () => {
     // Create only the config dir: no bin/cli.js, no .install-dir record.
     NodeFS.mkdirSync(NodePath.join(tempHome, CONFIG_DIRNAME), { recursive: true });
-    const result = resolveCli({ platform: "linux", env: {}, tryFindCli: false });
+    const result = resolveQwenCli({ platform: "linux", env: {}, tryFindCli: false });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe(MESSAGES.CLI_NOT_FOUND);

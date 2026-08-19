@@ -127,6 +127,9 @@ peerDependencyRules:
     vite: "*"
 
 supportedArchitectures:
-  cpu: [current, x64]
+  # ru-code: darwin + arm64 added so ONE shared node_modules (the same checkout
+  # is used from macOS and the OrbStack linux VM) carries BOTH platforms'
+  # native binaries — no more purge/reinstall flip on every machine switch.
+  cpu: [current, x64, arm64]
   libc: [current, glibc]
-  os: [current, linux]
+  os: [current, linux, darwin]

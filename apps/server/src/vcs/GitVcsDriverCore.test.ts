@@ -15,6 +15,8 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
+// ru-code: raw-UTF-8-paths seam rides every git invocation — see ru-code/vcs/rawUtf8Paths.ts
+import { withoutRawUtf8Paths } from "../ru-code/vcs/rawUtf8Paths.ts";
 import { ServerConfig } from "../config.ts";
 import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -159,11 +161,19 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     yield* driver.statusDetailsRemote(cwd, { refreshUpstream: false });
     yield* driver.listRefs({ cwd });
 
-    assert.deepStrictEqual(commands, [
-      { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
-      { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
-      { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
-    ]);
+    // ru-code: the git funnel prepends the raw-UTF-8-paths flags to every
+    // invocation — strip them so this stays an assertion about the subcommand.
+    assert.deepStrictEqual(
+      commands.map((command) => ({
+        ...command,
+        args: withoutRawUtf8Paths(command.args),
+      })),
+      [
+        { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
+        { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
+        { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
+      ],
+    );
   }).pipe(Effect.provide(layer));
 });
 
@@ -235,10 +245,11 @@ it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
             yield* Effect.sleep("8 seconds");
           }
           const handle = yield* delegate.spawn(command);
+          // ru-code: match on the subcommand, not on the raw-UTF-8-paths
+          // funnel's prefixed array — see rawUtf8Paths.ts.
+          const rawArgs = withoutRawUtf8Paths(command.args);
           const isRemoteNamesScan =
-            command.args.length === 3 &&
-            command.args[0] === "--git-dir" &&
-            command.args[2] === "remote";
+            rawArgs.length === 3 && rawArgs[0] === "--git-dir" && rawArgs[2] === "remote";
           return isRemoteNamesScan
             ? ChildProcessSpawner.makeHandle({
                 ...handle,
@@ -392,7 +403,10 @@ it.effect("invalidates a ref snapshot when a mutation fails after changing Git",
           if (!ChildProcess.isStandardCommand(command)) {
             return yield* Effect.die("expected a standard Git command");
           }
-          if (command.args[0] === "branch" && command.args[1] === "feature/partial-failure") {
+          // ru-code: match on the subcommand, not on the raw-UTF-8-paths
+          // funnel's prefixed array — see rawUtf8Paths.ts.
+          const rawArgs = withoutRawUtf8Paths(command.args);
+          if (rawArgs[0] === "branch" && rawArgs[1] === "feature/partial-failure") {
             const handle = yield* delegate.spawn(command);
             yield* handle.exitCode;
             return makeNonRepositoryHandle();
@@ -1617,7 +1631,10 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const pushStarted = yield* Deferred.make<void>();
         const delayedPushSpawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
-            if (ChildProcess.isStandardCommand(command) && command.args[0] === "push") {
+            // ru-code: match on the subcommand, not on the raw-UTF-8-paths
+            // funnel's prefixed array — see rawUtf8Paths.ts.
+            const rawArgs = withoutRawUtf8Paths(command.args);
+            if (ChildProcess.isStandardCommand(command) && rawArgs[0] === "push") {
               yield* Deferred.succeed(pushStarted, undefined);
               yield* Effect.sleep("31 seconds");
             }

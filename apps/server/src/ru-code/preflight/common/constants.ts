@@ -1,10 +1,10 @@
 // Single source of truth for preflight constants. The bash installer no longer
 // mirrors any of this — it delegates to this module via node.
 
-import { APP_COMMAND, APP_HOME_DIRNAME, CLI_DIRNAME } from "@ru-code/branding";
+import { APP_COMMAND, APP_HOME_DIRNAME, PREFLIGHT_CLI_PROBE_DIRNAME } from "@ru-code/branding";
 
 /** CLI config dir name, e.g. ".qwen". */
-export const CLI_DIR = CLI_DIRNAME;
+export const CLI_DIR = PREFLIGHT_CLI_PROBE_DIRNAME;
 /** Our app home dir name, e.g. ".ru-code". */
 export const APP_DIR = APP_HOME_DIRNAME;
 /** Our app command / wrapper name, e.g. "ru-code". */

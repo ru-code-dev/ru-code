@@ -54,6 +54,10 @@ import {
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
+// ru-code: for authoritative (qwen) snapshots, a healthy report is the FULL
+// current model set — a slug it drops was removed, not merely un-relisted.
+// See ru-code/qwen/modelsAuthoritative.ts and mergeProviderModels below.
+import { isModelsAuthoritative } from "../../ru-code/qwen/modelsAuthoritative.ts";
 
 const loadProviders = (
   providerSources: ReadonlyArray<ProviderSnapshotSource>,
@@ -100,7 +104,13 @@ const mergeProviderModels = (
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
-  const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
+  // ru-code: qwen snapshots are the FULL current set — never carry absent
+  // slugs forward, except when the report is empty (probe/error, not a real
+  // clear). Other drivers keep t3's confidence gate untouched. (decisions.md
+  // row 23 — corrected composition for row 14's recorded behaviour.)
+  const shouldRetainMissingModels = isModelsAuthoritative(provider.driver)
+    ? nextModels.length === 0
+    : shouldRetainMissingProviderModels(provider);
 
   if (shouldRetainMissingModels && nextModels.length === 0 && previousModels.length > 0) {
     return previousModels;

@@ -1,6 +1,5 @@
 import {
   type ApprovalRequestId,
-  DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
@@ -22,6 +21,16 @@ import {
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
+import { seedModelForDriver } from "../ru-code/modelPicker/seedModelForDriver"; // ru-code
+import {
+  deriveRevertTurnCountByUserMessageId,
+  deriveTurnDiffSummaryByAssistantMessageId,
+} from "../ru-code/chat/turnDiffAttachment"; // ru-code
+// ru-code: single-source default provider/model constants.
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
+import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashCommands"; // ru-code
+import { shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
+import { deriveIsCompactingContext } from "../ru-code/workLog/contextCompaction"; // ru-code
 import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
@@ -115,7 +124,6 @@ import {
   type ChatMessage,
   type SessionPhase,
   type Thread,
-  type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -191,6 +199,12 @@ import {
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+// ru-code (M2/M8): pure runtime-mode → approval-decision mapping + skip guard.
+import {
+  decisionFromRuntimeMode,
+  shouldFlipComposerToCodeAfterApprovalResponse,
+  skipPendingUserInput,
+} from "../ru-code/composer/planActions";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { preventRepeatedTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
@@ -1233,6 +1247,10 @@ function ChatViewContent(props: ChatViewProps) {
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  // ru-code: hidden context compaction (meter button).
+  const compactThreadContext = useAtomCommand(threadEnvironment.compactContext, {
+    reportFailure: false,
+  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -2210,11 +2228,20 @@ function ChatViewContent(props: ChatViewProps) {
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
-    selectedProviderByThreadId ?? threadProvider,
+    // ru-code: seed with the single-source default kind; resolveSelectableProvider still
+    // falls back to the first enabled provider when the default isn't enabled.
+    selectedProviderByThreadId ??
+      threadProvider ??
+      ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  // ru-code: block send/"Compact context" while a hidden compaction runs.
+  const isCompactingContext = useMemo(
+    () => deriveIsCompactingContext(threadActivities),
+    [threadActivities],
+  );
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
@@ -2304,6 +2331,34 @@ function ChatViewContent(props: ChatViewProps) {
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
+  // ru-code: qwen exit_plan_mode arrives as a held approval whose runtime event
+  // carries requestType "plan_approval". The session.status stays "running"
+  // during the held-open RPC, but the model isn't streaming — surfacing it lets
+  // us flip the composer to plan mode and silence the working spinner. Derived
+  // from LIVE pending-approval state (the port has no plan-approval projection).
+  const hasPendingPlanApproval = activePendingApproval?.requestType === "plan_approval";
+  // ru-code (M2): live requestId for the server-held plan_approval Deferred, or
+  // null when no plan approval is parked (every non-qwen provider ⇒ always
+  // null ⇒ the composer keeps its new-thread / same-thread submit behaviour).
+  const planApprovalRequestId =
+    activePendingApproval?.requestType === "plan_approval" ? activePendingApproval.requestId : null;
+  // ru-code: auto-flip composer mode → "plan" when a plan approval lands while
+  // the user is still in default mode. Edge-triggered (false → true) via a ref,
+  // not predicate-based: predicate-based would fight the post-approve reset to
+  // "default" during the window where hasPendingPlanApproval is still true.
+  const prevHasPendingPlanApprovalRef = useRef(false);
+  useEffect(() => {
+    const wasParked = prevHasPendingPlanApprovalRef.current;
+    prevHasPendingPlanApprovalRef.current = hasPendingPlanApproval;
+    if (!wasParked && hasPendingPlanApproval && interactionMode === "default") {
+      setComposerDraftInteractionMode(composerDraftTarget, "plan");
+    }
+  }, [
+    hasPendingPlanApproval,
+    interactionMode,
+    composerDraftTarget,
+    setComposerDraftInteractionMode,
+  ]);
   const {
     beginLocalDispatch,
     resetLocalDispatch,
@@ -2318,7 +2373,11 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const isWorking =
+    // ru-code: suppress the "Working" spinner/timer while a qwen plan approval
+    // is parked — the held-open RPC keeps phase "running" but nothing streams.
+    (phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint) &&
+    !hasPendingPlanApproval;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -2586,46 +2645,20 @@ function ChatViewContent(props: ChatViewProps) {
   ] = useDraftHeroLayoutTransition(isDraftHeroState);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const byMessageId = new Map<MessageId, TurnDiffSummary>();
-    for (const summary of turnDiffSummaries) {
-      if (!summary.assistantMessageId) continue;
-      byMessageId.set(summary.assistantMessageId, summary);
-    }
-    return byMessageId;
-  }, [turnDiffSummaries]);
-  const revertTurnCountByUserMessageId = useMemo(() => {
-    const byUserMessageId = new Map<MessageId, number>();
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
-        continue;
-      }
-
-      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
-        const nextEntry = timelineEntries[nextIndex];
-        if (!nextEntry || nextEntry.kind !== "message") {
-          continue;
-        }
-        if (nextEntry.message.role === "user") {
-          break;
-        }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
-          continue;
-        }
-        const turnCount =
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
-        if (typeof turnCount !== "number") {
-          break;
-        }
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
-        break;
-      }
-    }
-
-    return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  // ru-code: extracted to ru-code/chat/turnDiffAttachment.ts (testable seam).
+  const turnDiffSummaryByAssistantMessageId = useMemo(
+    () => deriveTurnDiffSummaryByAssistantMessageId(turnDiffSummaries, timelineEntries),
+    [timelineEntries, turnDiffSummaries],
+  );
+  const revertTurnCountByUserMessageId = useMemo(
+    () =>
+      deriveRevertTurnCountByUserMessageId({
+        timelineEntries,
+        turnDiffSummaryByAssistantMessageId,
+        inferredCheckpointTurnCountByTurnId,
+      }),
+    [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId],
+  );
 
   const gitCwd = activeProject
     ? projectScriptCwd({
@@ -4924,12 +4957,22 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     };
+    if (!activeThread) {
+      notifyDirectAnnotationAttached();
+      return;
+    }
+    // ru-code: shared send gate — the same predicate the collapsed-mobile
+    // button renders from, so a blocking signal can't be wired into one entry
+    // point and forgotten in the other.
     if (
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      threadDetailLoading ||
-      sendInFlightRef.current
+      shouldBlockComposerSend({
+        isSendBusy,
+        isConnecting,
+        isCompactingContext,
+        isEnvironmentUnavailable: activeEnvironmentUnavailable,
+        sendInFlight: sendInFlightRef.current,
+        threadDetailLoading,
+      })
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -4989,7 +5032,31 @@ function ChatViewContent(props: ChatViewProps) {
             },
           ]
         : sendContextPreviewAnnotations;
-    const promptForSend = promptRef.current;
+    let promptForSend = promptRef.current;
+    // ru-code: qwen-kind submit guard — an out-of-allowlist leading `/command`
+    // makes qwen throw a raw -32603 (Session.ts:1057-1061). The whole decision
+    // (pass / strip / abort-keeping-the-text) lives in resolveQwenSubmitPrompt.
+    const qwenSubmitDecision = resolveQwenSubmitPrompt({
+      selectedProvider: ctxSelectedProvider,
+      prompt: promptForSend,
+      hasNonTextContent:
+        composerImages.length > 0 ||
+        composerTerminalContexts.length > 0 ||
+        composerElementContexts.length > 0 ||
+        composerPreviewAnnotations.length > 0 ||
+        composerReviewComments.length > 0,
+    });
+    if (qwenSubmitDecision.action === "abort") return;
+    // ru-code: a bare `/compress` routes to the SAME hidden compaction flow as
+    // the meter button — never a regular user turn (see qwenSlashCommands.ts).
+    if (qwenSubmitDecision.action === "compact") {
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      void onCompactContext();
+      return;
+    }
+    promptForSend = qwenSubmitDecision.prompt;
     const {
       trimmedPrompt: trimmed,
       sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -5221,7 +5288,10 @@ function ChatViewContent(props: ChatViewProps) {
     const title = truncate(titleSeed);
     const threadCreateModelSelection = createModelSelection(
       ctxSelectedModelSelection.instanceId,
-      ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
+      // ru-code: never reseed a phantom slug — empty means CLI defaults.
+      ctxSelectedModel ||
+        activeProject.defaultModelSelection?.model ||
+        seedModelForDriver(ctxSelectedProvider),
       ctxSelectedModelSelection.options,
     );
 
@@ -5388,6 +5458,24 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  // ru-code: hidden context compaction (meter "Compact context" button) — no
+  // user message; the server reports the outcome via timeline rows and the
+  // meter update. Failures land on the thread error banner.
+  const onCompactContext = async () => {
+    if (!activeThread) return;
+    const result = await compactThreadContext({
+      environmentId,
+      input: { threadId: activeThread.id },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Could not compact the context.",
+      );
+    }
+  };
+
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
@@ -5411,9 +5499,33 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      // ru-code (M2b): approving the parked plan_approval flips the composer plan → code
+      // so the follow-up turn runs in implement mode. Fires on the REAL approve path (the
+      // generic approval actions panel that renders during a held plan RPC), not only the
+      // plan follow-up button. The whole gate (success + plan-approval id + approve
+      // decision) is the tested composite — no effect for other providers, other
+      // approval kinds, decline/cancel, or failed responses.
+      if (
+        shouldFlipComposerToCodeAfterApprovalResponse({
+          responseSucceeded: result._tag === "Success",
+          respondedRequestId: requestId,
+          planApprovalRequestId,
+          decision,
+        })
+      ) {
+        setComposerDraftInteractionMode(composerDraftTarget, "default");
+      }
       return result;
     },
-    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
+    [
+      activeThreadId,
+      environmentId,
+      respondToThreadApproval,
+      setThreadError,
+      planApprovalRequestId,
+      composerDraftTarget,
+      setComposerDraftInteractionMode,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
@@ -5443,6 +5555,18 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThreadId, environmentId, respondToThreadUserInput, setThreadError],
   );
+
+  // ru-code (M8): skip the active pending user-input by submitting an empty
+  // answers payload; the server turns `{}` into a cancelled outcome that
+  // resumes the turn without an answer.
+  const onSkipActivePendingUserInput = useCallback(() => {
+    skipPendingUserInput({
+      requestId: activePendingUserInput?.requestId ?? null,
+      respond: (requestId, answers) => {
+        void onRespondToUserInput(requestId, answers);
+      },
+    });
+  }, [activePendingUserInput, onRespondToUserInput]);
 
   const setActivePendingUserInputQuestionIndex = useCallback(
     (nextQuestionIndex: number) => {
@@ -5873,6 +5997,29 @@ function ChatViewContent(props: ChatViewProps) {
     startThreadTurn,
     environmentId,
     composerRef,
+  ]);
+
+  // ru-code (M2): approve a held plan in the SAME thread. When the Deferred is
+  // gone (stale/non-qwen ⇒ planApprovalRequestId === null) fall back to the
+  // new-thread flow. On success, flip the composer plan → code so the next turn
+  // is a development turn. IMPORTANT: this responds to the held approval only —
+  // it must NOT also start a new turn (the reactor resumes the held turn).
+  const onApproveInSameThread = useCallback(() => {
+    if (planApprovalRequestId === null) {
+      void onImplementPlanInNewThread();
+      return;
+    }
+    const decision = decisionFromRuntimeMode(runtimeMode);
+    void onRespondToApproval(planApprovalRequestId, decision).then(() => {
+      setComposerDraftInteractionMode(composerDraftTarget, "default");
+    });
+  }, [
+    planApprovalRequestId,
+    runtimeMode,
+    onRespondToApproval,
+    onImplementPlanInNewThread,
+    composerDraftTarget,
+    setComposerDraftInteractionMode,
   ]);
 
   const getModelDisabledReason = useCallback(
@@ -6488,6 +6635,12 @@ function ChatViewContent(props: ChatViewProps) {
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
+                            // ru-code: qwen composer surface — compaction, same-thread
+                            // approval, skippable user input, plan-approval routing.
+                            onCompactContext={onCompactContext}
+                            onApproveInSameThread={onApproveInSameThread}
+                            onSkipActivePendingUserInput={onSkipActivePendingUserInput}
+                            pendingPlanApprovalRequestId={planApprovalRequestId}
                           />
                         </div>
                       </div>

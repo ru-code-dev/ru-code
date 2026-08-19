@@ -18,6 +18,8 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
+  // ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
+  syntheticAssistantMessageId,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -716,7 +718,12 @@ export function runtimeEventToActivities(
           kind: "task.completed",
           summary:
             event.payload.status === "failed"
-              ? "Task failed"
+              ? // ru-code: a failed task carries the classified error text as its
+                // summary (the Timeline surface); use it as the row heading so the
+                // timeline shows the exact message, not a generic "Task failed".
+                event.payload.summary
+                ? truncateDetail(event.payload.summary)
+                : "Task failed"
               : event.payload.status === "stopped"
                 ? "Task stopped"
                 : "Task completed",
@@ -724,15 +731,28 @@ export function runtimeEventToActivities(
             taskId: event.payload.taskId,
             status: event.payload.status,
             ...(taskTitle ? { title: truncateDetail(taskTitle, 120) } : {}),
-            // summary + detail mirror task.progress: clients label the row from
-            // summary and keep detail for the preview/expanded body.
-            ...(event.payload.summary
+            // ru-code: with a separate `detail` on the event, `summary` is the
+            // row's visible title and `detail` its expandable body; events
+            // without one keep the legacy single-string shape.
+            ...(event.payload.detail
               ? {
-                  summary: truncateDetail(event.payload.summary),
-                  detail: truncateDetail(event.payload.summary),
+                  ...(event.payload.summary
+                    ? { summary: truncateDetail(event.payload.summary) }
+                    : {}),
+                  detail: truncateDetail(event.payload.detail),
                 }
-              : {}),
+              : event.payload.summary
+                ? // ru-code: no separate `detail` ⇒ keep upstream's mirrored
+                  // shape — `summary` is what clients label the row from.
+                  {
+                    summary: truncateDetail(event.payload.summary),
+                    detail: truncateDetail(event.payload.summary),
+                  }
+                : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            // ru-code: row-tone override for a non-failed completion (activity
+            // tone has no "warning"; the web work-log derives it from here).
+            ...(event.payload.tone !== undefined ? { tone: event.payload.tone } : {}),
             ...taskLinkageActivityFields(event.payload as Record<string, unknown>),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1603,7 +1623,15 @@ const make = Effect.gen(function* () {
             ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
             : event.type === "turn.completed" &&
                 normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+              ? // ru-code: showNotification gates the red banner. Default (field
+                // absent) preserves the original behavior — a failed turn writes
+                // lastError (banner) — so every other provider is unaffected. The
+                // qwen classifier sets it EXPLICITLY false for Timeline-only (T)
+                // failures, which suppresses the banner (the text shows on the
+                // timeline row via task.completed instead); true for T+N.
+                event.payload.showNotification !== false
+                ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+                : (thread.session?.lastError ?? null)
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
@@ -1629,10 +1657,23 @@ const make = Effect.gen(function* () {
             );
           }
 
+          // ru-code: a user-stopped turn ("cancelled"/"interrupted") keeps the
+          // session alive (status "ready" — no phase change for any provider)
+          // but must settle the turn as "interrupted" so the timeline reads
+          // «You stopped …», not a normal completion.
+          const settledTurnState =
+            event.type === "turn.completed" &&
+            (normalizeRuntimeTurnState(event.payload.state) === "cancelled" ||
+              normalizeRuntimeTurnState(event.payload.state) === "interrupted")
+              ? ("interrupted" as const)
+              : undefined;
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
             commandId: yield* providerCommandId(event, "thread-session-set"),
             threadId: thread.id,
+            ...(settledTurnState !== undefined && eventTurnId !== null
+              ? { settledTurnState, settledTurnId: eventTurnId }
+              : {}),
             session: {
               threadId: thread.id,
               status,
@@ -1928,8 +1969,10 @@ const make = Effect.gen(function* () {
           if (hasCheckpointForTurn(checkpointContext.checkpoints, turnId)) {
             // Already tracked; no-op.
           } else {
-            const assistantMessageId = MessageId.make(
-              `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
+            // ru-code: minted via the shared helper so the projections can
+            // recognize it as unresolved (see contracts/ru-code).
+            const assistantMessageId = syntheticAssistantMessageId(
+              event.itemId ?? event.turnId ?? event.eventId,
             );
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",

@@ -1,7 +1,14 @@
+import { useState } from "react";
+
 import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+// ru-code: popover body lives in its own presentational component so the advice
+// text can be render-tested (base-ui portals the popup out of static markup).
+import { ContextMeterPopoverBody } from "~/ru-code/tokens-usage/ContextMeterPopoverBody";
+// ru-code: qwen-only warn/danger bands, gated on the provider snapshot flag;
+// compactActionClosingPopover closes the popover when Compact is pressed.
+import { compactActionClosingPopover, contextMeterAdvice } from "~/ru-code/tokens-usage/usage";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -16,22 +23,35 @@ function formatPercentage(value: number | null): string | null {
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   modelDisplayName?: string | null;
+  // ru-code: manual compaction — present only for providers that support the
+  // hidden `/compress` (qwen kind, live session). Null/absent ⇒ text hint only.
+  onCompactContext?: (() => void) | null;
+  // ru-code: true while a turn streams / the session is parked — compaction
+  // needs an idle serial session.
+  compactDisabled?: boolean;
 }) {
-  const { usage, modelDisplayName } = props;
+  const { usage, modelDisplayName, onCompactContext, compactDisabled } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
   const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
   const radius = 9.75;
   const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference * (1 - normalizedPercentage / 100);
-  const totalProcessedTokens = usage.totalProcessedTokens ?? null;
-  const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
-  const isOverloaded = normalizedPercentage > 90;
-  const usageColor = isOverloaded
-    ? "var(--color-error)"
-    : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
+  const dashOffset = circumference - (normalizedPercentage / 100) * circumference;
+  // ru-code: the whole band decision lives in the tokens-usage module. Only
+  // providers that DON'T auto-compact (qwen) with a known window get the
+  // warn/danger bands + /compress advice; Codex/Claude keep the neutral blue
+  // meter and their own auto-compact line — no leak. The level is computed from
+  // RAW usedTokens/maxTokens (usedPercentage is pre-clamped to 100, which would
+  // read >100% as "warning" instead of "danger").
+  const { ringColor, headline, showCompress, showCompactButton } = contextMeterAdvice(usage);
+  // ru-code: controlled so pressing Compact closes the hover popover it sits
+  // in (compactActionClosingPopover) — progress lives in the timeline row.
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const handleCompactContext = onCompactContext
+    ? compactActionClosingPopover(() => setPopoverOpen(false), onCompactContext)
+    : onCompactContext;
 
   return (
-    <Popover>
+    <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
       <PopoverTrigger
         openOnHover
         delay={150}
@@ -66,7 +86,7 @@ export function ContextWindowMeter(props: {
                   cy="12"
                   r={radius}
                   fill="none"
-                  stroke={usageColor}
+                  stroke={ringColor}
                   strokeWidth="3"
                   strokeLinecap="round"
                   strokeDasharray={circumference}
@@ -74,6 +94,12 @@ export function ContextWindowMeter(props: {
                   className="transition-[stroke-dashoffset,stroke] duration-500 ease-out motion-reduce:transition-none"
                 />
               </svg>
+              {/* ru-code: in-ring usage readout — % when the window is known, else raw token count. */}
+              <span className="relative flex items-center justify-center rounded-full bg-background text-[7px] font-medium text-muted-foreground leading-none tabular-nums">
+                {usage.maxTokens != null
+                  ? Math.round(usage.usedPercentage ?? 0)
+                  : formatContextWindowTokens(usage.usedTokens)}
+              </span>
             </span>
           </Button>
         }
@@ -85,53 +111,18 @@ export function ContextWindowMeter(props: {
         viewportClassName="p-0"
         className="w-64 max-w-none text-left whitespace-normal"
       >
-        <div className="flex flex-col gap-2 p-[var(--floating-content-inset)]">
-          <div className="flex items-center justify-between gap-3">
-            <div className="font-medium text-muted-foreground text-xs">Context Window</div>
-            {usage.maxTokens !== null && usedPercentage ? (
-              <div className="text-secondary-label text-[11px] tabular-nums">
-                <span>{usedPercentage}</span>
-                <span className="mx-1">·</span>
-                <span>
-                  {formatContextWindowTokens(usage.usedTokens)}/
-                  {formatContextWindowTokens(usage.maxTokens ?? null)}
-                </span>
-              </div>
-            ) : (
-              <div className="text-secondary-label text-[11px] tabular-nums">
-                {formatContextWindowTokens(usage.usedTokens)}
-              </div>
-            )}
-          </div>
-          {usage.maxTokens !== null ? (
-            <div
-              className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(normalizedPercentage)}
-              aria-label="Context window usage"
-            >
-              <div
-                className="h-full rounded-full transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none"
-                style={{ width: `${normalizedPercentage}%`, backgroundColor: usageColor }}
-              />
-            </div>
-          ) : null}
-          {showTotalProcessed ? (
-            <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
-              <span className="text-secondary-label">Total processed</span>
-              <span className="font-medium tabular-nums text-secondary-label">
-                {formatContextWindowTokens(totalProcessedTokens)}
-              </span>
-            </div>
-          ) : null}
-          {usage.compactsAutomatically ? (
-            <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
-              {formatContextWindowCompactionMessage(modelDisplayName)}
-            </div>
-          ) : null}
-        </div>
+        <ContextMeterPopoverBody
+          usage={usage}
+          usedPercentage={usedPercentage}
+          normalizedPercentage={normalizedPercentage}
+          ringColor={ringColor}
+          headline={headline}
+          showCompress={showCompress}
+          showCompactButton={showCompactButton}
+          modelDisplayName={modelDisplayName}
+          onCompactContext={handleCompactContext}
+          compactDisabled={compactDisabled}
+        />
       </PopoverPopup>
     </Popover>
   );

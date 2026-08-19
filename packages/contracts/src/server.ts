@@ -70,6 +70,14 @@ export const ServerProviderModel = Schema.Struct({
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
+  // ru-code: auth method this model dispatches with (qwen appends it as
+  // `${slug}(${authType})` at setModel). Optional — other providers omit it.
+  authType: Schema.optional(TrimmedNonEmptyString),
+  // ru-code: model context window in tokens — the meter denominator. Sourced
+  // from the brand profile (built-ins), qwen's advertised `_meta.contextLimit`
+  // (discovered models) or the slug's `-256k` size suffix (custom models).
+  // Optional — providers with unknown windows omit it.
+  nTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
 
@@ -170,6 +178,10 @@ export const ServerProvider = Schema.Struct({
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
+  // ru-code: when false, the composer disables the full-access runtime-mode option for
+  // this provider. Absent/true ⇒ full-access selectable (every existing provider is
+  // unchanged); qwen stamps false to lock it.
+  allowsFullAccess: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
   installed: Schema.Boolean,

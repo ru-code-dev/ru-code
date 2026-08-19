@@ -177,6 +177,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
               >
                 <ProviderInstanceIcon
                   driverKind={entry.driverKind}
+                  // ru-code: brand-profile mark for the instance (custom fork / stock qwen).
+                  profile={entry.profile}
                   displayName={entry.displayName}
                   accentColor={entry.accentColor}
                   showBadge={showInstanceBadge}

@@ -26,6 +26,9 @@ import {
 } from "@t3tools/contracts";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
+// ru-code: per-instance brand profile, so pickers/composer show the profile icon.
+import { DEFAULT_CLI_PROFILE_ID, type CliProfileId } from "@ru-code/branding";
+import { isCliProfileDriver, readProfileId } from "./ru-code/cliProfiles/profileConfig";
 
 /**
  * Local-only placeholder used while a draft has no provider it can safely
@@ -47,6 +50,9 @@ export interface ProviderInstanceEntry {
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
   readonly displayName: string;
+  // ru-code: brand profile (custom fork / stock qwen) for profile-aware icons; only
+  // set for the profile-bearing kind (qwen), undefined for every other driver.
+  readonly profile?: CliProfileId | undefined;
   readonly accentColor?: string | undefined;
   readonly continuationGroupKey?: string | undefined;
   readonly enabled: boolean;
@@ -186,6 +192,9 @@ export function deriveProviderInstanceEntries(
       instanceId,
       driverKind,
       displayName,
+      // ru-code: default profile for a qwen instance; the settings overlay below
+      // refines it from the persisted config.
+      profile: isCliProfileDriver(driverKind) ? DEFAULT_CLI_PROFILE_ID : undefined,
       accentColor: normalizeProviderAccentColor(snapshot.accentColor),
       continuationGroupKey: snapshot.continuation?.groupKey,
       enabled: snapshot.enabled,
@@ -224,7 +233,13 @@ export function applyProviderInstanceSettings(
       : entry.isDefault
         ? (legacyProviders[entry.driverKind]?.enabled ?? entry.enabled)
         : false;
-    return enabled === entry.enabled ? entry : { ...entry, enabled };
+    // ru-code: refine the brand profile from the instance's persisted config (defaults
+    // to the boot profile when unset). Only for the profile-bearing kind (qwen).
+    const profile = isCliProfileDriver(entry.driverKind)
+      ? readProfileId(explicitInstance?.config)
+      : entry.profile;
+    if (enabled === entry.enabled && profile === entry.profile) return entry;
+    return { ...entry, enabled, profile };
   });
 }
 
@@ -365,6 +380,13 @@ export function resolveDefaultProviderModelSelection(
  * Custom instance ids such as `claude_openrouter` are not themselves
  * driver-kind slugs, but the composer still needs the owning driver kind
  * for capabilities, options, icons, and turn dispatch metadata.
+ *
+ * ru-code: When the selection matches a *disabled* instance (e.g. a persisted
+ * `codex` default while codex is off), the disabled kind must not be
+ * returned — the composer would otherwise pin its provider to a driver the
+ * user cannot use. Fall back to the first enabled instance's kind instead.
+ * An *unknown* selection still returns `undefined` (we do not guess a kind
+ * for an instance id that no longer exists).
  */
 export function resolveProviderDriverKindForInstanceSelection(
   entries: ReadonlyArray<ProviderInstanceEntry>,
@@ -373,7 +395,15 @@ export function resolveProviderDriverKindForInstanceSelection(
 ): ProviderDriverKind | undefined {
   const matchedEntry = entries.find((entry) => entry.instanceId === selection);
   if (matchedEntry) {
-    return matchedEntry.driverKind;
+    // ru-code: a matched-but-disabled instance must not pin the composer to a
+    // driver the user cannot use — fall back to the first enabled kind, and only
+    // as a last resort (nothing enabled) use the matched disabled kind.
+    if (matchedEntry.enabled) {
+      return matchedEntry.driverKind;
+    }
+    return entries.find((entry) => entry.enabled)?.driverKind ?? matchedEntry.driverKind;
   }
-  return undefined;
+  // ru-code: no match (null / unknown selection) → first enabled kind as the safety net, so the
+  // caller never falls through to a hardcoded default kind. `undefined` only when nothing is enabled.
+  return entries.find((entry) => entry.enabled)?.driverKind;
 }

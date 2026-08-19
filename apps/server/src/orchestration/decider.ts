@@ -1058,6 +1058,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // ru-code: hidden context compaction — plain intent pass-through, the
+    // reactor owns the session checks and the provider call.
+    case "thread.context.compact": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.context-compact-requested",
+        payload: {
+          threadId: command.threadId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.approval.respond": {
       yield* requireThread({
         readModel,
@@ -1192,6 +1215,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           session: command.session,
+          // ru-code: explicit user-stop settle rides through untouched.
+          ...(command.settledTurnState !== undefined
+            ? { settledTurnState: command.settledTurnState }
+            : {}),
+          ...(command.settledTurnId !== undefined ? { settledTurnId: command.settledTurnId } : {}),
         },
       };
       // Only a session coming alive is activity worth waking a settled thread

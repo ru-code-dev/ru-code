@@ -38,6 +38,8 @@ import {
   workEntryIndicatesToolSuccess,
   workLogEntryIsToolLike,
 } from "../../session-logic";
+// ru-code: tone→icon/colour mapping (incl. amber "warning") lives in a ru-code module.
+import { workToneIcon } from "../../ru-code/workLog/workToneVisuals";
 import { type TurnDiffSummary } from "../../types";
 import {
   getRenderablePatch,
@@ -60,6 +62,7 @@ import {
   MinusIcon,
   SquarePenIcon,
   TerminalIcon,
+  TriangleAlertIcon,
   Undo2Icon,
   WrenchIcon,
   XIcon,
@@ -1959,6 +1962,8 @@ type WorkEntryIconName =
   | "message-circle"
   | "square-pen"
   | "terminal"
+  // ru-code: amber warning icon for respond-failed rows (tone "warning").
+  | "triangle-alert"
   | "wrench"
   | "x"
   | "zap";
@@ -1983,6 +1988,8 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
       return <SquarePenIcon className={className} aria-hidden />;
     case "terminal":
       return <TerminalIcon className={className} aria-hidden />;
+    case "triangle-alert":
+      return <TriangleAlertIcon className={className} aria-hidden />;
     case "wrench":
       return <WrenchIcon className={className} aria-hidden />;
     case "x":
@@ -1992,33 +1999,7 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
   }
 }
 
-function workToneIcon(tone: TimelineWorkEntry["tone"]): {
-  iconName: WorkEntryIconName;
-  className: string;
-} {
-  if (tone === "error") {
-    return {
-      iconName: "circle-alert",
-      className: "text-foreground",
-    };
-  }
-  if (tone === "thinking") {
-    return {
-      iconName: "bot",
-      className: "text-foreground",
-    };
-  }
-  if (tone === "info") {
-    return {
-      iconName: "check",
-      className: "text-icon-muted",
-    };
-  }
-  return {
-    iconName: "zap",
-    className: "text-foreground",
-  };
-}
+// ru-code: workToneIcon moved to ../../ru-code/workLog/workToneVisuals (adds "warning").
 
 function workEntryPreview(
   workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,
@@ -2261,21 +2242,27 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const showDestructiveRowStyle =
     showFailedIndicator &&
     (workEntry.sourceActivityKind === "runtime.error" || !workLogEntryIsToolLike(workEntry));
+  // ru-code: respond-failed rows are amber ("warning"), not destructive rose.
+  const isWarningTone = workEntry.tone === "warning";
   const iconWrapperClass = cn(
     "flex size-5 shrink-0 items-center justify-center",
     showWarningIndicator
       ? "text-destructive"
       : showDestructiveRowStyle
         ? "text-destructive"
-        : workEntry.tone === "tool" || showFailedIndicator
-          ? "text-icon-muted"
-          : iconConfig.className,
+        : isWarningTone
+          ? "text-amber-600 dark:text-amber-300/90"
+          : workEntry.tone === "tool" || showFailedIndicator
+            ? "text-icon-muted"
+            : iconConfig.className,
   );
   const headingClass = showWarningIndicator
     ? "font-medium text-warning"
     : showDestructiveRowStyle
       ? "font-medium text-destructive"
-      : "font-medium text-foreground";
+      : isWarningTone
+        ? "font-medium text-amber-600 dark:text-amber-300/90"
+        : "font-medium text-foreground";
   const turnSettled = !activity.activeTurnInProgress;
   const showNeutralIndicator = !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
   const showSuccessIndicator =

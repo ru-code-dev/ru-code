@@ -53,6 +53,11 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
+      // ru-code: pre-existing upstream warnings we do not act on — they only
+      // add noise to every run. Both files are pristine upstream files this
+      // fork does not touch.
+      "apps/web/src/components/ChatMarkdown.tsx",
+      "apps/web/src/components/CommandPalette.tsx",
     ],
     plugins: ["eslint", "oxc", "react", "unicorn", "typescript"],
     jsPlugins: ["./oxlint-plugin-t3code/index.ts"],

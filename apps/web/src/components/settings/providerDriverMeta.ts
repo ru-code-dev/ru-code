@@ -1,13 +1,25 @@
 import {
-  ClaudeSettings,
-  CodexSettings,
-  CursorSettings,
-  GrokSettings,
+  // ru-code: temporarily limited to qwen + opencode. To restore a driver,
+  // uncomment its settings import here, its icon import below, and its entry
+  // in PROVIDER_CLIENT_DEFINITIONS (also re-add it to the server
+  // BUILT_IN_DRIVERS array).
+  // ClaudeSettings,
+  // CodexSettings,
+  // CursorSettings,
+  // GrokSettings,
   OpenCodeSettings,
   ProviderDriverKind,
+  QwenSettings, // ru-code
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
-import { ClaudeAI, CursorIcon, GrokIcon, type Icon, OpenAI, OpenCodeIcon } from "../Icons";
+// ru-code: full icon set (kept for reference while drivers are limited):
+// import { ClaudeAI, CursorIcon, GrokIcon, type Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { type Icon, OpenCodeIcon } from "../Icons";
+// ru-code: qwen's driver-list glyph + label are the default brand-profile's (not
+// OpenAI's / "Qwen") — so the catalog entry reads what a new instance becomes by
+// default (Custom Code). Per-instance cards still show each instance's own profile.
+import { DEFAULT_CLI_PROFILE_ID, resolveCliProfile } from "@ru-code/branding";
+import { iconForProfile } from "~/ru-code/cliProfiles/icons";
 
 type ProviderSettingsSchema = {
   readonly fields: Readonly<Record<string, Schema.Top>>;
@@ -35,32 +47,43 @@ export interface ProviderClientDefinition {
 }
 
 export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+  // ru-code: qwen is this build's primary driver; listed first so the
+  // add-provider dialog defaults to it (DRIVER_OPTIONS[0]).
   {
-    value: ProviderDriverKind.make("codex"),
-    label: "Codex",
-    icon: OpenAI,
-    settingsSchema: CodexSettings,
+    value: ProviderDriverKind.make("qwen"),
+    label: resolveCliProfile(DEFAULT_CLI_PROFILE_ID).name,
+    icon: iconForProfile(DEFAULT_CLI_PROFILE_ID),
+    settingsSchema: QwenSettings,
   },
-  {
-    value: ProviderDriverKind.make("claudeAgent"),
-    label: "Claude",
-    icon: ClaudeAI,
-    settingsSchema: ClaudeSettings,
-  },
-  {
-    value: ProviderDriverKind.make("cursor"),
-    label: "Cursor",
-    icon: CursorIcon,
-    badgeLabel: "Early Access",
-    settingsSchema: CursorSettings,
-  },
-  {
-    value: ProviderDriverKind.make("grok"),
-    label: "Grok",
-    icon: GrokIcon,
-    badgeLabel: "Early Access",
-    settingsSchema: GrokSettings,
-  },
+  // ru-code: temporarily commented (drivers limited to qwen + opencode).
+  // Uncomment any block to bring the provider back — also restore its
+  // settings/icon imports above and the server BUILT_IN_DRIVERS entry.
+  // {
+  //   value: ProviderDriverKind.make("codex"),
+  //   label: "Codex",
+  //   icon: OpenAI,
+  //   settingsSchema: CodexSettings,
+  // },
+  // {
+  //   value: ProviderDriverKind.make("claudeAgent"),
+  //   label: "Claude",
+  //   icon: ClaudeAI,
+  //   settingsSchema: ClaudeSettings,
+  // },
+  // {
+  //   value: ProviderDriverKind.make("cursor"),
+  //   label: "Cursor",
+  //   icon: CursorIcon,
+  //   badgeLabel: "Early access",
+  //   settingsSchema: CursorSettings,
+  // },
+  // {
+  //   value: ProviderDriverKind.make("grok"),
+  //   label: "Grok",
+  //   icon: GrokIcon,
+  //   badgeLabel: "Early access",
+  //   settingsSchema: GrokSettings,
+  // },
   {
     value: ProviderDriverKind.make("opencode"),
     label: "OpenCode",

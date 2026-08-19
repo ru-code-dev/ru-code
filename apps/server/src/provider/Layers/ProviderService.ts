@@ -9,11 +9,12 @@
  *
  * @module ProviderServiceLive
  */
-import { APP_NAME } from "@ru-code/branding";
+import { APP_NAME } from "@ru-code/branding"; // ru-code: single-source app name
 import {
   ModelSelection,
   NonNegativeInt,
   ThreadId,
+  ProviderCompactContextInput, // ru-code
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -48,7 +49,11 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import {
+  type ProviderAdapterError,
+  ProviderUnsupportedError,
+  ProviderValidationError,
+} from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -864,6 +869,37 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  // ru-code: hidden context compaction — routed like interruptTurn; adapters
+  // without the optional `compactContext` surface a typed unsupported error
+  // (the reactor turns it into a timeline failure row).
+  const compactContext: ProviderServiceMethod<"compactContext"> = Effect.fn("compactContext")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.compactContext",
+        schema: ProviderCompactContextInput,
+        payload: rawInput,
+      });
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.compactContext",
+        allowRecovery: true,
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "compact-context",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      const adapterCompactContext = routed.adapter.compactContext;
+      if (!adapterCompactContext) {
+        return yield* new ProviderUnsupportedError({ provider: routed.adapter.provider });
+      }
+      yield* adapterCompactContext(routed.threadId);
+      yield* analytics.record("provider.context.compacted", {
+        provider: routed.adapter.provider,
+      });
+    },
+  );
+
   const respondToRequest: ProviderServiceMethod<"respondToRequest"> = Effect.fn("respondToRequest")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1168,6 +1204,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* analytics.flush;
   });
 
+  // ru-code: send-while-parked guard support. Route WITHOUT recovery (don't
+  // spawn a session just to check), and treat any routing failure or a
+  // parking-unaware adapter as "not parked". The adapter's own
+  // `hasParkedRequests` returns false when it has no active session, so an
+  // inactive routed session is also safely "not parked".
+  const hasParkedRequests = Effect.fn("hasParkedRequests")(function* (threadId: ThreadId) {
+    const routed = yield* resolveRoutableSession({
+      threadId,
+      operation: "ProviderService.hasParkedRequests",
+      allowRecovery: false,
+    }).pipe(Effect.catchCause(() => Effect.void));
+    if (!routed) {
+      return false;
+    }
+    const adapterHasParked = routed.adapter.hasParkedRequests;
+    if (!adapterHasParked) {
+      return false;
+    }
+    return yield* adapterHasParked(routed.threadId);
+  });
+
   yield* Effect.addFinalizer(() =>
     runStopAll().pipe(
       Effect.catchCause((cause) =>
@@ -1182,10 +1239,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactContext, // ru-code
     respondToRequest,
     respondToUserInput,
     stopSession,
     listSessions,
+    hasParkedRequests, // ru-code
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,

@@ -12,6 +12,8 @@ import type {
   OrchestrationThreadActivity,
   TurnId,
 } from "@t3tools/contracts";
+// ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
+import { isSyntheticAssistantMessageId } from "@t3tools/contracts";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
@@ -308,7 +310,12 @@ export function applyThreadDetailEvent(
                       ? message.text
                       : entry.text,
                   streaming: message.streaming,
-                  ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
+                  // ru-code: the wire carries `null` for a turn-less completion
+                  // (a provider's trailing item-close after its turn settled);
+                  // neither null nor undefined may erase the turn the message
+                  // is already bound to — the diff chip / revert / fold all
+                  // join on it.
+                  ...(message.turnId != null ? { turnId: message.turnId } : {}),
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
@@ -462,13 +469,28 @@ export function applyThreadDetailEvent(
 
     // ── Checkpoints / turn diffs ────────────────────────────────────
     case "thread.turn-diff-completed": {
+      // ru-code: a SYNTHETIC attachment id ("assistant:<id>", minted when the
+      // server-side capture could not see the message yet) must never detach
+      // an already-rendered assistant message — resolve it from state instead
+      // (the diff chip/revert lookup dies on an id no message row carries).
+      const attachedAssistantMessageId = isSyntheticAssistantMessageId(
+        event.payload.assistantMessageId,
+      )
+        ? (thread.messages
+            .toReversed()
+            .find((entry) => entry.role === "assistant" && entry.turnId === event.payload.turnId)
+            ?.id ??
+          thread.checkpoints.find((entry) => entry.turnId === event.payload.turnId)
+            ?.assistantMessageId ??
+          event.payload.assistantMessageId)
+        : event.payload.assistantMessageId;
       const checkpoint: OrchestrationCheckpointSummary = {
         turnId: event.payload.turnId,
         checkpointTurnCount: event.payload.checkpointTurnCount,
         checkpointRef: event.payload.checkpointRef,
         status: event.payload.status,
         files: event.payload.files,
-        assistantMessageId: event.payload.assistantMessageId,
+        assistantMessageId: attachedAssistantMessageId,
         completedAt: event.payload.completedAt,
       };
 
@@ -499,7 +521,7 @@ export function applyThreadDetailEvent(
               requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
               startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
               completedAt: event.payload.completedAt,
-              assistantMessageId: event.payload.assistantMessageId,
+              assistantMessageId: attachedAssistantMessageId,
             }
           : thread.latestTurn;
 

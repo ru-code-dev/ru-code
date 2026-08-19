@@ -18,8 +18,8 @@ import { isLocale, setLocaleOverride } from "@ru-code/localization"; // ru-code:
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
-// ru-code: default base dir = the installed app root (resolver ourRoot).
-import { resolveDefaultBaseDir } from "../ru-code/startup/defaultBaseDir.ts";
+// ru-code: ONE preflight pass at boot → default base dir + qwen cli detection.
+import { resolveStartupQwenCli } from "../ru-code/startup/resolveStartupQwenCli.ts";
 // ru-code: default working dir = the pre-made <baseDir>/Project starter repo.
 import { resolveStarterProjectRoot } from "../ru-code/startup/starterProject.ts";
 
@@ -309,12 +309,17 @@ export const resolveServerConfig = (
       normalizedFlags.baseDir,
       Option.fromUndefinedOr(env.t3Home),
     ).pipe(Option.filter((value) => value.trim().length > 0));
+    // ru-code: ONE preflight pass at boot — detect the qwen CLI AND derive the
+    // default base dir (resolver ourRoot) from the single result, so the disk
+    // scan never runs twice. Non-fatal: detected ⇒ qwen provider enabled; missed
+    // ⇒ qwen disabled and the app launches with every provider off.
+    const qwenCli = resolveStartupQwenCli();
     const baseDir = yield* resolveBaseDir(
       // ru-code: fall back to the installed app root (ourRoot) instead of the
       // upstream ~/.t3 default; --base-dir / T3CODE_HOME / bootstrap still win.
       Option.getOrUndefined(
         resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
-      ) ?? resolveDefaultBaseDir(),
+      ) ?? qwenCli.defaultBaseDir,
     );
     // ru-code: default the working dir to the pre-made <baseDir>/Project starter
     // repo (recreated below via makeDirectory if the user deleted it) rather than
@@ -391,6 +396,18 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // ru-code: make the (non-fatal) detection result observable. A miss
+    // silently disables the qwen provider, so surface it at error level.
+    yield* qwenCli.cliDetected
+      ? Effect.logDebug("ru-code: qwen CLI detected", {
+          cliJs: qwenCli.cliJs,
+          cliConfigDir: qwenCli.cliConfigDir,
+        })
+      : Effect.logError(
+          "ru-code: qwen CLI NOT detected — qwen provider disabled. Install/configure qwen, or set TRY_TO_FIND_CLI + a real path in apps/server/src/ru-code/preflight/paths.ts.",
+          { cliConfigDir: qwenCli.cliConfigDir },
+        );
+
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
       traceMinLevel: env.traceMinLevel,
@@ -412,6 +429,13 @@ export const resolveServerConfig = (
       port,
       cwd,
       baseDir,
+      // ru-code: RU_CODE_CLI_JS is a DEV-ONLY override — point it at the built
+      // fake ACP server to drive the real app against a scripted wire failure for
+      // manual UI checks. Combine with RU_CODE_FAKE_ACP (read by the fake itself)
+      // to pick which error id to reproduce. Falls back to the detected qwen cli.
+      cliJs: process.env["RU_CODE_CLI_JS"] ?? qwenCli.cliJs, // ru-code
+      cliConfigDir: qwenCli.cliConfigDir, // ru-code
+      cliDetected: qwenCli.cliDetected, // ru-code
       ...derivedPaths,
       serverTracePath,
       host,

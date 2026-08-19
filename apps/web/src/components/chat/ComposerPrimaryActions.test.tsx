@@ -29,6 +29,11 @@ function renderPendingActions(isRunning: boolean) {
         isComplete: true,
       },
       isRunning,
+      // ru-code: fixture rot fix (F2) — isParkedOnUser/pendingPlanApprovalRequestId/
+      // onApproveInSameThread became required props; this port test predates them.
+      isParkedOnUser: false,
+      pendingPlanApprovalRequestId: null,
+      onApproveInSameThread: () => {},
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -50,6 +55,10 @@ function renderStandaloneStop() {
       compact: true,
       pendingAction: null,
       isRunning: true,
+      // ru-code: fixture rot fix (F2) — see renderPendingActions above.
+      isParkedOnUser: false,
+      pendingPlanApprovalRequestId: null,
+      onApproveInSameThread: () => {},
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -71,6 +80,12 @@ function renderRunningActions(showSendWhileRunning: boolean, hasSendableContent:
       compact: true,
       pendingAction: null,
       isRunning: true,
+      // ru-code: required props of the fork's primary-action seam (M7 parked-on-user
+      // + same-thread plan approval). Neutral values keep this upstream case asserting
+      // exactly what it always asserted.
+      isParkedOnUser: false,
+      pendingPlanApprovalRequestId: null,
+      onApproveInSameThread: () => {},
       showPlanFollowUpPrompt: false,
       promptHasText: hasSendableContent,
       isSendBusy: false,
@@ -93,6 +108,12 @@ function renderSendButton() {
       compact: true,
       pendingAction: null,
       isRunning: false,
+      // ru-code: required props of the fork's primary-action seam (M7 parked-on-user
+      // + same-thread plan approval). Neutral values keep this upstream case asserting
+      // exactly what it always asserted.
+      isParkedOnUser: false,
+      pendingPlanApprovalRequestId: null,
+      onApproveInSameThread: () => {},
       showPlanFollowUpPrompt: false,
       promptHasText: true,
       isSendBusy: false,

@@ -70,6 +70,13 @@ export class ServerConfig extends Context.Service<
     readonly host: string | undefined;
     readonly cwd: string;
     readonly baseDir: string;
+    // ru-code: qwen CLI detection, resolved once by the startup preflight
+    // (resolveStartupQwenCli). `cliJs` is spawned as `node <cliJs> --acp`;
+    // `cliConfigDir` is the CLI's `{home}/.qwen`; `cliDetected` gates whether
+    // the qwen provider is enabled. Empty/false when the CLI is not present.
+    readonly cliJs: string;
+    readonly cliConfigDir: string;
+    readonly cliDetected: boolean;
     readonly staticDir: string | undefined;
     readonly devUrl: URL | undefined;
     readonly devAllowedOrigins: ReadonlyArray<string>;
@@ -180,6 +187,11 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpServiceName: "t3-server",
     cwd,
     baseDir,
+    // ru-code: tests don't spawn the real CLI; treat qwen as detected so the
+    // provider is enabled, with a synthetic cli.js path under the test baseDir.
+    cliJs: `${baseDir}/cli.js`,
+    cliConfigDir: baseDir,
+    cliDetected: true,
     ...derivedPaths,
     mode: "web",
     autoBootstrapProjectFromCwd: false,

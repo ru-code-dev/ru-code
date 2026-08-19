@@ -65,7 +65,10 @@ export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
  */
 const ModelSelectionWire = Schema.Struct({
   instanceId: ProviderInstanceId,
-  model: TrimmedNonEmptyString,
+  // ru-code: empty = "not selected" — the user never picked a model. Resolution
+  // is live on both sides (first served model of the instance), so nothing is
+  // seeded; old persisted non-empty selections decode unchanged.
+  model: TrimmedString,
   options: Schema.optionalKey(ProviderOptionSelections),
 });
 
@@ -123,7 +126,10 @@ export const RuntimeMode = Schema.Literals([
   "full-access",
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+// ru-code: threads start in a restricted mode. Was "full-access" (unrestricted by
+// default — auto-approves everything); "auto-accept-edits" auto-applies file edits
+// but still surfaces command/other approvals, a safe default.
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "auto-accept-edits";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -870,6 +876,16 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ru-code: run a hidden context compaction (`/compress`) on the thread's live
+// provider session — no user message; the provider adapter reports the result
+// as a timeline row + token-usage update. Fired by the meter's "Compact context" button and by the server's auto-compact trigger.
+const ThreadContextCompactCommand = Schema.Struct({
+  type: Schema.Literal("thread.context.compact"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -929,6 +945,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand, // ru-code
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -957,6 +974,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand, // ru-code
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -969,6 +987,9 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  // ru-code: see ThreadSessionSetPayload.settledTurnState.
+  settledTurnState: Schema.optional(Schema.Literal("interrupted")),
+  settledTurnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
 });
 
@@ -1076,6 +1097,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  "thread.context-compact-requested", // ru-code
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1263,6 +1285,13 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ru-code: intent produced by `thread.context.compact` — the reactor runs the
+// hidden `/compress` on the thread's live provider session.
+export const ThreadContextCompactRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
@@ -1296,6 +1325,12 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+  // ru-code: explicit settle for a user-stopped turn. The session status stays
+  // "ready" (the session is alive), but the projector must label the settling
+  // turn "interrupted", not "completed" — even when a racing event settled it
+  // first (settledTurnId scopes the relabel). Optional — old events decode.
+  settledTurnState: Schema.optional(Schema.Literal("interrupted")),
+  settledTurnId: Schema.optional(TurnId),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
@@ -1440,6 +1475,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.context-compact-requested"), // ru-code
+    payload: ThreadContextCompactRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

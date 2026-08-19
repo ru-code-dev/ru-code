@@ -1,3 +1,4 @@
+// @effect-diagnostics unnecessaryEffectGen:off -- ru-code: pristine upstream file; style-only suggestion noise
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

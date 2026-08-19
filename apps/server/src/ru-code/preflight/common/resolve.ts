@@ -79,7 +79,7 @@ const tryFallbackBinPaths = (
   return { stop: probedPaths };
 };
 
-export const resolveCli = (options: ResolveOptions = {}): CliResolution => {
+export const resolveQwenCli = (options: ResolveOptions = {}): CliResolution => {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const tryFindCli = options.tryFindCli ?? false;

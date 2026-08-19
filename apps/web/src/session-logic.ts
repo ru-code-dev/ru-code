@@ -1,8 +1,24 @@
 import * as Option from "effect/Option";
+// ru-code (B2): RU localization for ACP failure work-log rows. (pluralRu is
+// already imported from @ru-code/localization below with the L seam.)
+import { localizeAcpFailureDetail } from "~/ru-code/error-system/acpFailureLocalization";
+// ru-code: hidden context-compaction — morphing row + warning tone.
+import {
+  compactionCollapseKey,
+  isCompactionCollapseKey,
+  isTaskWarningToneRow,
+  shouldMorphCompactionPair,
+} from "~/ru-code/workLog/contextCompaction";
+// ru-code: needed so the subagent collapse-key branch below can exclude
+// compaction taskIds — they share the task.progress/task.completed activity
+// kinds but must key off `compactionCollapseKey`'s `task:`-prefixed form.
+import { CONTEXT_COMPACTION_TASK_PREFIX } from "@ru-code/branding";
 import * as Arr from "effect/Array";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   ApprovalRequestId,
+  // ru-code: qwen plan-approval request type (drives the plan_approval admit + requestType).
+  type CanonicalRequestType,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
@@ -71,7 +87,9 @@ export interface WorkLogEntry {
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
-  tone: "thinking" | "tool" | "info" | "error";
+  // ru-code: "warning" (amber) re-tones respond-failed rows so they read
+  // softer than hard `error` rows — see toDerivedWorkLogEntry.
+  tone: "thinking" | "tool" | "info" | "error" | "warning";
   toolTitle?: string;
   toolData?: unknown;
   itemType?: ToolLifecycleItemType;
@@ -95,6 +113,10 @@ export interface WorkLogEntry {
     workflowId: string | null;
     agentTaskIds: ReadonlyArray<string>;
   };
+  // ru-code: context-compaction rows (spinner/outcome/closures) are exempt
+  // from the neutral-tool filter; the collapse key that identifies them is
+  // stripped from the public entry, so the flag is stamped instead.
+  isContextCompaction?: boolean;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -108,7 +130,17 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
-  requestKind: "command" | "file-read" | "file-change";
+  // ru-code: optional — qwen `plan_approval` requests are held approvals that
+  // carry no command/file requestKind, so they enter the pending list keyed
+  // off `requestType` instead (see derivePendingApprovals).
+  // "other" is the forward-compat fallback for any approval kind we don't have
+  // a dedicated affordance for (web-fetch, MCP non-read, search, etc.); without
+  // it derivePendingApprovals drops the entry and the held RPC hangs forever.
+  requestKind?: "command" | "file-read" | "file-change" | "other";
+  // ru-code: raw canonical request type from the activity payload. Lets the UI
+  // recognise qwen `plan_approval` held approvals (composer auto-flip + working
+  // spinner suppression) without adding a new requestKind literal.
+  requestType?: CanonicalRequestType;
   createdAt: string;
   detail?: string;
 }
@@ -282,6 +314,12 @@ export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolea
   if (entry.agentSpawn !== undefined) {
     return false;
   }
+  // ru-code: compaction rows are lifecycle messages, never hideable noise —
+  // the spinner (thinking tone) and the stopped closures would otherwise
+  // classify as neutral and the compression would be invisible on screen.
+  if (entry.isContextCompaction) {
+    return false;
+  }
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
@@ -363,8 +401,13 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
     case "file_change_approval":
     case "apply_patch_approval":
       return "file-change";
-    default:
+    // ru-code: plan_approval is surfaced via isPlanApproval, NOT the generic list.
+    case "plan_approval":
       return null;
+    // ru-code: any other unhandled approval kind (web-fetch, MCP non-read,
+    // search, etc.) surfaces generically so the held RPC never hangs.
+    default:
+      return "other";
   }
 }
 
@@ -403,17 +446,33 @@ export function derivePendingApprovals(
       payload &&
       (payload.requestKind === "command" ||
         payload.requestKind === "file-read" ||
-        payload.requestKind === "file-change")
+        payload.requestKind === "file-change" ||
+        // ru-code: admit a persisted "other" forward-compat kind.
+        payload.requestKind === "other")
         ? payload.requestKind
         : payload
           ? requestKindFromRequestType(payload.requestType)
           : null;
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+    // ru-code: carry the raw requestType so the UI can recognise qwen
+    // `plan_approval` held approvals, which have no requestKind. `dynamic_tool_call`
+    // (decisions row 26 / F5) is t3's own mechanism for an unrecognised-kind request —
+    // it already resolves to `requestKind: "command"` below, so it rides the existing
+    // generic command-approval UI with no parallel/marked code path; the raw type is
+    // not surfaced for it, only for kinds the UI must recognise specially.
+    const requestType =
+      payload &&
+      typeof payload.requestType === "string" &&
+      payload.requestType !== "dynamic_tool_call"
+        ? (payload.requestType as CanonicalRequestType)
+        : undefined;
+    const isPlanApproval = requestType === "plan_approval";
 
-    if (activity.kind === "approval.requested" && requestId && requestKind) {
+    if (activity.kind === "approval.requested" && requestId && (requestKind || isPlanApproval)) {
       openByRequestId.set(requestId, {
         requestId,
-        requestKind,
+        ...(requestKind ? { requestKind } : {}),
+        ...(requestType ? { requestType } : {}),
         createdAt: activity.createdAt,
         ...(detail ? { detail } : {}),
       });
@@ -463,15 +522,17 @@ function parseUserInputQuestions(
         .map<UserInputQuestion["options"][number] | null>((option) => {
           if (!option || typeof option !== "object") return null;
           const optionRecord = option as Record<string, unknown>;
-          if (
-            typeof optionRecord.label !== "string" ||
-            typeof optionRecord.description !== "string"
-          ) {
+          if (typeof optionRecord.label !== "string") {
             return null;
           }
           return {
             label: optionRecord.label,
-            description: optionRecord.description,
+            // ru-code: the wire allows options without a description —
+            // dropping such an option would hide a choice the CLI offered
+            // (and dropping them all would swallow the question while the
+            // request stays parked). The panel hides empty descriptions.
+            description:
+              typeof optionRecord.description === "string" ? optionRecord.description : "",
           };
         })
         .filter((option): option is UserInputQuestion["options"][number] => option !== null);
@@ -764,8 +825,13 @@ export function deriveWorkLogEntries(
     entries.push(toDerivedWorkLogEntry(activity));
   }
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
-    const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
-    return Object.assign(rest, { sourceActivityKind: activityKind });
+    const { activityKind, collapseKey, ...rest } = entry;
+    return Object.assign(
+      rest,
+      { sourceActivityKind: activityKind },
+      // ru-code: the collapse key dies here, so compaction rows carry a flag.
+      isCompactionCollapseKey(collapseKey) ? { isContextCompaction: true } : null,
+    );
   });
 }
 
@@ -833,22 +899,43 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       : null
     : extractToolDetail(payload, title ?? activity.summary);
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
+  // ru-code: respond-failed rows get amber `warning`, not loud rose `error`.
+  // Keyed purely on activity.kind so it re-tones every provider consistently;
+  // hard-error rows (task.completed failed / runtime.error) stay red.
+  const isRespondFailedActivity =
+    activity.kind === "provider.user-input.respond.failed" ||
+    activity.kind === "provider.approval.respond.failed";
+  // ru-code (B2): localize the ACP-failure detail to RU and promote it into the row
+  // label (falling back to raw detail/summary), so the amber row reads a clean RU
+  // message instead of the English "…respond.failed" detail.
+  const localizedFailureDetail = isRespondFailedActivity
+    ? localizeAcpFailureDetail(activity)
+    : null;
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
     turnId: activity.turnId,
-    label: taskLabel || activity.summary,
+    label: isRespondFailedActivity
+      ? (localizedFailureDetail ?? detail ?? activity.summary)
+      : taskLabel || activity.summary,
     tone:
       activity.kind === "task.progress"
         ? "thinking"
-        : activity.tone === "approval"
-          ? "info"
-          : activity.tone,
+        : // ru-code: payload-tone override (e.g. near-no-op compaction → amber).
+          isTaskWarningToneRow(activity.kind, payload)
+          ? "warning"
+          : isRespondFailedActivity
+            ? "warning"
+            : activity.tone === "approval"
+              ? "info"
+              : activity.tone,
     activityKind: activity.kind,
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
-  if (detail) {
+  // ru-code (B2): ACP-failure rows promote the (localized) detail into the label, so
+  // don't also render it as the detail line (avoids the noisy English prefix).
+  if (!isRespondFailedActivity && detail) {
     entry.detail = detail;
   }
   if (commandPreview.command) {
@@ -901,7 +988,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (isTaskActivity && payload && isBackgroundTaskActivity(payload)) {
     entry.isBackgroundTask = true;
   }
-  const collapseKey = deriveToolLifecycleCollapseKey(entry);
+  // ru-code: compaction task rows share a key so progress → completed morphs.
+  const collapseKey =
+    deriveToolLifecycleCollapseKey(entry) ?? compactionCollapseKey(activity.kind, payload);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -1008,6 +1097,10 @@ function shouldCollapseToolLifecycleEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): boolean {
+  // ru-code: a compaction's progress row absorbs its completed row (one morphing row).
+  if (shouldMorphCompactionPair(previous.activityKind, previous.collapseKey, next.collapseKey)) {
+    return true;
+  }
   if (previous.activityKind !== "tool.updated" && previous.activityKind !== "tool.completed") {
     return false;
   }
@@ -1077,6 +1170,8 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
   // progress ticks fold into it, the terminal row wins the label.
   if (
     entry.taskId &&
+    // ru-code: exclude our compaction taskIds — they key off compactionCollapseKey below.
+    !entry.taskId.startsWith(CONTEXT_COMPACTION_TASK_PREFIX) &&
     (entry.activityKind === "task.progress" || entry.activityKind === "task.completed")
   ) {
     return `task${entry.taskId}`;

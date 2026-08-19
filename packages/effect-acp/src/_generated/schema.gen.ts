@@ -7757,6 +7757,10 @@ export const RequestPermissionRequest = Schema.Struct({
 
 export type RequestPermissionResponse = {
   readonly _meta?: { readonly [x: string]: unknown } | null;
+  // ru-code: manual extension — see the Struct below. qwen reads structured
+  // ask_user_question answers from this top-level field, keyed by stringified
+  // question index; value is the user's answer text.
+  readonly answers?: { readonly [x: string]: string } | null;
   readonly outcome:
     | { readonly outcome: "cancelled" }
     | {
@@ -7771,6 +7775,20 @@ export const RequestPermissionResponse = Schema.Struct({
       Schema.Record(Schema.String, Schema.Unknown).annotate({
         description:
           "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+      }),
+      Schema.Null,
+    ]),
+  ),
+  // ru-code: manual extension — qwen (confirmed against @agentclientprotocol/sdk
+  // 0.14.1, used by qwen 0.13.1) reads structured ask_user_question answers from this
+  // top-level field, keyed by stringified question index. Optional so other ACP agents
+  // that don't send it still validate. If the schema generator overwrites this file,
+  // re-add this field AND the `answers?` member in the type alias above.
+  answers: Schema.optionalKey(
+    Schema.Union([
+      Schema.Record(Schema.String, Schema.String).annotate({
+        description:
+          "Cli-specific extension consumed by the ask_user_question tool. Keys are stringified question indices.",
       }),
       Schema.Null,
     ]),

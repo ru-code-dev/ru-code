@@ -8,6 +8,7 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("opencode")]: OpenCodeIcon,
   [ProviderDriverKind.make("cursor")]: CursorIcon,
   [ProviderDriverKind.make("grok")]: GrokIcon,
+  [ProviderDriverKind.make("qwen")]: OpenAI, // ru-code: qwen uses OpenAI-compatible auth; reuse the OpenAI mark
 };
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
@@ -27,6 +28,9 @@ export type ModelEsque = {
   shortName?: string | undefined;
   subProvider?: string | undefined;
   isLegacy?: boolean | undefined;
+  // ru-code: context window (tokens) when the provider reports one — feeds the
+  // meter denominator and the picker capacity gate.
+  contextWindowTokens?: number | undefined;
 };
 
 function escapeRegExp(value: string): string {

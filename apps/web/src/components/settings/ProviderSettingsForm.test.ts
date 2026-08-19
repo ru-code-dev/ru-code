@@ -10,7 +10,10 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
-  it("derives visible provider config fields from the client definition schema", () => {
+  // ru-code: codex/claude/cursor/grok removed from driver options (only qwen +
+  // opencode enabled), so DRIVER_OPTION_BY_VALUE[codex] is undefined. Skip until
+  // those adapters are re-enabled — restore by removing `.skip`.
+  it.skip("derives visible provider config fields from the client definition schema", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
 
     expect(codex).toBeDefined();
@@ -30,6 +33,7 @@ describe("ProviderSettingsForm helpers", () => {
       (field) => field.key === "serverPassword",
     );
 
+    // ru-code: OpenCode settings labels come from schema annotations.
     expect(serverPassword).toMatchObject({
       label: "Server password",
       description: "Stored in plain text on disk.",

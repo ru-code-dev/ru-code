@@ -45,6 +45,12 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
     <div className="mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
       <Alert variant="error" controlAlignment="first-line">
         <CircleAlertIcon />
+        {/* ru-code: guards against the shape of upstream regression #3017 (banner text
+            collapsed into the icon column). AlertDescription must stay a DIRECT child of
+            Alert: Alert buckets its children by data-slot/displayName, and only a
+            recognized description lands in the width-constrained content column.
+            Wrapping it in <Tooltip> (as #3017 did) hid the slot. Upstream now keeps the
+            direct-child shape itself; keep the Tooltip nested INSIDE. */}
         <AlertDescription>
           <Tooltip>
             <TooltipTrigger render={<div className="line-clamp-3" />}>{error}</TooltipTrigger>

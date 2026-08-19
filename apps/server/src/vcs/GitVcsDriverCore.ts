@@ -30,6 +30,10 @@ import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
+// ru-code: fork seam helpers (raw UTF-8 git paths; unborn-HEAD classification;
+// Windows reserved-name excludes).
+import { withRawUtf8Paths } from "../ru-code/vcs/rawUtf8Paths.ts";
+import { windowsReservedExcludes } from "../ru-code/vcs/reservedNames.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import {
   parseRemoteNames,
@@ -731,7 +735,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
         const child = yield* commandSpawner
           .spawn(
-            ChildProcess.make("git", commandInput.args, {
+            // ru-code: raw UTF-8 pathnames in ALL git output (non-ASCII names
+            // were octal-escaped and leaked into every parser/UI) — injected at
+            // the spawn only, so error context/telemetry keep the caller's
+            // args. See rawUtf8Paths.ts.
+            ChildProcess.make("git", withRawUtf8Paths(commandInput.args), {
               cwd: commandInput.cwd,
               env: {
                 ...process.env,
@@ -1821,6 +1829,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             GitCommandError: () => Effect.void,
           }),
         );
+        // ru-code: NO reserved-name excludes here — this command runs with
+        // --literal-pathspecs (upstream #3998), which would turn the
+        // `:(exclude,…)` patterns into literal filenames and fail the add.
+        // Unreachable anyway: an unopenable reserved-name file is never
+        // offered as a selectable change. See reservedNames.ts / decisions
+        // row 8 (C-05-016).
         yield* runGit("GitVcsDriver.prepareCommitContext.addSelected", cwd, [
           "--literal-pathspecs",
           "add",
@@ -1829,7 +1843,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ...filePaths,
         ]);
       } else {
-        yield* runGit("GitVcsDriver.prepareCommitContext.addAll", cwd, ["add", "-A"]);
+        // ru-code: a stray Windows reserved-name file (`nul`, ...) aborts the
+        // whole add and kills commit staging — see reservedNames.ts.
+        yield* runGit("GitVcsDriver.prepareCommitContext.addAll", cwd, [
+          "add",
+          "-A",
+          "--",
+          ".",
+          ...(yield* windowsReservedExcludes),
+        ]);
       }
 
       const stagedSummary = yield* runGitStdout(

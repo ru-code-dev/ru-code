@@ -1,3 +1,4 @@
+// @effect-diagnostics unnecessaryFailYieldableError:off -- ru-code: pristine upstream file; style-only suggestion noise
 import type {
   RelayClientEnvironmentRecord,
   RelayEnvironmentStatusResponse,

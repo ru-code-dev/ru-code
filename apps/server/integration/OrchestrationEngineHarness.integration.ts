@@ -94,6 +94,11 @@ function runGit(cwd: string, args: ReadonlyArray<string>) {
 }
 
 const initializeGitWorkspace = Effect.fn(function* (cwd: string) {
+  // ru-code: restart simulation (fixed rootDir) reuses the workspace — an
+  // already-initialized repo must not be re-committed.
+  if (gitRefExists(cwd, "refs/heads/main")) {
+    return;
+  }
   runGit(cwd, ["init", "--initial-branch=main"]);
   runGit(cwd, ["config", "user.email", "test@example.com"]);
   runGit(cwd, ["config", "user.name", "Test User"]);
@@ -229,6 +234,23 @@ export interface OrchestrationIntegrationHarness {
 interface MakeOrchestrationIntegrationHarnessOptions {
   readonly provider?: ProviderDriverKind;
   readonly realCodex?: boolean;
+  // ru-code: additive registry-injection seam. When set, this factory is called
+  // with the harness's temp workspace/root dirs and must return a fully-closed
+  // `ProviderAdapterRegistry` layer (deps provided, no error/requirement channel).
+  // The REAL ProviderService + reactor + ingestion then run against that registry,
+  // and no TestProviderAdapterHarness is created. This keeps fork-specific wiring
+  // (e.g. the qwen error-pipeline test's adapter + faked ACP child) OUT of this
+  // upstream harness — the fork test owns the layer; this file only accepts it.
+  readonly registryOverride?: (ctx: {
+    readonly workspaceDir: string;
+    readonly rootDir: string;
+  }) => Layer.Layer<ProviderAdapterRegistry>;
+  // ru-code: additive restart-simulation seam. When set, the harness uses THIS
+  // directory (workspace/state/db under it) instead of a fresh temp dir — so a
+  // second harness over the same rootDir behaves like an app restart: same
+  // SQLite event store / projections / provider-session directory, fresh
+  // in-memory runtime. The caller owns the directory's lifecycle.
+  readonly rootDir?: string;
 }
 
 export const makeOrchestrationIntegrationHarness = (
@@ -238,22 +260,28 @@ export const makeOrchestrationIntegrationHarness = (
     const path = yield* Path.Path;
     const fileSystem = yield* FileSystem.FileSystem;
 
-    const provider = options?.provider ?? ProviderDriverKind.make("codex");
     const useRealCodex = options?.realCodex === true;
-    const adapterHarness = useRealCodex
-      ? null
-      : yield* makeTestProviderAdapterHarness({
-          provider,
-        });
+    const useRegistryOverride = options?.registryOverride !== undefined; // ru-code
+    const provider = options?.provider ?? ProviderDriverKind.make("codex");
+    const adapterHarness =
+      // ru-code: an injected registry supplies its own adapter — no test harness.
+      useRealCodex || useRegistryOverride
+        ? null
+        : yield* makeTestProviderAdapterHarness({
+            provider,
+          });
     const fakeRegistry = adapterHarness
       ? Layer.succeed(
           ProviderAdapterRegistry,
           makeAdapterRegistryMock({ [adapterHarness.provider]: adapterHarness.adapter }),
         )
       : null;
-    const rootDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-orchestration-integration-",
-    });
+    // ru-code: fixed rootDir = restart simulation over the same persistence.
+    const rootDir =
+      options?.rootDir ??
+      (yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-orchestration-integration-",
+      }));
     const workspaceDir = path.join(rootDir, "workspace");
     const { stateDir, dbPath } = yield* deriveServerPaths(rootDir, undefined).pipe(
       Effect.provideService(Path.Path, path),
@@ -285,20 +313,33 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
+    // ru-code: resolve the injected registry (if any) with the harness's temp
+    // dirs. The fork test builds the real adapter + faked ACP child inside it.
+    const overrideRegistry = options?.registryOverride
+      ? options.registryOverride({ workspaceDir, rootDir })
+      : null;
     const providerEventLoggersLayer = Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers);
-    const providerLayer = useRealCodex
-      ? makeProviderServiceLive().pipe(
+    const providerLayer = overrideRegistry
+      ? // ru-code: run the real pipeline against the injected registry.
+        makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
-          Layer.provide(realCodexRegistry),
+          Layer.provide(overrideRegistry),
           Layer.provide(AnalyticsService.layerTest),
           Layer.provide(providerEventLoggersLayer),
         )
-      : makeProviderServiceLive().pipe(
-          Layer.provide(providerSessionDirectoryLayer),
-          Layer.provide(fakeRegistry!),
-          Layer.provide(AnalyticsService.layerTest),
-          Layer.provide(providerEventLoggersLayer),
-        );
+      : useRealCodex
+        ? makeProviderServiceLive().pipe(
+            Layer.provide(providerSessionDirectoryLayer),
+            Layer.provide(realCodexRegistry),
+            Layer.provide(AnalyticsService.layerTest),
+            Layer.provide(providerEventLoggersLayer),
+          )
+        : makeProviderServiceLive().pipe(
+            Layer.provide(providerSessionDirectoryLayer),
+            Layer.provide(fakeRegistry!),
+            Layer.provide(AnalyticsService.layerTest),
+            Layer.provide(providerEventLoggersLayer),
+          );
     const providerRegistryLayer = makeProviderRegistryLayer();
 
     const checkpointStoreLayer = CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer));

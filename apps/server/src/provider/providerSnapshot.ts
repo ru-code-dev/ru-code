@@ -57,6 +57,9 @@ export interface ServerProviderPresentation {
   readonly badgeLabel?: string;
   readonly showInteractionModeToggle?: boolean;
   readonly requiresNewThreadForModelChange?: boolean;
+  // ru-code: when false, the composer disables the full-access runtime-mode option
+  // for this provider. Omitted ⇒ absent on the snapshot ⇒ default true (unchanged).
+  readonly allowsFullAccess?: boolean;
 }
 
 export type ServerProviderDraft = Omit<ServerProvider, "instanceId" | "driver">;
@@ -238,6 +241,10 @@ export function buildServerProvider(input: {
       : {}),
     ...(typeof input.presentation.requiresNewThreadForModelChange === "boolean"
       ? { requiresNewThreadForModelChange: input.presentation.requiresNewThreadForModelChange }
+      : {}),
+    // ru-code: pass through the full-access lock when a presentation sets it (qwen).
+    ...(typeof input.presentation.allowsFullAccess === "boolean"
+      ? { allowsFullAccess: input.presentation.allowsFullAccess }
       : {}),
     enabled: input.enabled,
     installed: input.probe.installed,

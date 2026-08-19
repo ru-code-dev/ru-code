@@ -1,4 +1,4 @@
-import { APP_NAME } from "@ru-code/branding";
+import { APP_NAME } from "@ru-code/branding"; // ru-code: single-source app name
 import {
   type ModelCapabilities,
   type OpenCodeSettings,

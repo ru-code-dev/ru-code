@@ -41,6 +41,11 @@ import {
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
+// ru-code: ServerConfig gained cliJs/cliConfigDir/cliDetected (the qwen CLI
+// preflight, see resolveStartupQwenCli.ts's own doc) — this file builds a
+// ServerConfig by hand for an already-discovered, already-running server, so
+// resolve them the same single way cli/config.ts does for the real boot path.
+import { resolveStartupQwenCli } from "../ru-code/startup/resolveStartupQwenCli.ts";
 import {
   type PersistedServerRuntimeState,
   readPersistedServerRuntimeState,
@@ -321,6 +326,8 @@ const makePairServerConfig = Effect.fn(function* (input: {
     variant === "dev" ? DEV_VARIANT_PLACEHOLDER_URL : undefined,
     {},
   );
+  // ru-code: same single preflight resolution cli/config.ts uses at boot.
+  const qwenCli = resolveStartupQwenCli();
   return ServerConfig.make({
     logLevel: input.logLevel,
     traceMinLevel: "Info",
@@ -338,6 +345,10 @@ const makePairServerConfig = Effect.fn(function* (input: {
     cwd: process.cwd(),
     baseDir,
     ...derivedPaths,
+    // ru-code: qwen CLI detection fields (see import above).
+    cliJs: qwenCli.cliJs,
+    cliConfigDir: qwenCli.cliConfigDir,
+    cliDetected: qwenCli.cliDetected,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],

@@ -108,6 +108,14 @@ export type AcpParsedSessionEvent =
       readonly itemId?: string;
       readonly text: string;
       readonly rawPayload: unknown;
+    }
+  | {
+      // ru-code: qwen stamps running promptTokenCount on
+      // agent_message_chunk._meta.usage.inputTokens, incl. a DEDICATED empty-text
+      // usage frame. Emitted regardless of text so the live token feed isn't dropped.
+      readonly _tag: "UsageUpdated";
+      readonly used: number;
+      readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
@@ -571,6 +579,18 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           text: upd.content.text,
           rawPayload: params,
         });
+      }
+      // ru-code: qwen emits usage on a DEDICATED empty-text agent_message_chunk
+      // (qwen-code MessageEmitter.emitUsageMetadata, text=''), so read _meta.usage
+      // OUTSIDE the text guard — otherwise the live context meter only moves after
+      // /compress. Other providers don't set _meta.usage, so this never fires for them.
+      const chunkMeta = (upd as { _meta?: unknown })._meta;
+      const chunkUsage = isRecord(chunkMeta) ? (chunkMeta as { usage?: unknown }).usage : undefined;
+      if (isRecord(chunkUsage)) {
+        const inputTokens = Number((chunkUsage as { inputTokens?: unknown }).inputTokens);
+        if (Number.isFinite(inputTokens) && inputTokens >= 0) {
+          events.push({ _tag: "UsageUpdated", used: inputTokens, rawPayload: params });
+        }
       }
       break;
     }

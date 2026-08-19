@@ -107,6 +107,10 @@ const writeGeneratedFiles = Effect.fn("writeGeneratedFiles")(function* (
   const fs = yield* FileSystem.FileSystem;
   const { metaOutputPath, schemaOutputPath } = yield* getGeneratedPaths();
 
+  // ru-code: schema.gen.ts carries two hand-written additions on top of this
+  // generator's output — an optional `answers` map on the permission-reply
+  // type declaration AND its runtime shape (search "answers" in that file).
+  // Re-add both if you regenerate; nothing else catches the loss.
   yield* fs.writeFileString(schemaOutputPath, schemaOutput);
   yield* fs.writeFileString(metaOutputPath, metaOutput);
 });

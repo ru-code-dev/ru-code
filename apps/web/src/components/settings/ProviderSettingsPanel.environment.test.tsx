@@ -88,13 +88,17 @@ vi.mock("../../state/session", () => ({
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
-const codexId = ProviderInstanceId.make("codex");
-const customId = ProviderInstanceId.make("codex_work");
+// ru-code: fixture rot fix (F2/F3) — this build only ships qwen + opencode
+// (C-05-019/206); codex has no PROVIDER_CLIENT_DEFINITIONS entry, so a codex
+// ServerProvider never gets a rendered ProviderInstanceCard. Re-pointed to a
+// driver this build actually ships; the routing/reset guarantees are unchanged.
+const codexId = ProviderInstanceId.make("qwen");
+const customId = ProviderInstanceId.make("qwen_work");
 
 function provider(): ServerProvider {
   return {
     instanceId: codexId,
-    driver: ProviderDriverKind.make("codex"),
+    driver: ProviderDriverKind.make("qwen"),
     enabled: true,
     installed: true,
     version: "1.0.0",
@@ -108,7 +112,7 @@ function provider(): ServerProvider {
       status: "behind_latest",
       currentVersion: "1.0.0",
       latestVersion: "1.1.0",
-      updateCommand: "pnpm add -g @openai/codex@latest",
+      updateCommand: "pnpm add -g qwen-code@latest",
       canUpdate: true,
       checkedAt: "2026-07-24T12:00:00.000Z",
       message: "Update available.",
@@ -174,7 +178,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
     expect(commands.updateProvider).toHaveBeenCalledWith({
       environmentId,
-      input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
+      input: { provider: ProviderDriverKind.make("qwen"), instanceId: codexId },
     });
   });
 
@@ -212,11 +216,11 @@ describe("EnvironmentProviderSettings routing", () => {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
         [codexId]: {
-          driver: ProviderDriverKind.make("codex"),
+          driver: ProviderDriverKind.make("qwen"),
           enabled: false,
         },
         [customId]: {
-          driver: ProviderDriverKind.make("codex"),
+          driver: ProviderDriverKind.make("qwen"),
           enabled: true,
         },
       },

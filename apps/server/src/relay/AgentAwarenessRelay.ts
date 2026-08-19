@@ -18,6 +18,8 @@ import {
   RELAY_ACTIVITY_PUBLISH_TYP,
   signRelayJwt,
 } from "@t3tools/shared/relayJwt";
+// ru-code: gate no-signal DEBUG spam behind a branding flag (see HIDE_USELESS_LOGS).
+import { HIDE_USELESS_LOGS } from "@ru-code/branding";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -517,12 +519,20 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
     if (!publishAgentActivity) {
-      yield* Effect.logDebug("agent activity snapshot skipped; publication disabled");
+      // ru-code: gated — this fires on every tick when relay publication is off.
+      if (!HIDE_USELESS_LOGS) {
+        yield* Effect.logDebug("agent activity snapshot skipped; publication disabled");
+      }
       return false;
     }
     const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
     if (!relayConfig) {
-      yield* Effect.logDebug("agent activity snapshot skipped; relay link credentials unavailable");
+      // ru-code: gated — same no-signal spam when relay credentials are absent.
+      if (!HIDE_USELESS_LOGS) {
+        yield* Effect.logDebug(
+          "agent activity snapshot skipped; relay link credentials unavailable",
+        );
+      }
       return false;
     }
     const environmentId = yield* serverEnvironment.getEnvironmentId;

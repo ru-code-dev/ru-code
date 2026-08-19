@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
+// ru-code: decisions.md row 16 (C-05-204 option A) — the default text-generation
+// selection is the fork's own instance with no seeded model/options.
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
@@ -114,11 +117,12 @@ describe("ClientSettings sidebar", () => {
 });
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
-  it("defaults text generation to Luna at low reasoning effort", () => {
+  // ru-code: decisions.md row 16 (C-05-204 option A) — the default is the fork's
+  // own assistant with an unset model (the live resolver decides), no options.
+  it("defaults text generation to the fork's assistant with no seeded model", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.6-luna",
-      options: [{ id: "reasoningEffort", value: "low" }],
+      instanceId: ProviderInstanceId.make(DEFAULT_PROVIDER_INSTANCE_ID),
+      model: "",
     });
   });
 
@@ -131,7 +135,9 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     expect(decoded.providerInstances).toEqual({});
     // Legacy `providers` struct is still hydrated with its per-driver defaults
     // so existing call sites keep working through the migration.
-    expect(decoded.providers.codex.enabled).toBe(true);
+    // ru-code: all non-qwen providers default disabled (qwen is enabled by
+    // preflight detection) — see QwenSettings/OpenCodeSettings `enabled` default.
+    expect(decoded.providers.codex.enabled).toBe(false);
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {

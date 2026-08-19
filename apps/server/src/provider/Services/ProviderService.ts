@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ProviderCompactContextInput, // ru-code
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -59,6 +60,14 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * ru-code: run a hidden context compaction (`/compress`) on the thread's
+   * live provider session. Fails when the adapter doesn't support it.
+   */
+  readonly compactContext: (
+    input: ProviderCompactContextInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Respond to a provider approval request.
    */
   readonly respondToRequest: (
@@ -85,6 +94,15 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /**
+   * ru-code: whether the thread's active session is currently holding a parked
+   * permission / plan / user-input request. The command reactor checks this to
+   * auto-interrupt a parked session before starting a new turn (the
+   * send-while-parked deadlock guard). Returns false when there is no active
+   * session or the bound adapter doesn't support parking.
+   */
+  readonly hasParkedRequests: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
    * Read capabilities for the adapter bound to a configured provider instance.

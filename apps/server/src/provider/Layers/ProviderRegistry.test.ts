@@ -50,6 +50,8 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { QwenModelDiscoveryStore } from "../../ru-code/qwen/discovery/QwenModelDiscoveryStore.ts"; // ru-code
+import { QwenCompactionHistory } from "../../ru-code/qwen/compaction/QwenCompactionHistory.ts"; // ru-code
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -340,7 +342,10 @@ function makeMutableServerSettingsService(
 it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), TestHttpClientLive))(
   "ProviderRegistry",
   (it) => {
-    describe("checkCodexProviderStatus", () => {
+    // ru-code: codex is a disabled adapter (commented out of BUILT_IN_DRIVERS +
+    // enabled defaults false). Skip its status-probe suite until codex is
+    // re-enabled — restore by removing `.skip`.
+    describe.skip("checkCodexProviderStatus", () => {
       it.effect("uses the app-server account and model list for provider status", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -1361,7 +1366,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
       // breaks — the `codex_personal`-never-probes bug we are guarding
       // against — that snapshot never lands in `getProviders` and the
       // assertions below fail.
-      it.effect("propagates real Codex probe failures to the aggregator at boot", () =>
+      // ru-code: codex disabled — skip until re-enabled.
+      it.effect.skip("propagates real Codex probe failures to the aggregator at boot", () =>
         Effect.gen(function* () {
           const missingBinary = `t3code_codex_missing_`;
           const serverSettings = yield* makeMutableServerSettingsService(
@@ -1405,6 +1411,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            // ru-code: QwenDriver.create consumes the model-discovery store
+            // and the compaction-history reader.
+            Layer.provideMerge(QwenModelDiscoveryStore.layer()),
+            Layer.provideMerge(QwenCompactionHistory.layerTest()),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
             ),
@@ -1476,7 +1486,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
       // aggregator sync pipeline and asserts that `getProviders` reflects
       // the new background probe's outcome.
       //
-      // ru-code: environmental flake — timing-sensitive drain-window race on slow FS mount
+      // ru-code: codex disabled — skip until re-enabled. Also an environmental
+      // flake — timing-sensitive drain-window race on slow FS mount.
       it.effect.skip("re-probes when settings change the codex binaryPath", () =>
         Effect.gen(function* () {
           const firstMissing = `t3code_codex_first_`;
@@ -1499,6 +1510,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            // ru-code: QwenDriver.create consumes the model-discovery store
+            // and the compaction-history reader.
+            Layer.provideMerge(QwenModelDiscoveryStore.layer()),
+            Layer.provideMerge(QwenCompactionHistory.layerTest()),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
             ),
@@ -1621,6 +1636,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            // ru-code: QwenDriver.create consumes the model-discovery store
+            // and the compaction-history reader.
+            Layer.provideMerge(QwenModelDiscoveryStore.layer()),
+            Layer.provideMerge(QwenCompactionHistory.layerTest()),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
             ),
@@ -1657,7 +1676,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
-      it.effect(
+      // ru-code: cursor disabled — skip until re-enabled.
+      it.effect.skip(
         "keeps cursor disabled and skips probing when the provider setting is disabled",
         () =>
           Effect.gen(function* () {
@@ -1683,6 +1703,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
             const providerRegistryLayer = ProviderRegistryLive.pipe(
               Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+              // ru-code: QwenDriver.create consumes the model-discovery store
+              // and the compaction-history reader.
+              Layer.provideMerge(QwenModelDiscoveryStore.layer()),
+              Layer.provideMerge(QwenCompactionHistory.layerTest()),
               Layer.provideMerge(
                 Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
               ),
@@ -1771,7 +1795,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
     // ── checkClaudeProviderStatus tests ──────────────────────────
 
-    describe("checkClaudeProviderStatus", () => {
+    // ru-code: claudeAgent is a disabled adapter (commented out of BUILT_IN_DRIVERS +
+    // enabled defaults false). Skip its status-probe suite until claude is
+    // re-enabled — restore by removing `.skip`.
+    describe.skip("checkClaudeProviderStatus", () => {
       it.effect("returns ready when claude is installed and authenticated", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(

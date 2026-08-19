@@ -75,6 +75,12 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  // ru-code: the thread's live runtime mode for this turn. Lets a capable adapter
+  // (qwen advertises supportsInSessionRuntimeMode) apply a mode change via per-turn
+  // setMode instead of a session respawn. Populated by the reactor for every provider;
+  // adapters that respawn on mode change simply ignore it. Optional ⇒ additive, no
+  // existing caller/adapter breaks.
+  runtimeMode: Schema.optional(RuntimeMode),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
@@ -90,6 +96,12 @@ export const ProviderInterruptTurnInput = Schema.Struct({
   turnId: Schema.optional(TurnId),
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
+
+// ru-code: hidden context compaction on the thread's live session.
+export const ProviderCompactContextInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderCompactContextInput = typeof ProviderCompactContextInput.Type;
 
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,

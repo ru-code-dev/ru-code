@@ -124,6 +124,9 @@ describe("derivePendingApprovals", () => {
       {
         requestId: "req-request-type",
         requestKind: "command",
+        // ru-code: derivePendingApprovals now carries the raw requestType so the
+        // web can recognize plan approvals (requestType === "plan_approval").
+        requestType: "command_execution_approval",
         createdAt: "2026-02-23T00:00:01.000Z",
         detail: "pwd",
       },

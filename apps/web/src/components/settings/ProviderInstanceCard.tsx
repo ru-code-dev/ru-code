@@ -38,7 +38,28 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
+// ru-code: qwen custom-model + auth config-shape helpers live in the zone (R6).
+import {
+  readCustomModelEntries,
+  readDefaultAuthMethod,
+} from "~/ru-code/cliProfiles/customModelEntries";
+// ru-code: the card's config-blob transitions as one testable host decision (R6).
+import {
+  configAfterCustomModelAdd,
+  configAfterCustomModelListChange,
+  configAfterDefaultAuthMethodChange,
+} from "~/ru-code/cliProfiles/settingsHostState";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
+// ru-code: read-only brand-profile helpers — the card DISPLAYS the profile (title +
+// icon); the profile is chosen once in the add wizard, not edited here.
+import {
+  effectiveDefaultAuthMethod,
+  isCliProfileDriver,
+  readProfile,
+  readProfileId,
+} from "~/ru-code/cliProfiles/profileConfig";
+// ru-code: per-instance default auth method + per-model auth (qwen only).
+import { CliDefaultAuthMethodRow } from "~/ru-code/cliProfiles/CliAuthMethodSelect";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
@@ -77,41 +98,11 @@ function makeEnvironmentDraftRow(
   };
 }
 
-/**
- * Read a string[] at `key` from the opaque config blob, filtering out
- * non-string entries. Used for `customModels`, which is always typed as
- * `string[]` by the concrete driver schemas but arrives here as
- * `Schema.Unknown`.
- */
-function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
-  if (config === null || typeof config !== "object") return [];
-  const value = (config as Record<string, unknown>)[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
-}
-
-/**
- * Set `key` to an arbitrary value on the opaque config blob. Unlike
- * provider settings field updates, does not drop empty-looking values — the
- * caller is responsible for deciding whether an empty array / empty
- * object should be stored explicitly (e.g. `customModels: []` is a
- * meaningful "user cleared their custom list" state distinct from
- * "driver default").
- */
-function nextConfigBlobWithValue(
-  config: unknown,
-  key: string,
-  value: unknown,
-): Record<string, unknown> {
-  const base: Record<string, unknown> =
-    config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
-  base[key] = value;
-  return base;
-}
-
 export function deriveProviderModelsForDisplay(input: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<string>;
+  // ru-code: `authType` (qwen) is carried onto the synthesized custom model so the
+  // chosen auth method shows immediately, before the server snapshot catches up.
+  readonly customModels: ReadonlyArray<{ readonly slug: string; readonly authType?: string }>;
 }): ReadonlyArray<ServerProviderModel> {
   const liveCustomModelsBySlug = new Map(
     Arr.filterMap(input.liveModels ?? [], (model) =>
@@ -120,12 +111,13 @@ export function deriveProviderModelsForDisplay(input: {
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
   const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
+    (entry) =>
+      liveCustomModelsBySlug.get(entry.slug) ?? {
+        slug: entry.slug,
+        name: entry.slug,
         isCustom: true,
         capabilities: null,
+        ...(entry.authType ? { authType: entry.authType } : {}),
       },
   );
   return [...serverModels, ...customModels];
@@ -413,8 +405,14 @@ export function ProviderInstanceCard({
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
+  // ru-code: a qwen instance with no custom name shows its brand-profile label
+  // (Custom Code / Qwen Code) instead of the shared kind label.
   const displayName =
-    instance.displayName?.trim() || driverOption?.label || String(instance.driver);
+    instance.displayName?.trim() ||
+    (isCliProfileDriver(instance.driver)
+      ? readProfile(instance.config).name
+      : driverOption?.label) ||
+    String(instance.driver);
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
@@ -443,13 +441,21 @@ export function ProviderInstanceCard({
     ? instance.driver
     : null;
 
-  const customModels = readConfigStringArray(instance.config, "customModels");
+  // ru-code: qwen stores custom models as `{ slug, authMethod }`; other drivers as
+  // plain slugs. `readCustomModelEntries` normalizes both; `customModels` (slugs)
+  // drives the section's list/dedup, `customModelEntries` preserves each auth method.
+  const isProfileDriver = isCliProfileDriver(instance.driver);
+  const customModelEntries = readCustomModelEntries(instance.config);
+  const customModels = customModelEntries.map((entry) => entry.slug);
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
   const modelsForDisplay = deriveProviderModelsForDisplay({
     liveModels: liveProvider?.models,
-    customModels,
+    customModels: customModelEntries.map((entry) => ({
+      slug: entry.slug,
+      ...(entry.authMethod ? { authType: entry.authMethod } : {}),
+    })),
   });
 
   const updateDisplayName = (value: string) => {
@@ -486,9 +492,31 @@ export function ProviderInstanceCard({
   };
 
   const updateCustomModels = (next: ReadonlyArray<string>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+    // ru-code: for a profile driver (qwen) persist `{ slug, authMethod }`, preserving
+    // each surviving slug's auth method (remove/reorder come through here as slugs).
+    // Other drivers keep the plain slug[] shape.
+    const nextConfig = configAfterCustomModelListChange(instance.config, next, isProfileDriver);
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  // ru-code: qwen custom-model add carries an auth method — append `{ slug, authMethod }`.
+  const addCustomModelWithAuth = (slug: string, authMethod: string) => {
+    const nextConfig = configAfterCustomModelAdd(instance.config, slug, authMethod);
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  // ru-code: session-start default auth method; `""` (Auto) removes the key so the
+  // server resolves it from the profile default.
+  const updateDefaultAuthMethod = (authMethod: string) => {
+    const base = configAfterDefaultAuthMethodChange(instance.config, authMethod);
+    const { config: _omit, ...rest } = instance;
+    onUpdate(
+      Object.keys(base).length > 0
+        ? ({ ...rest, config: base } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
   };
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
@@ -504,6 +532,7 @@ export function ProviderInstanceCard({
   const titleIconNode = driverKind ? (
     <ProviderInstanceIcon
       driverKind={driverKind}
+      profile={isCliProfileDriver(instance.driver) ? readProfileId(instance.config) : undefined}
       displayName={displayName}
       accentColor={accentColor}
       showBadge={Boolean(accentColor)}
@@ -729,22 +758,28 @@ export function ProviderInstanceCard({
       <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">
-            <div>
-              <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
-                <span className="text-xs font-medium text-foreground">Display name</span>
-                <DraftInput
-                  id={`provider-instance-${instanceId}-display-name`}
-                  className="mt-1.5"
-                  value={instance.displayName ?? ""}
-                  onCommit={updateDisplayName}
-                  placeholder={driverOption?.label ?? "Instance label"}
-                  spellCheck={false}
-                />
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Optional label shown in the provider list.
-                </span>
-              </label>
-            </div>
+            {/* ru-code SEAM: hide the name field ONLY for the built-in default QWEN
+                instance (its name is fixed by its profile and already shown as the card
+                title). Every other provider — incl. OpenCode's built-in default — keeps
+                the editable name field. */}
+            {isCliProfileDriver(instance.driver) && onDelete === undefined ? null : (
+              <div>
+                <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
+                  <span className="text-xs font-medium text-foreground">Display name</span>
+                  <DraftInput
+                    id={`provider-instance-${instanceId}-display-name`}
+                    className="mt-1.5"
+                    value={instance.displayName ?? ""}
+                    onCommit={updateDisplayName}
+                    placeholder={driverOption?.label ?? "Instance label"}
+                    spellCheck={false}
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Optional label shown in the provider list.
+                  </span>
+                </label>
+              </div>
+            )}
 
             <div>
               <ProviderAccentColorPicker
@@ -773,6 +808,16 @@ export function ProviderInstanceCard({
               />
             ) : null}
 
+            {/* ru-code: session-start default auth method (qwen only). CliDefaultAuthMethodRow
+                is a SettingsRow — it carries its own border + padding, no wrapper needed. */}
+            {isProfileDriver ? (
+              <CliDefaultAuthMethodRow
+                value={readDefaultAuthMethod(instance.config)}
+                profileId={readProfileId(instance.config)}
+                onChange={updateDefaultAuthMethod}
+              />
+            ) : null}
+
             {driverOption !== undefined ? (
               <ProviderModelsSection
                 instanceId={instanceId}
@@ -786,6 +831,15 @@ export function ProviderInstanceCard({
                 onHiddenModelsChange={onHiddenModelsChange}
                 onFavoriteModelsChange={onFavoriteModelsChange}
                 onModelOrderChange={onModelOrderChange}
+                // ru-code: qwen — per-model auth (add form Select + row label). The
+                // fallback is the EFFECTIVE instance default (override ?? profile) so a
+                // model's "Auto" hint matches what the server resolves.
+                {...(isProfileDriver
+                  ? {
+                      authFallback: effectiveDefaultAuthMethod(instance.config),
+                      onAddModelWithAuth: addCustomModelWithAuth,
+                    }
+                  : {})}
               />
             ) : (
               <div>

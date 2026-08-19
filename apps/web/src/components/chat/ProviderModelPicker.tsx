@@ -11,11 +11,12 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { ModelPickerContent } from "./ModelPickerContent";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { ModelEsque } from "./providerIconUtils";
+// ru-code: trigger composite — served-option resolution + label (0-served default).
 import {
-  ModelEsque,
-  getTriggerDisplayModelLabel,
-  getTriggerDisplayModelName,
-} from "./providerIconUtils";
+  resolveTriggerModelDisplay,
+  resolveTriggerModelOption,
+} from "../../ru-code/modelPicker/triggerModelDisplay";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, ComposerControlChevron } from "./ComposerControl";
 
@@ -32,6 +33,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  // ru-code: raw history usage forwarded to the list's capacity gate.
+  usedTokens?: number | null;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -58,15 +61,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
-  // If the current slug belongs to a different instance (for example after
-  // a provider switch or disable), prefer the active instance's first
-  // option so the trigger icon and label stay in sync instead of showing
-  // a stale foreign slug.
-  const selectedModel =
-    selectedInstanceOptions.find((option) => option.slug === props.model) ??
-    selectedInstanceOptions[0];
-  const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
-  const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
+  // ru-code: find-or-first served-option resolution lives in triggerModelDisplay.
+  const selectedModel = resolveTriggerModelOption(selectedInstanceOptions, props.model);
+  // ru-code: empty options + empty model ⇒ "Default model" (CLI defaults).
+  const { title: triggerTitle, label: triggerLabel } = resolveTriggerModelDisplay(
+    selectedModel,
+    props.model,
+  );
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
 
@@ -161,6 +162,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           {activeEntry ? (
             <ProviderInstanceIcon
               driverKind={activeEntry.driverKind}
+              // ru-code: brand-profile mark for the active instance (custom fork / stock qwen).
+              profile={activeEntry.profile}
               displayName={activeEntry.displayName}
               accentColor={activeEntry.accentColor}
               showBadge={showInstanceBadge}
@@ -197,6 +200,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           instanceEntries={props.instanceEntries}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}
           modelOptionsByInstance={props.modelOptionsByInstance}
+          {...(props.usedTokens !== undefined ? { usedTokens: props.usedTokens } : {})}
           terminalOpen={props.terminalOpen ?? false}
           onRequestClose={() => setIsMenuOpen(false)}
           {...(props.getModelDisabledReason

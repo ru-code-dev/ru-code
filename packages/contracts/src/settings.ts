@@ -1,15 +1,12 @@
-import { APP_NAME } from "@ru-code/branding";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+// ru-code: single-source app name + default provider/model constants.
+import { APP_NAME, DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode } from "./environment.ts";
-import {
-  DEFAULT_TEXT_GENERATION_MODEL,
-  DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
-  ProviderOptionSelections,
-} from "./model.ts";
+import { ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import {
   DEFAULT_PREVIEW_APPEARANCE,
@@ -313,7 +310,8 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
 export const CodexSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      // ru-code: all providers default disabled; qwen is enabled by preflight detection.
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("codex").pipe(
@@ -367,7 +365,8 @@ export type CodexSettings = typeof CodexSettings.Type;
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      // ru-code: all providers default disabled; qwen is enabled by preflight detection.
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("claude").pipe(
@@ -446,7 +445,8 @@ export type CursorSettings = typeof CursorSettings.Type;
 export const GrokSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      // ru-code: all providers default disabled; qwen is enabled by preflight detection.
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("grok").pipe(
@@ -467,10 +467,91 @@ export const GrokSettings = makeProviderSettingsSchema(
 );
 export type GrokSettings = typeof GrokSettings.Type;
 
+// ru-code: Qwen driver settings. Fields mirror the qwen CLI's configurable
+// surface — binary path, custom CLI_HOME, and extra launch args passed to
+// `… --acp`. `enabled` defaults true (decisions.md row 12: qwen is the one
+// provider that ships on by default); the QwenDriver still gates EFFECTIVE
+// enablement on startup preflight detection of the CLI (see
+// apps/server/src/ru-code/qwen), so it is active iff the CLI is present.
+export const QwenSettings = makeProviderSettingsSchema(
+  {
+    // ru-code: defaults true ("use qwen when available"). The QwenDriver gates
+    // the EFFECTIVE enablement on startup CLI detection (`enabled && cliDetected`),
+    // so qwen is active iff the CLI is present; not detected ⇒ effectively disabled.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    // ru-code: brand profile — "custom" (a qwen fork; bin/dir from boot preflight)
+    // or "qwen" (stock qwen; bin "qwen", dir "~/.qwen"). Selects the instance's
+    // display name, artifact id and bin/dir DEFAULTS; per-instance binaryPath/homePath
+    // still override. Set at add-time by the catalog preset, edited via the ru-code
+    // profile selector on the provider card. Hidden from the auto-generated form.
+    // Literal ids mirror @ru-code/branding CLI_PROFILE_IDS (kept inline to avoid a
+    // contracts → branding dependency).
+    profile: Schema.Literals(["custom", "qwen"]).pipe(
+      Schema.withDecodingDefault(Effect.succeed("custom" as const)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    // ru-code: defaults EMPTY (not the "qwen" fallback) so the profile resolver can
+    // tell "unset" (⇒ use the profile default: preflight cli.js for a fork, the qwen
+    // command for stock qwen) from an explicit user path. The web form overrides the
+    // placeholder per profile (empty for the fork, "qwen" for stock). The spawn runs a
+    // .js path via node, anything else directly.
+    binaryPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Leave empty to auto-detect.",
+        providerSettingsForm: { placeholder: "qwen", clearWhenEmpty: "omit" },
+      }),
+    ),
+    homePath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "CLI home directory",
+        description: "Leave empty to auto-detect.",
+        providerSettingsForm: { placeholder: "~/.qwen", clearWhenEmpty: "omit" },
+      }),
+    ),
+    launchArgs: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description:
+          "Additional CLI arguments passed when launching «qwen --acp». The model is built into the CLI.",
+        providerSettingsForm: { placeholder: "e.g. --verbose", clearWhenEmpty: "omit" },
+      }),
+    ),
+    // ru-code: session-start ACP `authenticate` methodId. EMPTY ⇒ resolve from the
+    // profile default on the server (see resolveDefaultAuthMethod). Hidden from the
+    // generic form — rendered by the ru-code auth-method selector on the card.
+    defaultAuthMethod: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    // ru-code: custom models carry a clean `slug` + the `authMethod` qwen dispatches
+    // with (`${slug}(${authMethod})` at setModel). authMethod EMPTY ⇒ the instance's
+    // resolved default. Object shape (not string[]) is qwen-specific; hidden from the
+    // generic form — the ru-code models section owns add/remove + the auth dropdown.
+    customModels: Schema.Array(
+      Schema.Struct({ slug: TrimmedNonEmptyString, authMethod: TrimmedString }),
+    ).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "homePath", "launchArgs"],
+  },
+);
+export type QwenSettings = typeof QwenSettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      // ru-code: all providers default disabled; qwen is enabled by preflight detection.
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("opencode").pipe(
@@ -631,6 +712,11 @@ export const ServerSettings = Schema.Struct({
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
+  // ru-code: auto-compaction for providers that never self-compact over ACP
+  // (qwen). When a turn ends with the context ≥75% full, the server runs a
+  // hidden `/compress` (no user bubble; timeline row + meter update only).
+  // Default ON — without it the qwen context silently overflows.
+  autoCompactContext: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
     Schema.withDecodingDefault(
       Effect.succeed(Duration.toMillis(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
@@ -654,14 +740,10 @@ export const ServerSettings = Schema.Struct({
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
-        instanceId: ProviderInstanceId.make("codex"),
-        model: DEFAULT_TEXT_GENERATION_MODEL,
-        options: [
-          {
-            id: "reasoningEffort",
-            value: DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
-          },
-        ],
+        // ru-code: model "" = unset — the live resolver (first served
+        // model of the instance) owns the default; a seeded slug goes stale.
+        instanceId: ProviderInstanceId.make(DEFAULT_PROVIDER_INSTANCE_ID),
+        model: "",
       }),
     ),
   ),
@@ -684,6 +766,7 @@ export const ServerSettings = Schema.Struct({
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    qwen: QwenSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))), // ru-code
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -787,6 +870,18 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+// ru-code: Qwen settings patch (mirrors QwenSettings fields).
+const QwenSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  homePath: Schema.optionalKey(TrimmedString),
+  launchArgs: Schema.optionalKey(TrimmedString),
+  defaultAuthMethod: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ slug: TrimmedNonEmptyString, authMethod: TrimmedString })),
+  ),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   locale: Schema.optionalKey(Locale), // ru-code
@@ -806,6 +901,7 @@ export const ServerSettingsPatch = Schema.Struct({
       overrides: Schema.optionalKey(BackgroundActivityOverrides),
     }),
   ),
+  autoCompactContext: Schema.optionalKey(Schema.Boolean), // ru-code
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
@@ -834,6 +930,7 @@ export const ServerSettingsPatch = Schema.Struct({
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
+      qwen: Schema.optionalKey(QwenSettingsPatch), // ru-code
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual

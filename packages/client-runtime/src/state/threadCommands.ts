@@ -6,6 +6,7 @@ import {
   type ArchiveThreadInput,
   type CreateThreadInput,
   type DeleteThreadInput,
+  type CompactThreadContextInput, // ru-code
   type InterruptThreadTurnInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
@@ -24,6 +25,7 @@ import {
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
   archiveThread,
+  compactThreadContext, // ru-code
   createThread,
   deleteThread,
   interruptThreadTurn,
@@ -48,6 +50,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
   ArchiveThreadInput,
+  CompactThreadContextInput, // ru-code
   CreateThreadInput,
   DeleteThreadInput,
   InterruptThreadTurnInput,
@@ -172,6 +175,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     interruptTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:interrupt-turn",
       execute: (input: InterruptThreadTurnInput) => interruptThreadTurn(input),
+      scheduler,
+      concurrency,
+    }),
+    // ru-code: hidden context compaction (meter button).
+    compactContext: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:compact-context",
+      execute: (input: CompactThreadContextInput) => compactThreadContext(input),
       scheduler,
       concurrency,
     }),

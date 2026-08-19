@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+// ru-code: raw-UTF-8-paths seam rides every git invocation — see ru-code/vcs/rawUtf8Paths.ts
+import { withoutRawUtf8Paths } from "../ru-code/vcs/rawUtf8Paths.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
@@ -16,8 +18,11 @@ const processOutput = (stdout: string): VcsProcess.VcsProcessOutput => ({
   stderrTruncated: false,
 });
 
-const normalizeGitArgs = (args: ReadonlyArray<string>): ReadonlyArray<string> =>
-  args[0] === "-C" && args.length >= 2 ? args.slice(2) : args;
+const normalizeGitArgs = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const withoutCwd = args[0] === "-C" && args.length >= 2 ? args.slice(2) : args;
+  // ru-code: the git funnel prepends the raw-UTF-8-paths flags — strip them like "-C <cwd>".
+  return withoutRawUtf8Paths(withoutCwd);
+};
 
 describe("VcsDriverRegistry", () => {
   it.effect("routes directly by VCS driver kind for non-repository workflows", () => {
@@ -57,8 +62,8 @@ describe("VcsDriverRegistry", () => {
           run: (input) =>
             Effect.sync(() => {
               calls.push(input);
-              const normalizedArgs =
-                input.args[0] === "-C" && input.args.length >= 2 ? input.args.slice(2) : input.args;
+              // ru-code: normalized for the raw-UTF-8-paths seam args too.
+              const normalizedArgs = normalizeGitArgs(input.args);
               const command = normalizedArgs.join(" ");
               if (command === "rev-parse --is-inside-work-tree") {
                 return processOutput("true\n");

@@ -1,5 +1,4 @@
 import {
-  DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -7,12 +6,16 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+// ru-code: single-source default provider/model constants.
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import {
   createModelSelection,
   normalizeCustomModelSlug,
   resolveSelectableModel,
 } from "@t3tools/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
+// ru-code: shared slug-normalizer so the two custom-model read sites can't drift.
+import { customModelSlugs } from "./ru-code/cliProfiles/customModelEntries";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
@@ -27,7 +30,8 @@ import { sortModelsForProviderInstance } from "./modelOrdering";
 
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
-const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
+// ru-code: text-gen default instance from the single-source constant (no codex).
+const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make(DEFAULT_PROVIDER_INSTANCE_ID);
 
 /**
  * Resolve the custom-model list for a given instance, preferring the
@@ -55,18 +59,22 @@ function readInstanceCustomModels(
   if (config !== null && typeof config === "object") {
     const value = (config as Record<string, unknown>).customModels;
     if (Array.isArray(value)) {
-      return value.filter((entry): entry is string => typeof entry === "string");
+      // ru-code: entries are plain slug strings (most providers) or
+      // `{ slug, authMethod }` objects (qwen) — normalize to slugs either way.
+      return customModelSlugs(value);
     }
   }
   const defaultInstanceId = defaultInstanceIdForDriver(driverKind);
   if (instanceId !== defaultInstanceId) {
     return [];
   }
+  // ru-code: legacy per-kind bucket. customModels is `string[]` for most drivers but
+  // `{ slug, authMethod }[]` for qwen — normalize to slugs either way.
   const legacyProviders = settings.providers as Record<
     string,
-    { readonly customModels: ReadonlyArray<string> } | undefined
+    { readonly customModels?: ReadonlyArray<string | { readonly slug?: unknown }> } | undefined
   >;
-  return legacyProviders[driverKind]?.customModels ?? [];
+  return customModelSlugs(legacyProviders[driverKind]?.customModels ?? []);
 }
 
 export interface AppModelOption {
@@ -77,6 +85,9 @@ export interface AppModelOption {
   isCustom: boolean;
   isDefault?: boolean;
   isLegacy?: boolean;
+  // ru-code: per-model context window (tokens) from the server snapshot's
+  // `nTokens`. Absent when the provider doesn't report one.
+  contextWindowTokens?: number;
 }
 
 function toAppModelOption(model: ServerProvider["models"][number]): AppModelOption {
@@ -89,6 +100,8 @@ function toAppModelOption(model: ServerProvider["models"][number]): AppModelOpti
   if (model.subProvider) option.subProvider = model.subProvider;
   if (model.isDefault) option.isDefault = true;
   if (model.isLegacy) option.isLegacy = true;
+  // ru-code: carry the served window only when it's a usable positive size.
+  if (model.nTokens != null && model.nTokens > 0) option.contextWindowTokens = model.nTokens;
   return option;
 }
 
@@ -121,6 +134,8 @@ function applyInstanceModelPreferences(
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
   builtInModelSlugs: ReadonlySet<string>,
+  // ru-code: default normalization provider from the single-source default-provider id (no codex).
+  provider: ProviderDriverKind = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID),
 ): string[] {
   const normalizedModels: string[] = [];
   const seen = new Set<string>();
@@ -283,7 +298,8 @@ export function resolveAppModelSelectionState(
 ): ModelSelection {
   const selection = settings.textGenerationModelSelection ?? {
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
-    model: DEFAULT_TEXT_GENERATION_MODEL,
+    // ru-code: model "" = unset — the resolver below picks the live default.
+    model: "",
   };
   const entries = deriveProviderInstanceEntries(providers);
   const selectedEntry = entries.find(

@@ -1,13 +1,13 @@
 import { APP_NAME } from "@ru-code/branding";
 import {
   CommandId,
-  DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ModelSelection,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -39,6 +39,8 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+// ru-code: closes qwen work that died with the previous process (see module doc).
+import { runQwenBootSweep } from "./ru-code/startup/qwenBootSweep.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -167,8 +169,10 @@ export const launchStartupHeartbeat = recordStartupHeartbeat.pipe(
 );
 
 export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
-  instanceId: ProviderInstanceId.make("codex"),
-  model: DEFAULT_MODEL,
+  // ru-code: model "" = unset — the live resolver (first served model
+  // of the instance) owns the default; a seeded slug goes stale.
+  instanceId: ProviderInstanceId.make(DEFAULT_PROVIDER_INSTANCE_ID),
+  model: "",
 });
 
 export const resolveWelcomeBase = Effect.gen(function* () {
@@ -361,6 +365,11 @@ export const make = (options?: StartupOptions) =>
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
         }),
       );
+
+      // ru-code: close work that died with the previous process (dangling qwen
+      // compactions + parked requests). Parked like every other background root:
+      // it never delays startup, and it runs once the server has committed.
+      yield* forkParked(runStartupPhase("qwen.boot-sweep", runQwenBootSweep));
 
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;

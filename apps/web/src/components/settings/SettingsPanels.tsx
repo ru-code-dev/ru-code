@@ -10,6 +10,8 @@ import {
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
+// ru-code: single-source default-provider instance id.
+import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -62,6 +64,8 @@ import {
   useTheme,
 } from "../../hooks/useTheme";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
+// ru-code: extracted auto-compact settings row.
+import { AutoCompactContextRow } from "../../ru-code/settings/AutoCompactContextRow";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
@@ -193,7 +197,8 @@ const BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS: Record<BackgroundActivityProfile
 const ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION =
   "Uses custom background intervals with the selected shared power policy.";
 
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+// ru-code: default driver kind derived from the single-source default-provider instance id (no codex).
+const DEFAULT_DRIVER_KIND = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID);
 const BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES: ReadonlyArray<{
   readonly key:
     | "pauseWhenHostLocked"
@@ -524,6 +529,10 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Provider update checks"]
         : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
+      // ru-code: qwen auto-compact setting joins the restore-defaults surface.
+      ...(settings.autoCompactContext !== DEFAULT_UNIFIED_SETTINGS.autoCompactContext
+        ? ["Auto-compact context"]
+        : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
         : []),
@@ -579,6 +588,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
+      settings.autoCompactContext, // ru-code
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       settings.wordWrap,
@@ -664,6 +674,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
+      autoCompactContext: DEFAULT_UNIFIED_SETTINGS.autoCompactContext, // ru-code
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
@@ -1799,6 +1810,26 @@ export function GeneralSettingsPanel() {
   });
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
+  // ru-code: persist the resolved selection (kills the display-only heal). When the stored value is
+  // absent or points at a disabled/unavailable instance, resolveAppModelSelectionState heals it to the
+  // single-source default (or first-enabled); write that back so it STICKS across reloads. Idempotent:
+  // once stored === resolved the guard stops, so no render loop. Waits for the provider snapshot.
+  useEffect(() => {
+    if (serverProviders.length === 0) return;
+    const stored = settings.textGenerationModelSelection;
+    if (
+      !stored ||
+      stored.instanceId !== textGenerationModelSelection.instanceId ||
+      stored.model !== textGenerationModelSelection.model
+    ) {
+      updateSettings({ textGenerationModelSelection });
+    }
+  }, [
+    settings.textGenerationModelSelection,
+    serverProviders,
+    textGenerationModelSelection,
+    updateSettings,
+  ]);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
   const textGenModelOptions = textGenerationModelSelection.options;
@@ -2046,6 +2077,17 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Hide whitespace changes by default"
             />
+          }
+        />
+
+        {/* ru-code: auto-compact — hidden /compress at ≥75% for providers
+            without self-compaction (qwen). */}
+        <AutoCompactContextRow
+          checked={settings.autoCompactContext}
+          isModified={settings.autoCompactContext !== DEFAULT_UNIFIED_SETTINGS.autoCompactContext}
+          onCheckedChange={(checked) => updateSettings({ autoCompactContext: checked })}
+          onReset={() =>
+            updateSettings({ autoCompactContext: DEFAULT_UNIFIED_SETTINGS.autoCompactContext })
           }
         />
 

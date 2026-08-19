@@ -54,6 +54,16 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     devAllowedOrigins: [],
   } as const;
 
+  // ru-code: resolveServerConfig now runs startup qwen-CLI detection, adding these
+  // three fields to the resolved config. Their values are env/machine-dependent
+  // (cliConfigDir is the real `~/.qwen`, cliDetected/cliJs depend on what's
+  // installed), so assert presence + type here rather than exact literals.
+  const qwenCliConfigMatch = {
+    cliJs: expect.any(String),
+    cliConfigDir: expect.any(String),
+    cliDetected: expect.any(Boolean),
+  };
+
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
     const fs = yield* FileSystem.FileSystem;
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
@@ -116,6 +126,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Warn",
         ...defaultObservabilityConfig,
         mode: "desktop",
@@ -189,6 +200,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Debug",
         ...defaultObservabilityConfig,
         mode: "web",
@@ -264,6 +276,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Info",
         ...defaultObservabilityConfig,
         mode: "web",
@@ -340,6 +353,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Info",
         ...defaultObservabilityConfig,
         otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -478,6 +492,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Debug",
         ...defaultObservabilityConfig,
         mode: "web",
@@ -547,6 +562,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("http://localhost:4318/v1/metrics");
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Info",
         ...defaultObservabilityConfig,
         otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -614,6 +630,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        ...qwenCliConfigMatch, // ru-code: qwen CLI detection fields
         logLevel: "Info",
         ...defaultObservabilityConfig,
         mode: "web",

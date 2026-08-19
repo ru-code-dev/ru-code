@@ -9,6 +9,9 @@ import {
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
   type VcsStatusLocalResult,
+  // ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
+  isSyntheticAssistantMessageId,
+  syntheticAssistantMessageId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -294,13 +297,20 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    // ru-code: a synthetic requested id (a placeholder's own unresolved value)
+    // is not information — prefer the projection's real message over it.
+    const requestedAssistantMessageId =
+      input.assistantMessageId !== undefined &&
+      !isSyntheticAssistantMessageId(input.assistantMessageId)
+        ? input.assistantMessageId
+        : undefined;
+    const projectedAssistantMessageId = input.thread.messages
+      .toReversed()
+      .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id;
     const assistantMessageId =
-      input.assistantMessageId ??
-      input.thread.messages
-        .toReversed()
-        .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id ??
-      MessageId.make(`assistant:${input.turnId}`);
-
+      requestedAssistantMessageId ??
+      projectedAssistantMessageId ??
+      syntheticAssistantMessageId(input.turnId);
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.diff.complete",
       commandId: yield* serverCommandId("checkpoint-turn-diff-complete"),

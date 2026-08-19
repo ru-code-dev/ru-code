@@ -1,4 +1,8 @@
 @import "tailwindcss";
+/* ru-code: catalog skills/agents panel styles. */
+@import "@smart-tools/qwen-cli-skill-manager/styles.css";
+@import "@smart-tools/qwen-cli-agents-manager/styles.css";
+@import "@smart-tools/qwen-cli-commands-manager/styles.css";
 
 @custom-variant dark (&:is(.dark, .dark *));
 @custom-variant light (&:not(.dark, .dark *));

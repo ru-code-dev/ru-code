@@ -17,7 +17,11 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+// ru-code: align the client default to the canonical safe default in @t3tools/contracts
+// (orchestration.ts). Was "full-access" (auto-approves everything); "auto-accept-edits" auto-applies
+// file edits but still surfaces command/other approvals. Qwen forbids full-access outright
+// (QwenProvider allowsFullAccess:false). See WORKFLOW/decisions.md row 17 / patch-defects 05-D1.
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "auto-accept-edits";
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;

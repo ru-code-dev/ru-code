@@ -80,6 +80,12 @@ import {
 import { FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
 import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTerminalContexts";
 import { formatProviderSkillDisplayName } from "~/providerSkillPresentation";
+// ru-code: delimited catalog chip node (qwen skills/agents), registered alongside the native skill node.
+import {
+  ComposerCatalogTokenNode,
+  $createComposerCatalogTokenNode,
+} from "~/ru-code/skills-agents/composer/ComposerCatalogTokenNode";
+import { formatCatalogItemDisplayName } from "@smart-tools/qwen-cli-catalog-core/contracts";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { registerComposerInlineTokenPaste } from "./composerInlineTokenPaste";
 
@@ -428,12 +434,14 @@ function $createComposerTerminalContextNode(
 type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
+  | ComposerCatalogTokenNode // ru-code: delimited skill/agent chip
   | ComposerTerminalContextNode;
 
 function isComposerInlineTokenNode(candidate: unknown): candidate is ComposerInlineTokenNode {
   return (
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
+    candidate instanceof ComposerCatalogTokenNode || // ru-code
     candidate instanceof ComposerTerminalContextNode
   );
 }
@@ -841,6 +849,19 @@ function $setComposerEditorPrompt(
           segment.name,
           metadata?.label ?? formatProviderSkillDisplayName({ name: segment.name }),
           metadata?.description ?? null,
+        ),
+      );
+      continue;
+    }
+    // ru-code: delimited catalog chips build the kind-parameterized catalog token node.
+    if (segment.type === "catalog-skill" || segment.type === "catalog-agent") {
+      paragraph.append(
+        $createComposerCatalogTokenNode(
+          segment.type === "catalog-agent" ? "agent" : "skill",
+          segment.name,
+          // ru-code: chip shows the formatted display name; the token identity (2nd arg) stays raw.
+          formatCatalogItemDisplayName(segment.name),
+          null,
         ),
       );
       continue;
@@ -1808,7 +1829,12 @@ export function ComposerPromptEditor({
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
+      nodes: [
+        ComposerMentionNode,
+        ComposerSkillNode,
+        ComposerCatalogTokenNode, // ru-code: delimited skill/agent chip
+        ComposerTerminalContextNode,
+      ],
       editorState: () => {
         $setComposerEditorPrompt(
           initialValueRef.current,

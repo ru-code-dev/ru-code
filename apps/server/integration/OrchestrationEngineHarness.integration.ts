@@ -55,6 +55,8 @@ import * as ThreadPlanProgress from "../src/orchestration/ThreadPlanProgress.ts"
 import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
+// ru-code: no-op respawn gate for the reactor dependency (see SessionRespawnGate).
+import { SessionRespawnGateNoop } from "../src/ru-code/skills-agents/SessionRespawnGate.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { CheckpointReactor } from "../src/orchestration/Services/CheckpointReactor.ts";
 import { ProviderRuntimeIngestionService } from "../src/orchestration/Services/ProviderRuntimeIngestion.ts";
@@ -426,6 +428,9 @@ export const makeOrchestrationIntegrationHarness = (
     const layer = Layer.empty.pipe(
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(orchestrationReactorLayer),
+      // ru-code: the reactor now depends on SessionRespawnGate; this harness doesn't exercise the
+      // catalog-change respawn path, so provide the no-op gate.
+      Layer.provideMerge(SessionRespawnGateNoop),
       Layer.provideMerge(providerRegistryLayer),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),

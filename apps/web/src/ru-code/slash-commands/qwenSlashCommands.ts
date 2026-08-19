@@ -16,6 +16,14 @@
  * (qwen Session.ts:1057-1061). `stripUnknownLeadingSlashCommand` enforces that
  * at submit (see its doc).
  *
+ * EXCEPTION — catalog custom commands: qwen ALSO runs the user's own commands
+ * deployed under `<cwd>/.qwen/commands/`. Those are dynamic (the Commands panel
+ * adds/removes/connects them per project), so the guard cannot list them here.
+ * The caller passes the LIVE effective set (from the catalog snapshot atom, via
+ * `useCatalogCommandSlugs`) into the guard as `catalogCommandSlugs`; because the
+ * set is recomputed from the atom, the allowlist recalculates whenever the
+ * command list changes.
+ *
  * @module ru-code/slash-commands/qwenSlashCommands
  */
 import { QWEN_KIND } from "@ru-code/branding";
@@ -89,14 +97,21 @@ const LEADING_SLASH_COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/;
  *   - bare unknown slug → `null`: the caller must ABORT the submit (qwen would
  *     answer the raw command with a -32603 protocol error).
  *
+ * A slug is "known" if it is a built-in (`KNOWN_QWEN_SLASH_COMMAND_SLUGS`) OR a
+ * live catalog custom command (`catalogCommandSlugs`, deployed under .qwen/commands).
+ * Both are matched case-insensitively (pass lowercase slugs in `catalogCommandSlugs`).
+ *
  * Trims first so leading whitespace can't smuggle a command past the check.
  */
-export function stripUnknownLeadingSlashCommand(text: string): string | null {
+export function stripUnknownLeadingSlashCommand(
+  text: string,
+  catalogCommandSlugs?: ReadonlySet<string>,
+): string | null {
   const trimmed = text.trim();
   const match = LEADING_SLASH_COMMAND.exec(trimmed);
   if (!match?.[1]) return text;
   const slug = match[1].toLowerCase();
-  if (KNOWN_QWEN_SLASH_COMMAND_SLUGS.has(slug)) return text;
+  if (KNOWN_QWEN_SLASH_COMMAND_SLUGS.has(slug) || catalogCommandSlugs?.has(slug)) return text;
   const trailingText = match[2]?.trim() ?? "";
   return trailingText === "" ? null : trailingText;
 }
@@ -126,6 +141,9 @@ export function resolveQwenSubmitPrompt(input: {
   readonly selectedProvider: ProviderDriverKind;
   readonly prompt: string;
   readonly hasNonTextContent: boolean;
+  /** ru-code: live set of catalog custom-command slugs (lowercased) deployed for the active project;
+   *  passed so a `/mycommand` from the Commands panel is recognized instead of aborted as "unknown". */
+  readonly catalogCommandSlugs?: ReadonlySet<string>;
 }): QwenSubmitPromptDecision {
   if (input.selectedProvider !== QWEN_KIND) {
     return { action: "send", prompt: input.prompt };
@@ -133,7 +151,7 @@ export function resolveQwenSubmitPrompt(input: {
   if (!input.hasNonTextContent && isBareCompressCommand(input.prompt)) {
     return { action: "compact" };
   }
-  const strippedPrompt = stripUnknownLeadingSlashCommand(input.prompt);
+  const strippedPrompt = stripUnknownLeadingSlashCommand(input.prompt, input.catalogCommandSlugs);
   if (strippedPrompt === null) {
     return input.hasNonTextContent ? { action: "send", prompt: "" } : { action: "abort" };
   }

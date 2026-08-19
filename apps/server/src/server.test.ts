@@ -959,6 +959,9 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
+      // ru-code: the Skills/Agents catalog projects port reads ProjectionProjectRepository (backed by
+      // SqlClient); provide an in-memory Sqlite so the catalog host layers resolve in the test harness.
+      Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provide(layerConfig),
     );
 

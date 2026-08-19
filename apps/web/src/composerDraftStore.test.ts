@@ -787,6 +787,9 @@ describe("composerDraftStore project draft thread mapping", () => {
     }
   });
 
+  // ru-code: the two `runtimeMode` expectations below were updated "full-access" → "auto-accept-edits"
+  // when the DEFAULT_RUNTIME_MODE seam changed the safe default (types.ts). A default fix, no new
+  // cases (R4). See WORKFLOW/decisions.md row 17 / patch-defects 05-D1.
   it("stores and reads project draft thread ids via actions", () => {
     const store = useComposerDraftStore.getState();
     expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
@@ -806,7 +809,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
-      runtimeMode: "full-access",
+      runtimeMode: "auto-accept-edits",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
@@ -817,7 +820,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
-      runtimeMode: "full-access",
+      runtimeMode: "auto-accept-edits",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });

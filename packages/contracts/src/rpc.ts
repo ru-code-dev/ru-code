@@ -192,6 +192,23 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+// ru-code: the Skills/Agents catalog RPC surfaces are minted by the shared core factory in
+// their own packages. The host spreads the def arrays into `WsRpcGroup` (below) so the ws
+// transport serves them, and re-exports the literal method-name maps for the server + client.
+import {
+  skillCatalogRpcs,
+  SKILL_CATALOG_METHODS,
+} from "@smart-tools/qwen-cli-skill-manager/contracts";
+import {
+  agentCatalogRpcs,
+  AGENT_CATALOG_METHODS,
+} from "@smart-tools/qwen-cli-agents-manager/contracts";
+import {
+  commandCatalogRpcs,
+  COMMAND_CATALOG_METHODS,
+} from "@smart-tools/qwen-cli-commands-manager/contracts";
+
+export { SKILL_CATALOG_METHODS, AGENT_CATALOG_METHODS, COMMAND_CATALOG_METHODS };
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1082,4 +1099,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+  // ru-code: the 13 Skills + 13 Agents + 13 Commands catalog RPCs (minted by the shared core factory).
+  ...skillCatalogRpcs,
+  ...agentCatalogRpcs,
+  ...commandCatalogRpcs,
 );

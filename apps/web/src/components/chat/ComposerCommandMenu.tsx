@@ -19,6 +19,10 @@ import {
   CommandSeparator,
 } from "../ui/command";
 import { PierreEntryIcon } from "./PierreEntryIcon";
+// ru-code: catalog `$skill`/`#agent` row icon — logic/markup lives in ru-code.
+import { CatalogMenuItemIcon } from "~/ru-code/skills-agents/composer/catalogMenuRender";
+// ru-code: 3-section (Проект / Глобальные / Встроенные) grouping for catalog-sourced picker rows.
+import { groupCatalogComposerItems } from "~/ru-code/skills-agents/composer/groupCatalogComposerItems";
 
 export type ComposerCommandItem =
   | {
@@ -53,6 +57,36 @@ export type ComposerCommandItem =
       skill: ServerProviderSkill;
       label: string;
       description: string;
+    }
+  // ru-code: catalog-sourced skill/agent picker rows (qwen). Distinct from the native `skill` row so
+  // the port's own $skill path is never disturbed. Inserted as delimited `skill:⟦name⟧`/`agent:⟦name⟧`.
+  | {
+      id: string;
+      type: "catalog-skill";
+      name: string;
+      label: string;
+      description: string;
+      // ru-code: which section this row groups under (Проект / Глобальные / Встроенные).
+      scope: "project" | "global" | "builtin";
+    }
+  | {
+      id: string;
+      type: "catalog-agent";
+      name: string;
+      label: string;
+      description: string;
+      // ru-code: which section this row groups under (Проект / Глобальные / Встроенные).
+      scope: "project" | "global" | "builtin";
+    }
+  // ru-code: catalog-sourced custom slash-command rows (qwen). Inserted as plain `/name ` — qwen runs
+  // it as a slash command (identity = filename), unlike the delimited $skill/#agent tokens.
+  | {
+      id: string;
+      type: "catalog-command";
+      name: string;
+      label: string;
+      description: string;
+      scope: "project" | "global" | "builtin";
     };
 
 type ComposerCommandGroup = {
@@ -85,8 +119,16 @@ function groupCommandItems(
   triggerKind: ComposerTriggerKind | null,
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroup[] {
-  if (triggerKind === "skill") {
-    return items.length > 0 ? [{ id: "skills", label: "Skills", items }] : [];
+  // ru-code: skill/agent pickers. When the rows are catalog-sourced (qwen), group them into the
+  // Проект / Глобальные / Встроенные sections; the logic lives in ru-code so this stays a delegate.
+  // Native (non-catalog) providers carry no `scope`, so groupCatalogComposerItems returns [] and we
+  // fall back to the single flat group.
+  if (triggerKind === "skill" || triggerKind === "subagent") {
+    const catalogGroups = groupCatalogComposerItems(items);
+    if (catalogGroups.length > 0) return catalogGroups;
+    return items.length > 0
+      ? [{ id: triggerKind, label: triggerKind === "skill" ? "Skills" : "Agents", items }]
+      : [];
   }
   if (triggerKind !== "slash-command" || !groupSlashCommandSections) {
     return [{ id: "default", label: null, items }];
@@ -96,6 +138,10 @@ function groupCommandItems(
   const providerItems = items.filter((item) => item.type === "provider-slash-command");
 
   const groups: ComposerCommandGroup[] = [];
+  // ru-code: our catalog-sourced custom commands first, grouped by scope (Проект / Глобальные).
+  for (const catalogGroup of groupCatalogComposerItems(items)) {
+    groups.push(catalogGroup);
+  }
   if (builtInItems.length > 0) {
     groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
   }
@@ -253,6 +299,14 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         <span className="inline-flex size-4 shrink-0 items-center justify-center text-icon-muted">
           <SkillGlyph className="size-3.5" />
         </span>
+      ) : null}
+      {/* ru-code: catalog skill/agent row icon delegated to ru-code. */}
+      {props.item.type === "catalog-skill" || props.item.type === "catalog-agent" ? (
+        <CatalogMenuItemIcon kind={props.item.type === "catalog-agent" ? "agent" : "skill"} />
+      ) : null}
+      {/* ru-code: catalog custom-command row — a slash command, so the slash-command icon. */}
+      {props.item.type === "catalog-command" ? (
+        <BotIcon className="size-4 shrink-0 text-muted-foreground/80" />
       ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0">{props.item.label}</span>

@@ -87,6 +87,34 @@ describe("stripUnknownLeadingSlashCommand — the submit guard", () => {
   });
 });
 
+describe("stripUnknownLeadingSlashCommand — dynamic catalog command allowlist", () => {
+  const slugs: ReadonlySet<string> = new Set(["mycommand", "deploy"]);
+
+  it("a catalog command in the live set passes verbatim (bare and with args)", () => {
+    expect(stripUnknownLeadingSlashCommand("/mycommand", slugs)).toBe("/mycommand");
+    expect(stripUnknownLeadingSlashCommand("/deploy prod", slugs)).toBe("/deploy prod");
+  });
+
+  it("matches the catalog set case-insensitively", () => {
+    expect(stripUnknownLeadingSlashCommand("/MyCommand", slugs)).toBe("/MyCommand");
+  });
+
+  it("a command NOT in the set is still unknown (bare → null, args → stripped)", () => {
+    expect(stripUnknownLeadingSlashCommand("/other", slugs)).toBeNull();
+    expect(stripUnknownLeadingSlashCommand("/other do it", slugs)).toBe("do it");
+  });
+
+  it("dynamic: the same command flips null → pass as the set gains it", () => {
+    expect(stripUnknownLeadingSlashCommand("/mycommand")).toBeNull(); // no set (pre-connect)
+    expect(stripUnknownLeadingSlashCommand("/mycommand", new Set())).toBeNull(); // empty set
+    expect(stripUnknownLeadingSlashCommand("/mycommand", slugs)).toBe("/mycommand"); // connected
+  });
+
+  it("built-in slugs still pass even with an empty catalog set", () => {
+    expect(stripUnknownLeadingSlashCommand("/init", new Set())).toBe("/init");
+  });
+});
+
 describe("resolveQwenSubmitPrompt — the submit composite", () => {
   const QWEN = QWEN_DRIVER_KIND;
   const OTHER = ProviderDriverKind.make("codex");

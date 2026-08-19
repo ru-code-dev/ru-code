@@ -1632,9 +1632,12 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const delayedPushSpawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
             // ru-code: match on the subcommand, not on the raw-UTF-8-paths
-            // funnel's prefixed array — see rawUtf8Paths.ts.
-            const rawArgs = withoutRawUtf8Paths(command.args);
-            if (ChildProcess.isStandardCommand(command) && rawArgs[0] === "push") {
+            // funnel's prefixed array — see rawUtf8Paths.ts. The strip stays on the
+            // right of `&&` so `isStandardCommand` still narrows `command` for it.
+            if (
+              ChildProcess.isStandardCommand(command) &&
+              withoutRawUtf8Paths(command.args)[0] === "push"
+            ) {
               yield* Deferred.succeed(pushStarted, undefined);
               yield* Effect.sleep("31 seconds");
             }

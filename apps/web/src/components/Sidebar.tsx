@@ -74,6 +74,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { isElectron } from "../env";
+import { GlobalPanelNav } from "../ru-code/skills-agents/rightGlobalPanel";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -174,7 +175,13 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
-import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarMenu,
+  SidebarMenuButton,
+  useSidebar,
+} from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -3562,6 +3569,12 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
+        {/* ru-code: skills/agents global-panel nav — sits between Поиск and Проекты. */}
+        <SidebarGroup className="px-2 pt-1 pb-1">
+          <SidebarMenu>
+            <GlobalPanelNav />
+          </SidebarMenu>
+        </SidebarGroup>
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (

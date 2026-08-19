@@ -77,3 +77,62 @@ describe("resolveQwenSubmitPrompt", () => {
     ).toEqual({ action: "send", prompt: "" });
   });
 });
+
+// ru-code: the catalog custom-command allowlist is DYNAMIC — commands are added/removed/connected in
+// the Commands panel, so the guard consults the live set the caller passes (useCatalogCommandSlugs).
+describe("resolveQwenSubmitPrompt — dynamic catalog command allowlist", () => {
+  const slugs: ReadonlySet<string> = new Set(["mycommand", "fs:ls"]);
+
+  it("qwen: a bare catalog command is RECOGNIZED and sent, not aborted", () => {
+    expect(
+      resolveQwenSubmitPrompt({
+        selectedProvider: QWEN,
+        prompt: "/mycommand",
+        hasNonTextContent: false,
+        catalogCommandSlugs: slugs,
+      }),
+    ).toEqual({ action: "send", prompt: "/mycommand" });
+  });
+
+  it("qwen: catalog command match is case-insensitive and keeps trailing args", () => {
+    expect(
+      resolveQwenSubmitPrompt({
+        selectedProvider: QWEN,
+        prompt: "/MyCommand arg1 arg2",
+        hasNonTextContent: false,
+        catalogCommandSlugs: slugs,
+      }),
+    ).toEqual({ action: "send", prompt: "/MyCommand arg1 arg2" });
+  });
+
+  it("qwen: DYNAMIC — the same command aborts once it is gone from the set (removed/disconnected)", () => {
+    // empty set — every command disconnected
+    expect(
+      resolveQwenSubmitPrompt({
+        selectedProvider: QWEN,
+        prompt: "/mycommand",
+        hasNonTextContent: false,
+        catalogCommandSlugs: new Set(),
+      }),
+    ).toEqual({ action: "abort" });
+    // no set passed at all — the pre-fix / non-catalog path
+    expect(
+      resolveQwenSubmitPrompt({
+        selectedProvider: QWEN,
+        prompt: "/mycommand",
+        hasNonTextContent: false,
+      }),
+    ).toEqual({ action: "abort" });
+  });
+
+  it("qwen: a truly unknown command still aborts even when a catalog set is present", () => {
+    expect(
+      resolveQwenSubmitPrompt({
+        selectedProvider: QWEN,
+        prompt: "/clear",
+        hasNonTextContent: false,
+        catalogCommandSlugs: slugs,
+      }),
+    ).toEqual({ action: "abort" });
+  });
+});

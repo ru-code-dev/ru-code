@@ -57,6 +57,10 @@ import {
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
+// ru-code: the reactor now yields SessionRespawnGate; these base tests cover the OTHER restart
+// triggers, so satisfy that dependency with the no-op gate. The provision→spawn→record ordering
+// the gate participates in is owned + tested in the ru-code zone (provisionThenSpawn.test.ts).
+import { SessionRespawnGateNoop } from "../../ru-code/skills-agents/SessionRespawnGate.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
@@ -416,6 +420,9 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      // ru-code: satisfy the reactor's SessionRespawnGate dependency with the no-op gate (these
+      // tests cover the other restart triggers; the provision→spawn ordering is tested in ru-code).
+      Layer.provideMerge(SessionRespawnGateNoop),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);

@@ -98,7 +98,9 @@ import { type ProviderAdapterShape } from "../../provider/Services/ProviderAdapt
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 // ru-code: subagent picker biases CLI toward the Agent tool by
 // injecting a system-reminder when the user text contains `agent:name`.
-import { prependSubagentReminderIfNeeded } from "@ru-code/qwen/subagentReminderStub";
+// ru-code: strips the delimited chip fences (`skill:⟦name⟧` → `skill:name`) AND injects the right
+// system-reminder (single skill/agent, or a CHAIN reminder for 2+ chips) in one step.
+import { buildComposerReminder } from "@smart-tools/qwen-cli-skill-manager/contracts";
 // ru-code: classifier for cli-side errors — routes recognized
 // failures to the right UI surface.
 import {
@@ -1790,15 +1792,15 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
           if (input.input?.trim()) {
-            // ru-code: prepend the subagent system-reminder when the
-            // text contains an `agent:name` chip token; see helper for why.
-            const subagentReminder = prependSubagentReminderIfNeeded(input.input.trim());
-            if (subagentReminder.applied) {
-              yield* Effect.logDebug("[cli-adapter] subagent system-reminder applied", {
+            // ru-code: strip the chip fences AND inject the right system-reminder (single skill/agent,
+            // or a CHAIN reminder for 2+ chips) in one step; see buildComposerReminder.
+            const composerReminder = buildComposerReminder(input.input.trim());
+            if (composerReminder.applied) {
+              yield* Effect.logDebug("[qwen-adapter] composer system-reminder applied", {
                 threadId: input.threadId,
               });
             }
-            promptParts.push({ type: "text", text: subagentReminder.text });
+            promptParts.push({ type: "text", text: composerReminder.text });
           }
           if (input.attachments && input.attachments.length > 0) {
             for (const attachment of input.attachments) {

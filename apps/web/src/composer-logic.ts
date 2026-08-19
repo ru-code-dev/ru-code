@@ -1,7 +1,13 @@
-import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
+import {
+  splitPromptIntoComposerSegments,
+  type ComposerPromptSegment,
+} from "./composer-editor-mentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
+// ru-code: catalog chip cursor-length logic lives in ru-code; the port branches only call it.
+import { catalogSegmentExpandedLength } from "./ru-code/skills-agents/composer/catalogSegments";
 
-export type ComposerTriggerKind = "path" | "slash-command" | "skill";
+// ru-code: "subagent" (`#agent`) added, parallel to "skill" (`$skill`).
+export type ComposerTriggerKind = "path" | "slash-command" | "skill" | "subagent";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -18,13 +24,7 @@ export function shouldSubmitComposerOnEnter(input: {
   return !input.isMobileViewport && !input.shiftKey;
 }
 
-const isInlineTokenSegment = (
-  segment:
-    | { type: "text"; text: string }
-    | { type: "mention" }
-    | { type: "skill" }
-    | { type: "terminal-context" },
-): boolean => segment.type !== "text";
+const isInlineTokenSegment = (segment: ComposerPromptSegment): boolean => segment.type !== "text";
 
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
@@ -69,8 +69,16 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
       expandedCursor += expandedLength;
       continue;
     }
-    if (segment.type === "skill") {
-      const expandedLength = segment.name.length + 1;
+    if (
+      segment.type === "skill" ||
+      segment.type === "catalog-skill" ||
+      segment.type === "catalog-agent"
+    ) {
+      // ru-code: native `$skill` keeps its one-char-sigil math; catalog chip length comes from ru-code.
+      const expandedLength =
+        segment.type === "skill"
+          ? segment.name.length + 1
+          : (catalogSegmentExpandedLength(segment) ?? 0);
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -98,13 +106,7 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
   return expandedCursor;
 }
 
-function collapsedSegmentLength(
-  segment:
-    | { type: "text"; text: string }
-    | { type: "mention" }
-    | { type: "skill" }
-    | { type: "terminal-context" },
-): number {
+function collapsedSegmentLength(segment: ComposerPromptSegment): number {
   if (segment.type === "text") {
     return segment.text.length;
   }
@@ -112,12 +114,7 @@ function collapsedSegmentLength(
 }
 
 function clampCollapsedComposerCursorForSegments(
-  segments: ReadonlyArray<
-    | { type: "text"; text: string }
-    | { type: "mention" }
-    | { type: "skill" }
-    | { type: "terminal-context" }
-  >,
+  segments: ReadonlyArray<ComposerPromptSegment>,
   cursorInput: number,
 ): number {
   const collapsedLength = segments.reduce(
@@ -160,8 +157,15 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
       collapsedCursor += 1;
       continue;
     }
-    if (segment.type === "skill") {
-      const expandedLength = segment.name.length + 1;
+    if (
+      segment.type === "skill" ||
+      segment.type === "catalog-skill" ||
+      segment.type === "catalog-agent"
+    ) {
+      const expandedLength =
+        segment.type === "skill"
+          ? segment.name.length + 1
+          : (catalogSegmentExpandedLength(segment) ?? 0);
       if (remaining === 0) {
         return collapsedCursor;
       }
@@ -245,6 +249,15 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   if (token.startsWith("$")) {
     return {
       kind: "skill",
+      query: token.slice(1),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
+  // ru-code: `#agent` trigger, parallel to `$skill`.
+  if (token.startsWith("#")) {
+    return {
+      kind: "subagent",
       query: token.slice(1),
       rangeStart: tokenStart,
       rangeEnd: cursor,

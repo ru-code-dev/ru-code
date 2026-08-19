@@ -213,7 +213,20 @@ export default defineConfig(() => {
     },
     resolve: {
       tsconfigPaths: true,
-      dedupe: ["react", "react-dom"],
+      // ru-code: dedupe shared runtime libs to a single copy so the linked catalog packages
+      // share port's effect/atom/React context singletons (not a second instance).
+      dedupe: [
+        "react",
+        "react-dom",
+        "@base-ui/react",
+        "@effect/atom-react",
+        "effect",
+        "zustand",
+        "@pierre/diffs",
+        "lucide-react",
+        "class-variance-authority",
+        "tailwind-merge",
+      ],
     },
     experimental: {
       bundledDev,

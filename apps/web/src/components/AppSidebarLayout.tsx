@@ -13,6 +13,7 @@ import { isElectron } from "../env";
 import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalStorage";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn, isMacPlatform } from "../lib/utils";
+import { RightGlobalPanelHost } from "../ru-code/skills-agents/rightGlobalPanel";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import LegacyThreadSidebar from "./LegacySidebar";
@@ -239,6 +240,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       {children}
+      {/* ru-code: global right panel (skills/agents). A flex sibling of {children} in this
+          SidebarProvider row: on desktop it is an inline push column that shrinks the chat,
+          on narrow viewports a sheet overlay. Persists across routes. */}
+      <RightGlobalPanelHost />
       <SidebarControl />
     </SidebarProvider>
   );

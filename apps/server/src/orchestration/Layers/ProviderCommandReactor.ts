@@ -33,6 +33,12 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+// ru-code: respawn the live qwen session on the next turn when the thread's effective skill/agent set
+// changes (qwen reads them only at spawn). All logic is in the ru-code gate service; the reactor only
+// calls it. See SessionRespawnGate.
+import { SessionRespawnGate } from "../../ru-code/skills-agents/SessionRespawnGate.ts";
+import { provisionThenSpawn } from "../../ru-code/skills-agents/provisionThenSpawn.ts";
+import { shouldRestartProviderSession } from "../../ru-code/skills-agents/respawnDecision.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -94,7 +100,9 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
-const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+// ru-code: server fallback aligned to the canonical safe default (was "full-access"). See
+// WORKFLOW/decisions.md row 17 / patch-defects 05-D1.
+const DEFAULT_RUNTIME_MODE: RuntimeMode = "auto-accept-edits";
 const MAX_REGENERATION_ATTACHMENTS = 4;
 const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
@@ -317,6 +325,8 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  // ru-code: skill/agent respawn gate (fingerprint tracking + change decision live in the service).
+  const respawnGate = yield* SessionRespawnGate;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -619,16 +629,28 @@ const make = Effect.gen(function* () {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
     }) =>
-      providerService.startSession(threadId, {
-        threadId,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        providerInstanceId: desiredInstanceId,
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        ...(thread.title ? { title: thread.title } : {}),
-        modelSelection: desiredModelSelection,
-        ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
-      });
+      // ru-code: qwen reads skills/agents/commands from <cwd>/.qwen at spawn, but the catalogs only
+      // write the project's main workspaceRoot — so mirror the worktree's copies in BEFORE the spawn
+      // and record what it loaded AFTER. The provision→spawn→record ordering + its test live in the
+      // ru-code zone (provisionThenSpawn); here we only supply the gate, the target, and the spawn
+      // thunk (thunk so the session-start effect is not constructed until the mirrors are in place).
+      provisionThenSpawn(
+        respawnGate,
+        { threadId, projectId: thread.projectId, cwd: effectiveCwd ?? null },
+        () =>
+          providerService.startSession(threadId, {
+            threadId,
+            ...(preferredProvider ? { provider: preferredProvider } : {}),
+            providerInstanceId: desiredInstanceId,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+            // t3 #5941: the real thread title goes in at session create, so OpenCode
+            // stops minting a placeholder and mirroring it back over the user's title.
+            ...(thread.title ? { title: thread.title } : {}),
+            modelSelection: desiredModelSelection,
+            ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+            runtimeMode: desiredRuntimeMode,
+          }),
+      );
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -683,13 +705,25 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      // ru-code: did this thread's effective skill/agent set change vs. what the live session spawned
+      // with? qwen reads them only at spawn, so a change re-spawns on this turn (resume preserves
+      // history). The fingerprint tracking + decision live in the ru-code gate service.
+      const catalogChanged = yield* respawnGate.changedForThread(threadId, thread.projectId);
 
+      // ru-code: restart iff any dimension changed — extracted as a pure predicate so the decision
+      // (incl. the skill/agent `catalogChanged` dimension) is unit-tested in respawnDecision.test.ts.
       if (
-        !shouldRestartForRuntimeMode &&
-        !cwdChanged &&
-        !instanceChanged &&
-        !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartProviderSession({
+          // ru-code: the base gates runtime-mode restart by capability (qwen applies the mode live via
+          // per-turn setMode), so feed the gated `shouldRestartForRuntimeMode` — NOT raw
+          // runtimeModeChanged — into the predicate's runtimeModeChanged slot.
+          runtimeModeChanged: shouldRestartForRuntimeMode,
+          cwdChanged,
+          instanceChanged,
+          shouldRestartForModelChange,
+          shouldRestartForModelSelectionChange,
+          catalogChanged,
+        })
       ) {
         return existingSessionThreadId;
       }
@@ -714,6 +748,7 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        catalogChanged, // ru-code: a skill/subagent add/remove/sync forced this respawn (qwen re-reads at spawn)
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(

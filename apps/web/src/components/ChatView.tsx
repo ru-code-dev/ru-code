@@ -29,6 +29,9 @@ import {
 // ru-code: single-source default provider/model constants.
 import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashCommands"; // ru-code
+// ru-code: live catalog custom-command slugs (dynamic allowlist) for the qwen submit guard.
+import { useCatalogCommandSlugs } from "../ru-code/skills-agents/composer/useCatalogCommandSlugs"; // ru-code
+import { providerCommandSource } from "@ru-code/provider-capabilities"; // ru-code
 import { shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
 import { deriveIsCompactingContext } from "../ru-code/workLog/contextCompaction"; // ru-code
 import {
@@ -164,6 +167,14 @@ import {
   deriveAgentPanelModel,
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+// ru-code: Skills/Agents/Commands global panel — toggle decision + exclusion invariant.
+import {
+  closeGlobalPanelIfOpen,
+  decideRightPanelToggle,
+  isGlobalPanelOpen,
+  useRightGlobalPanelStore,
+  useRightSlotExclusion,
+} from "../ru-code/skills-agents/rightGlobalPanel";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -1671,6 +1682,11 @@ function ChatViewContent(props: ChatViewProps) {
     [activeKnownTerminalIds, panelTerminalIds],
   );
   const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
+  // ru-code: while a GLOBAL panel (skills/agents) owns the right slot, hide the thread panel.
+  const globalPanelOpen = useRightGlobalPanelStore((state) => state.open !== null);
+  // ru-code: right-slot mutual exclusion — a state invariant kept at the writes (opening one panel
+  // closes the other), so the thread panel and the global panel can never be visible at once.
+  useRightSlotExclusion(activeThreadRef);
   const rightPanelOpen = rightPanelState.isOpen;
   const canMaximizeRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
   const rightPanelMaximized =
@@ -2235,6 +2251,12 @@ function ChatViewContent(props: ChatViewProps) {
       ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
+  // ru-code: live set of catalog custom-command slugs deployed for the active project — passed to the
+  // qwen submit guard so `/mycommand` is recognized. Atom-backed, so it recalculates when the Commands
+  // panel adds/removes/connects a command (no stale allowlist).
+  const catalogCommandSlugs = useCatalogCommandSlugs(
+    providerCommandSource(selectedProvider) === "catalog",
+  );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   // ru-code: block send/"Compact context" while a hidden compaction runs.
@@ -3494,12 +3516,19 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThreadRef, diffOpen, onDiffPanelOpen],
   );
   const toggleRightPanel = useCallback(() => {
-    if (!activeThreadRef) return;
-    if (rightPanelOpen) {
-      closePreviewPanel();
-      return;
+    // ru-code: the button's composite decision lives in ru-code (decideRightPanelToggle) so it is
+    // testable; here we just apply the returned actions in order.
+    const actions = decideRightPanelToggle({
+      globalPanelOpen: isGlobalPanelOpen(),
+      hasActiveThread: activeThreadRef !== null,
+      threadPanelOpen: rightPanelOpen,
+    });
+    for (const action of actions) {
+      if (action === "close-global") closeGlobalPanelIfOpen();
+      else if (action === "close-preview") closePreviewPanel();
+      else if (action === "open-thread" && activeThreadRef)
+        useRightPanelStore.getState().toggleVisibility(activeThreadRef);
     }
-    useRightPanelStore.getState().toggleVisibility(activeThreadRef);
   }, [activeThreadRef, closePreviewPanel, rightPanelOpen]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
@@ -5045,6 +5074,8 @@ function ChatViewContent(props: ChatViewProps) {
         composerElementContexts.length > 0 ||
         composerPreviewAnnotations.length > 0 ||
         composerReviewComments.length > 0,
+      // ru-code: the live catalog command allowlist so a `/mycommand` isn't aborted as "unknown".
+      catalogCommandSlugs,
     });
     if (qwenSubmitDecision.action === "abort") return;
     // ru-code: a bare `/compress` routes to the SAME hidden compaction flow as
@@ -6194,11 +6225,14 @@ function ChatViewContent(props: ChatViewProps) {
   }
 
   const panelToggleControls = (
+    // ru-code: this is the THREAD-panel toggle — `rightPanelOpen` highlights it for the thread panel
+    // only. `|| globalPanelOpen` on AVAILABLE (not open) keeps it enabled while a global panel owns the
+    // slot, so one press closes skills/agents and opens the thread.
     <PanelLayoutControls
       terminalAvailable={activeProject !== null}
       terminalOpen={terminalUiState.terminalOpen}
       terminalShortcutLabel={shortcutLabelForCommand(keybindings, "terminal.toggle")}
-      rightPanelAvailable={activeProject !== null}
+      rightPanelAvailable={activeProject !== null || globalPanelOpen}
       rightPanelOpen={rightPanelOpen}
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
       // Suppressed while the Agents surface is visible: the roster itself is
@@ -6771,6 +6805,8 @@ function ChatViewContent(props: ChatViewProps) {
         ))}
       </div>
 
+      {/* ru-code: thread panel renders purely from its OWN store; the exclusion invariant keeps it
+          closed while a global panel is open, so no cross-store gate is needed here. */}
       {!shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (
         <RightPanelTabs
           mode="inline"

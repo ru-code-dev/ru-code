@@ -45,6 +45,8 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
+// ru-code: catalog delimited chips (skill:⟦⟧/agent:⟦⟧) in message markdown — logic in ru-code.
+import { renderCatalogInlineMarkdownChildren } from "~/ru-code/skills-agents/composer/CatalogInlineText";
 import { CHAT_FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import {
@@ -1555,7 +1557,14 @@ function ChatMarkdown({
 
     return {
       p({ node: _node, children, ...props }) {
-        return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
+        return (
+          <p {...props}>
+            {renderSkillInlineMarkdownChildren(
+              renderCatalogInlineMarkdownChildren(children),
+              skills,
+            )}
+          </p>
+        );
       },
       blockquote({ node: _node, children, ...props }) {
         const alert =
@@ -1592,7 +1601,10 @@ function ChatMarkdown({
           typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
         return (
           <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
-            {renderSkillInlineMarkdownChildren(children, skills)}
+            {renderSkillInlineMarkdownChildren(
+              renderCatalogInlineMarkdownChildren(children),
+              skills,
+            )}
           </li>
         );
       },

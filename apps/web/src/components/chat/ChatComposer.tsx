@@ -97,6 +97,22 @@ import {
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
+// ru-code: catalog `$skill`/`#agent` composer glue — provider-capability routing + picker data + menu
+// adapters + delimited token, all logic in ru-code / packages; the seams below only call them.
+import { buildCatalogToken } from "@smart-tools/qwen-cli-catalog-core/contracts";
+import {
+  providerSkillSource,
+  providerAgentSource,
+  providerCommandSource,
+} from "@ru-code/provider-capabilities";
+import { useCatalogComposerItems } from "../../ru-code/skills-agents/composer/useCatalogComposerItems";
+import {
+  catalogSkillMenuItems,
+  catalogAgentMenuItems,
+  catalogCommandMenuItems,
+} from "../../ru-code/skills-agents/composer/catalogMenuItems";
+import { filterBuiltinAgents } from "../../ru-code/skills-agents/composer/builtinAgents";
+import { useActiveProjectId } from "../../ru-code/skills-agents/catalog/hostPorts";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -1136,6 +1152,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     query: isPathTrigger ? pathTriggerQuery : null,
   });
 
+  // ru-code: catalog picker data (qwen skills/agents). The provider-capability source gates whether the
+  // picker sources from the catalog; a non-catalog provider keeps these empty and skips the fetch.
+  // activeProjectId scopes each row into the Проект vs Глобальные section.
+  const activeProjectId = useActiveProjectId();
+  const catalogSkillItems = useCatalogComposerItems(
+    "skillCatalog",
+    composerTrigger?.query ?? "",
+    providerSkillSource(selectedProvider) === "catalog",
+  );
+  const catalogAgentItems = useCatalogComposerItems(
+    "agentCatalog",
+    composerTrigger?.query ?? "",
+    providerAgentSource(selectedProvider) === "catalog",
+  );
+  const catalogCommandItems = useCatalogComposerItems(
+    "commandCatalog",
+    composerTrigger?.query ?? "",
+    providerCommandSource(selectedProvider) === "catalog",
+  );
+
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
@@ -1149,9 +1185,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }));
     }
     if (composerTrigger.kind === "slash-command") {
-      // ru-code: the whole `/` menu (built-ins + qwen + provider + search) is
-      // one tested composite.
-      return buildComposerSlashCommandMenuItems({
+      // ru-code: the whole `/` menu (built-ins + qwen + provider + search) is one tested composite.
+      const nativeItems = buildComposerSlashCommandMenuItems({
         selectedProvider,
         providerSlashCommands: selectedProviderStatus?.slashCommands ?? [],
         query: composerTrigger.query,
@@ -1159,8 +1194,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         isDraftThread: routeKind === "draft",
         planModeEnabled: planModeUiEnabled,
       });
+      // ru-code: our catalog custom commands (already query-filtered by useCatalogComposerItems) lead
+      // the list, grouped into Проект / Глобальные; the native composite (built-ins + provider) follows.
+      const catalogCommands =
+        providerCommandSource(selectedProvider) === "catalog"
+          ? catalogCommandMenuItems(catalogCommandItems, activeProjectId)
+          : [];
+      return [...catalogCommands, ...nativeItems];
     }
     if (composerTrigger.kind === "skill") {
+      // ru-code: route the `$skill` picker by provider capability — catalog (qwen) vs the port's native
+      // provider skills. The routing predicate + catalog mapping are ru-code; native path unchanged.
+      const skillSource = providerSkillSource(selectedProvider);
+      if (skillSource === "catalog")
+        return [...catalogSkillMenuItems(catalogSkillItems, activeProjectId)];
+      if (skillSource === "none") return [];
       return searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
         (skill) => ({
           id: `skill:${selectedProvider}:${skill.name}`,
@@ -1175,6 +1223,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }),
       );
     }
+    // ru-code: `#agent` picker (catalog only). Catalog agents (already query-filtered) in the
+    // Проект/Глобальные sections + qwen's built-in agents (filtered here — they aren't in the catalog
+    // list) in the Встроенные section.
+    if (composerTrigger.kind === "subagent") {
+      if (providerAgentSource(selectedProvider) !== "catalog") return [];
+      return [
+        ...catalogAgentMenuItems(catalogAgentItems, activeProjectId),
+        ...filterBuiltinAgents(composerTrigger.query),
+      ];
+    }
     return [];
   }, [
     composerTrigger,
@@ -1183,6 +1241,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProvider,
     selectedProviderStatus,
     workspaceEntries.entries,
+    catalogSkillItems, // ru-code
+    catalogAgentItems, // ru-code
+    catalogCommandItems, // ru-code
+    activeProjectId, // ru-code
   ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1826,6 +1888,46 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       if (item.type === "skill") {
         const replacement = `$${item.skill.name} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      // ru-code: a catalog custom command inserts `/name ` — qwen runs it as a slash command (identity
+      // is the filename), exactly like a provider slash command.
+      if (item.type === "catalog-command") {
+        const replacement = `/${item.name} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      // ru-code: catalog chips insert the DELIMITED wire token (buildCatalogToken); the server strips
+      // the fences + injects the skill/agent system-reminder.
+      if (item.type === "catalog-skill" || item.type === "catalog-agent") {
+        const replacement = `${buildCatalogToken(item.type === "catalog-agent" ? "agent" : "skill", item.name)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,

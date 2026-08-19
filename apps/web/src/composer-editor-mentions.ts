@@ -6,6 +6,12 @@ import {
   collectComposerInlineTokens,
   type ComposerInlineToken,
 } from "@t3tools/shared/composerInlineTokens";
+// ru-code: the catalog `$skill`/`#agent` chip logic (parse/merge/build) lives in this ru-code module;
+// the port only unions in its segment shapes and calls collectComposerSegmentTokens below.
+import {
+  collectComposerSegmentTokens,
+  type CatalogPromptSegment,
+} from "./ru-code/skills-agents/composer/catalogSegments";
 
 export type ComposerPromptSegment =
   | {
@@ -21,6 +27,7 @@ export type ComposerPromptSegment =
       type: "skill";
       name: string;
     }
+  | CatalogPromptSegment // ru-code: delimited catalog chips (qwen skills/agents)
   | {
       type: "terminal-context";
       context: TerminalContextDraft | null;
@@ -130,28 +137,18 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
     return segments;
   }
 
-  const tokenMatches = collectComposerInlineTokens(text);
+  // ru-code: native (mention + `$skill`) ⊕ catalog (`skill:⟦⟧`/`agent:⟦⟧`) tokens, merged + built in
+  // ru-code; the loop below stays generic (no per-type logic).
   let cursor = 0;
-  for (const match of tokenMatches) {
-    if (match.start < cursor) {
+  for (const token of collectComposerSegmentTokens(text)) {
+    if (token.start < cursor) {
       continue;
     }
-
-    if (match.start > cursor) {
-      pushTextSegment(segments, text.slice(cursor, match.start));
+    if (token.start > cursor) {
+      pushTextSegment(segments, text.slice(cursor, token.start));
     }
-
-    if (match.type === "mention") {
-      segments.push({
-        type: "mention",
-        path: match.value,
-        source: match.source,
-      });
-    } else {
-      segments.push({ type: "skill", name: match.value });
-    }
-
-    cursor = match.end;
+    segments.push(token.build());
+    cursor = token.end;
   }
 
   if (cursor < text.length) {

@@ -62,6 +62,22 @@ import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgro
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+// ru-code: Skills + Agents catalog (Skills/Agents Manager) — the catalog services, their
+// host-wired layers, and the extracted RPC handlers + scopes. Both catalog errors are the same
+// core `CatalogError`; `SkillCatalogError` aliases it and encodes an authorization failure into
+// the catalog RPC's declared error channel. Handlers/scopes live in ru-code/skills-agents so this
+// upstream file keeps only the seam (yield services, spread handlers/scopes, provide layers).
+import { SkillCatalog } from "@smart-tools/qwen-cli-skill-manager/server";
+import { AgentCatalog } from "@smart-tools/qwen-cli-agents-manager/server";
+import { CommandCatalog } from "@smart-tools/qwen-cli-commands-manager/server";
+import { SkillCatalogError as CatalogError } from "@smart-tools/qwen-cli-skill-manager/contracts";
+import {
+  SkillCatalogHostLayer,
+  AgentCatalogHostLayer,
+  CommandCatalogHostLayer,
+} from "./ru-code/skills-agents/catalogLayers.ts";
+import { buildCatalogRpcHandlers } from "./ru-code/skills-agents/catalogRpcHandlers.ts";
+
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -419,6 +435,10 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      // ru-code: the Skills + Agents catalog services (filesystem-truth catalog engine).
+      const skillCatalog = yield* SkillCatalog;
+      const agentCatalog = yield* AgentCatalog;
+      const commandCatalog = yield* CommandCatalog;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -471,6 +491,25 @@ const makeWsRpcLayer = (
           method,
           authorizeEffect(requiredScopeForRpcMethod(method), effect),
           traceAttributes,
+        );
+      // ru-code: the catalog RPCs declare ONLY `CatalogError` (they come from the shared core
+      // factory, which is host-agnostic). Authorization still applies, but an auth failure is
+      // encoded into `CatalogError` so the handler's error type stays assignable to the RPC's
+      // declared error channel (the generic `observeRpcEffect` would widen it with
+      // `EnvironmentAuthorizationError`).
+      const observeCatalogRpc = <A, R>(
+        method: string,
+        aggregate: string,
+        effect: Effect.Effect<A, CatalogError, R>,
+      ): Effect.Effect<A, CatalogError, R> =>
+        instrumentRpcEffect(
+          method,
+          authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
+            Effect.catchTag("EnvironmentAuthorizationError", (error) =>
+              Effect.fail(new CatalogError({ detail: error.message, cause: error })),
+            ),
+          ),
+          { "rpc.aggregate": aggregate },
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
         isOrchestrationDispatchCommandError(cause)
@@ -1445,6 +1484,13 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
           }),
+        // ru-code: Skills + Agents catalog RPC handlers (extracted to ru-code/skills-agents).
+        ...buildCatalogRpcHandlers({
+          skillCatalog,
+          agentCatalog,
+          commandCatalog,
+          observeCatalogRpc,
+        }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
@@ -2324,6 +2370,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              // ru-code: the Skills + Agents catalog services. Their host ports are wired in
+              // catalogLayers.ts; FileSystem + Path + ServerConfig are ambient here.
+              Layer.provide(SkillCatalogHostLayer),
+              Layer.provide(AgentCatalogHostLayer),
+              Layer.provide(CommandCatalogHostLayer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS

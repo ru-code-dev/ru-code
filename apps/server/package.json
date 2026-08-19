@@ -33,6 +33,9 @@
     "@pierre/diffs": "catalog:",
     "@ru-code/branding": "workspace:*",
     "@ru-code/localization": "workspace:*",
+    "@smart-tools/qwen-cli-agents-manager": "catalog:",
+    "@smart-tools/qwen-cli-commands-manager": "catalog:",
+    "@smart-tools/qwen-cli-skill-manager": "catalog:",
     "effect": "catalog:",
     "msgpackr-extract": "3.0.4",
     "node-pty": "^1.1.0",
@@ -40,6 +43,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@ru-code/provider-capabilities": "workspace:*",
     "@ru-code/qwen": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",

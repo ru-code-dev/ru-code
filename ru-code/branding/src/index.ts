@@ -6,6 +6,7 @@
 
 export * from "./cliProfiles.ts";
 export * from "./hiddenModels.ts";
+export * from "./modelNameWords.ts";
 
 /**
  * APP_NAME — display name of the application. This is the one and only place

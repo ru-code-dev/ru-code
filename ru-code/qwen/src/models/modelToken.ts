@@ -8,6 +8,7 @@
 //   3. User-entered custom models in provider settings.
 // The optional trailing size token (`-256k`, `-1m`, case-insensitive) inside the
 // slug carries the model's context window; `256K` means 256 000 (decimal, not KiB).
+import { isStrippedNameWord } from "@ru-code/branding";
 
 /** One parsed `<slug>(<authMethod>)` token. */
 export interface ParsedModelToken {
@@ -51,20 +52,24 @@ export function parseContextWindowFromSlug(slug: string): number | null {
 // A slug fragment that IS a size token (`256k`, `1.5m`) — rendered uppercase.
 const SIZE_FRAGMENT_PATTERN = /^\d+(?:\.\d+)?[km]$/i;
 
+// Capitalize a fragment for the UI (`256K` size tokens uppercased, else Title-case).
+const renderFragment = (fragment: string): string =>
+  SIZE_FRAGMENT_PATTERN.test(fragment)
+    ? fragment.toUpperCase()
+    : fragment.charAt(0).toUpperCase() + fragment.slice(1);
+
 /**
  * `xxx/yyy-yy_zz-256k` → `Xxx Yyy Yy Zz 256K`: split on `/ - _`, capitalize each
  * fragment's first letter, uppercase size fragments.
+ *
+ * Fragments listed in STRIP_NAME_WORDS (e.g. a `vllm/` backend prefix) are dropped
+ * from the NAME only — the slug the caller holds is untouched. If stripping would
+ * leave nothing, the un-stripped fragments are kept so the label is never empty.
  */
 export function humanizeModelSlug(slug: string): string {
-  return slug
-    .split(/[/\-_]+/)
-    .filter((fragment) => fragment.length > 0)
-    .map((fragment) =>
-      SIZE_FRAGMENT_PATTERN.test(fragment)
-        ? fragment.toUpperCase()
-        : fragment.charAt(0).toUpperCase() + fragment.slice(1),
-    )
-    .join(" ");
+  const fragments = slug.split(/[/\-_]+/).filter((fragment) => fragment.length > 0);
+  const kept = fragments.filter((fragment) => !isStrippedNameWord(fragment));
+  return (kept.length > 0 ? kept : fragments).map(renderFragment).join(" ");
 }
 
 /**

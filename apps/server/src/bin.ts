@@ -9,6 +9,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Argument, Command } from "effect/unstable/cli";
 import * as CliError from "effect/unstable/cli/CliError";
+// oxlint-disable-next-line t3code/namespace-node-imports -- named `pathToFileURL` import kept for Node 22.16 compatibility
+import { pathToFileURL } from "node:url";
 
 import { APP_COMMAND, APP_NAME } from "@ru-code/branding";
 import * as NetService from "@t3tools/shared/Net";
@@ -73,7 +75,9 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
 
 export const cli = makeCli();
 
-if (import.meta.main) {
+// ru-code: import.meta.main only exists on node >= 22.18 — on 22.16 it is undefined and
+// the CLI silently never starts. Fall back to the argv entry-module comparison.
+if (import.meta.main ?? pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
   Command.run(cli, { version: packageJson.version }).pipe(
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),

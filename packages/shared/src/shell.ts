@@ -271,7 +271,10 @@ function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): st
 
       return [
         `Write-Output '${envCaptureStart(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        // ru-code: `$env:NAME` (automatic variable), NOT `[Environment]::GetEnvironmentVariable`
+        // — the .NET call is blocked under PowerShell Constrained Language Mode; the automatic
+        // variable is allowed and returns the same process-env value.
+        `$value = $env:${name}`,
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${envCaptureEnd(name)}'`,
       ];

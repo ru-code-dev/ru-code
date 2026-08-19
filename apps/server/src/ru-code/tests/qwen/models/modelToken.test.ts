@@ -40,6 +40,18 @@ describe("humanizeModelSlug", () => {
     expect(humanizeModelSlug("coder-model")).toBe("Coder Model");
     expect(humanizeModelSlug("qwen/qwen3.6-35b-a3b")).toBe("Qwen Qwen3.6 35b A3b");
   });
+
+  it("drops STRIP_NAME_WORDS fragments from the name (whole-fragment, case-insensitive)", () => {
+    // `vllm/` backend prefix is stripped from the label; the slug is unchanged.
+    expect(humanizeModelSlug("vllm/qwen3-coder")).toBe("Qwen3 Coder");
+    expect(humanizeModelSlug("VLLM/qwen3.6-coder-256k")).toBe("Qwen3.6 Coder 256K");
+    // Only a standalone fragment is removed — a larger word that contains it survives.
+    expect(humanizeModelSlug("vllmproxy/coder")).toBe("Vllmproxy Coder");
+  });
+
+  it("keeps the un-stripped name when stripping would leave nothing", () => {
+    expect(humanizeModelSlug("vllm")).toBe("Vllm");
+  });
 });
 
 describe("parseModelToken", () => {

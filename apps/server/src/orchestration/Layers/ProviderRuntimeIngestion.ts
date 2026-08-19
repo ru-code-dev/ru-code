@@ -30,6 +30,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+// ru-code: token-aware persist-time truncation (see truncateDetail).
+import { containsToken, truncateWireSafe } from "@ru-code/localization";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -210,6 +212,11 @@ function maxCheckpointTurnCount(
 }
 
 function truncateDetail(value: string, limit = 180): string {
+  // ru-code: a localization wire token (Lc) sliced mid-JSON can never resolve again and
+  // renders raw on every client, forever (it is persisted). Token-carrying values truncate
+  // their ARGS instead — bounded storage, token stays valid. Plain values are untouched
+  // by this branch and truncate exactly as before.
+  if (containsToken(value)) return truncateWireSafe(value, limit);
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 

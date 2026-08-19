@@ -85,13 +85,13 @@ describe("parseModelToken", () => {
 describe("extractModelTokens", () => {
   it("pulls slash-anchored tokens out of arbitrary backend prose", () => {
     const details =
-      "400 Model not found. Valid models are: giga/coder-xl-256k(openai), " +
-      "giga/chat-mini-32k(openai) and giga/vision-1m(claude).";
+      "400 Model not found. Valid models are: acme/coder-xl-256k(openai), " +
+      "acme/chat-mini-32k(openai) and acme/vision-1m(claude).";
     const tokens = extractModelTokens(details);
     expect(tokens.map((token) => token.slug)).toEqual([
-      "giga/coder-xl-256k",
-      "giga/chat-mini-32k",
-      "giga/vision-1m",
+      "acme/coder-xl-256k",
+      "acme/chat-mini-32k",
+      "acme/vision-1m",
     ]);
     expect(tokens[0]?.nTokens).toBe(256_000);
     expect(tokens[1]?.nTokens).toBe(32_000);
@@ -100,8 +100,8 @@ describe("extractModelTokens", () => {
   });
 
   it("never leaks trailing punctuation or quotes into the slug", () => {
-    const tokens = extractModelTokens('Try "giga/coder-64k(openai)", or (giga/mini-8k(openai)).');
-    expect(tokens.map((token) => token.slug)).toEqual(["giga/coder-64k", "giga/mini-8k"]);
+    const tokens = extractModelTokens('Try "acme/coder-64k(openai)", or (acme/mini-8k(openai)).');
+    expect(tokens.map((token) => token.slug)).toEqual(["acme/coder-64k", "acme/mini-8k"]);
   });
 
   it("requires the slash anchor — plain parenthesized words never match", () => {

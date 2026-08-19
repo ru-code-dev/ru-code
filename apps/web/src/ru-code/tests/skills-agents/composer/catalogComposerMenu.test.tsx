@@ -91,13 +91,13 @@ describe("W3 — groupCatalogComposerItems", () => {
       mk("b1", "builtin"),
       mk("g2", "global"),
     ]);
-    expect(groups.map((g) => g.label)).toEqual(["Проект", "Глобальные", "Встроенные"]);
+    expect(groups.map((g) => g.label)).toEqual(["Project", "Global", "Built-in"]);
     expect(groups[1]!.items.map((i) => i.id)).toEqual(["catalog-skill:g1", "catalog-skill:g2"]);
   });
 
   it("omits a section with no items", () => {
     const groups = groupCatalogComposerItems([mk("g1", "global")]);
-    expect(groups.map((g) => g.label)).toEqual(["Глобальные"]);
+    expect(groups.map((g) => g.label)).toEqual(["Global"]);
   });
 
   it("returns [] for non-catalog items (native/fallback path)", () => {
@@ -142,11 +142,11 @@ describe("R3 — ComposerCommandMenu renders the 3-section catalog picker", () =
       />,
     );
 
-  it("skill picker shows Проект + Глобальные section headers with formatted labels", () => {
+  it("skill picker shows Project + Global section headers with formatted labels", () => {
     const items = catalogSkillMenuItems([projectItem, globalItem], PROJECT_ID);
     const html = renderMenu([...items], "skill");
-    expect(html).toContain("Проект");
-    expect(html).toContain("Глобальные");
+    expect(html).toContain("Project");
+    expect(html).toContain("Global");
     expect(html).toContain("Proj Skill"); // formatted project row
     expect(html).toContain("Global Skill"); // formatted global row
   });
@@ -157,8 +157,8 @@ describe("R3 — ComposerCommandMenu renders the 3-section catalog picker", () =
       ...filterBuiltinAgents(""),
     ];
     const html = renderMenu(items, "subagent");
-    expect(html).toContain("Глобальные");
-    expect(html).toContain("Встроенные");
+    expect(html).toContain("Global");
+    expect(html).toContain("Built-in");
     expect(html).toContain("General Purpose"); // built-in, formatted
     expect(html).toContain("Explore");
   });
@@ -182,7 +182,7 @@ describe("commands — catalogCommandMenuItems + `/` grouping", () => {
     expect(rows.find((r) => r.name === "review")!.scope).toBe("global");
   });
 
-  it("groups catalog commands into Проект / Глобальные under the `/` trigger", () => {
+  it("groups catalog commands into Project / Global under the `/` trigger", () => {
     const rows: ComposerCommandItem[] = [
       ...catalogCommandMenuItems(
         [
@@ -215,6 +215,6 @@ describe("commands — catalogCommandMenuItems + `/` grouping", () => {
     expect(markup).toContain("/review");
     expect(markup).toContain("/model");
     const grouped = groupCatalogComposerItems(rows);
-    expect(grouped.map((g) => g.label)).toEqual(["Проект", "Глобальные"]);
+    expect(grouped.map((g) => g.label)).toEqual(["Project", "Global"]);
   });
 });

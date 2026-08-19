@@ -26,6 +26,7 @@
     "localize:extract": "node ru-code/localization/build/extractDictionary.mjs",
     "localize:catalog": "node ru-code/localization/build/genCatalog.mjs",
     "localize:check": "node ru-code/localization/build/genCatalog.mjs --strict",
+    "localize:guard": "node ru-code/localization/build/compareGuard.mjs",
     "localize:fix": "node ru-code/localization/build/genCatalog.mjs --fix",
     "localize:new": "node ru-code/localization/build/discover.mjs",
     "localize:stats": "node ru-code/localization/build/stats.mjs",

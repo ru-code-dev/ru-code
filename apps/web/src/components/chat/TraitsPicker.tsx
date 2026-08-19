@@ -415,7 +415,14 @@ export function buildTraitsTriggerDisplay(input: {
       descriptor.type === "select"
     ) {
       const currentValue = getProviderOptionCurrentValue(descriptor);
-      const fastTier = descriptor.options.find(({ label }) => label === "Fast");
+      // ru-code: decide on the tier's stable `id`, not its translated `label` —
+      // the localization transform replaces "Fast" with its Russian rendering
+      // wherever the literal "Fast" appears in THIS file, so a text comparison
+      // here would silently break in Russian (same class of bug as
+      // C-07-002/C-07-010). "priority" is Codex's own catalog id for the fast
+      // tier; "fast" is the id CodexProvider assigns for the deprecated
+      // `additionalSpeedTiers` fallback (see CodexProvider.ts).
+      const fastTier = descriptor.options.find(({ id }) => id === "priority" || id === "fast");
       if (fastTier && (currentValue === "default" || currentValue === fastTier.id)) {
         hasFastMode = true;
         fastModeEnabled = currentValue === fastTier.id;

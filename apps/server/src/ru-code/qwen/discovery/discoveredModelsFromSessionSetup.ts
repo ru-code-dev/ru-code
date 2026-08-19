@@ -22,6 +22,7 @@
  */
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { isHiddenModel } from "@ru-code/branding";
 import {
   humanizeModelSlug,
   parseContextWindowFromSlug,
@@ -62,6 +63,11 @@ export function discoveredModelsFromSessionSetup(
     const parsed = parseModelToken(modelInfo.modelId);
     const slug = parsed?.slug ?? modelInfo.modelId.trim();
     if (slug.length === 0 || seenSlugs.has(slug)) continue;
+    // The SCAN GATE: a HIDE_MODELS match never enters the app — not persisted, not
+    // served, never the auto-default. An advertisement of ONLY hidden models therefore
+    // comes out empty, and the caller's empty-guard keeps the current set. (A user can
+    // still add the model manually in provider settings — customModels are not a scan.)
+    if (isHiddenModel(slug)) continue;
     seenSlugs.add(slug);
 
     // Slug is the authority: window from its size suffix first, name always

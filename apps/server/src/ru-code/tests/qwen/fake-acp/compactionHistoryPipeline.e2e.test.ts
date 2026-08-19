@@ -12,6 +12,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CONTEXT_COMPACTION_TASK_PREFIX } from "@ru-code/branding";
+// ru-code: egress-localization chain proof (see assertEgressLocalizesCompactionSummary).
+import { setLocale } from "@ru-code/localization";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -21,6 +23,7 @@ import {
   QwenSettings,
   ThreadId,
   defaultInstanceIdForDriver,
+  OrchestrationThreadDetailSnapshot,
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -35,6 +38,7 @@ import { ServerConfig } from "../../../../config.ts";
 import { ProjectionSnapshotQuery } from "../../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderAdapterRegistry } from "../../../../provider/Services/ProviderAdapterRegistry.ts";
 import { makeAdapterRegistryMock } from "../../../../provider/testUtils/providerAdapterRegistryMock.ts";
+import { localizeWireValue, localizedJsonSerialization } from "../../../localization/wireEgress.ts";
 import type { FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
 import { makeOrchestrationIntegrationHarness } from "../../../../../integration/OrchestrationEngineHarness.integration.ts";
@@ -72,6 +76,86 @@ const isCompactionActivity = (
   activity.kind === kind &&
   typeof (activity.payload as { taskId?: unknown })?.taskId === "string" &&
   (activity.payload as { taskId: string }).taskId.startsWith(CONTEXT_COMPACTION_TASK_PREFIX);
+
+// ── ru-code egress-localization chain, asserted on the REAL projection ───────
+// This scenario's completed row is the BREAKER TRIP: "Compaction barely reduced the context
+// {0}. Auto-compaction disabled." — a `wire: true` dict entry, 340+ chars as a token, i.e.
+// LONGER than ingestion's 180-char truncateDetail cap. That made it THE production leak: the
+// persisted token was sliced mid-JSON, could never resolve, and rendered raw on every client.
+// This proof therefore guards the full chain, on the projection a restarted server would serve:
+//  1. PERSISTENCE KEEPS THE TOKEN INTACT — closing sentinel still there (the token-aware
+//     truncateDetail seam), and the sentinel is a REAL byte (no double-encoding anywhere in
+//     reactor → ingestion → sqlite → projection);
+//  2. THE WS DOOR RESOLVES IT — the exact serialization ws.ts installs emits locale display
+//     text with zero sentinels left (both locales);
+//  3. THE HTTP DOOR RESOLVES IT — `localizeWireValue` + the endpoint's success schema
+//     (`OrchestrationThreadDetailSnapshot`) encode, exactly as orchestration/http.ts serves it.
+const encodeThreadDetailSnapshot = Schema.encodeUnknownSync(OrchestrationThreadDetailSnapshot);
+
+const assertEgressLocalizesCompactionSummary = (
+  detailSnapshot: OrchestrationThreadDetailSnapshot,
+): void => {
+  const SENTINEL_CODE = 0x1e;
+  const completed = detailSnapshot.thread.activities.find((a) =>
+    isCompactionActivity(a, "task.completed"),
+  );
+  assert.isDefined(completed, "no completed compaction activity in the projection");
+  const summary = (completed!.payload as { summary?: unknown }).summary;
+  assert.isTrue(
+    typeof summary === "string" && (summary as string).charCodeAt(0) === SENTINEL_CODE,
+    "transform inactive: the projected summary is not an Lc token — this chain proof would prove nothing",
+  );
+  const token = summary as string;
+  // THE truncation regression guard: this token is longer than ingestion's 180-char cap, so a
+  // token-blind truncateDetail slices it mid-JSON (closing sentinel gone → resolves never).
+  assert.strictEqual(
+    token.charCodeAt(token.length - 1),
+    SENTINEL_CODE,
+    `the persisted token lost its closing sentinel — persist-time truncation cut it mid-JSON (len=${token.length}, tail=${JSON.stringify(token.slice(-40))})`,
+  );
+  assert.isTrue(
+    JSON.stringify(detailSnapshot).includes("\\u001e"),
+    "the projected thread lost the token sentinel byte (double-encoding in persistence)",
+  );
+
+  const RU_SUMMARY = "Сжатие почти не уменьшило контекст (200000 -> 199000). Автосжатие отключено.";
+  const EN_SUMMARY =
+    "Compaction barely reduced the context (200000 -> 199000). Auto-compaction disabled.";
+  const encodeAs = (locale: "en" | "ru") => {
+    setLocale(locale);
+    try {
+      return String(localizedJsonSerialization.makeUnsafe().encode(detailSnapshot));
+    } finally {
+      setLocale("en");
+    }
+  };
+  const wireRu = encodeAs("ru");
+  {
+    // Assert on the DECODED field (not substring-only) so a failure prints the actual value.
+    const decoded = JSON.parse(wireRu) as OrchestrationThreadDetailSnapshot;
+    const row = decoded.thread.activities.find((a) => isCompactionActivity(a, "task.completed"));
+    assert.strictEqual((row!.payload as { summary?: unknown }).summary, RU_SUMMARY);
+  }
+  assert.isFalse(wireRu.includes("\\u001e"), "WS egress leaked a raw token sentinel");
+  assert.isTrue(
+    encodeAs("en").includes(EN_SUMMARY),
+    "WS egress did not resolve the summary token to English",
+  );
+
+  setLocale("ru");
+  try {
+    const httpSerialized = JSON.stringify(
+      encodeThreadDetailSnapshot(localizeWireValue(detailSnapshot)),
+    );
+    assert.isTrue(
+      httpSerialized.includes(RU_SUMMARY),
+      "HTTP egress did not resolve the summary token to Russian",
+    );
+    assert.isFalse(httpSerialized.includes("\\u001e"), "HTTP egress leaked a raw token sentinel");
+  } finally {
+    setLocale("en");
+  }
+};
 
 // ── Case 1: completed compression → REAL history service over the projection ─
 
@@ -191,6 +275,13 @@ it.live(
             preTokens: 200_000,
             postTokens: 199_000,
           });
+
+          // The same projected thread, pushed through BOTH egress doors (see the helper).
+          const detailSnapshot = yield* harness.snapshotQuery
+            .getThreadDetailSnapshot(HISTORY_THREAD)
+            .pipe(Effect.map(Option.getOrNull), Effect.orDie);
+          assert.isNotNull(detailSnapshot, "no thread detail snapshot in the projection");
+          assertEgressLocalizesCompactionSummary(detailSnapshot!);
         }),
       (harness) => harness.dispose,
     ).pipe(Effect.provide(NodeServices.layer)),

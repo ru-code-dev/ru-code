@@ -16,6 +16,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { ProjectId } from "@t3tools/contracts";
+// ru-code: the brand's CLI config dir name (`.qwen` / `.qwen-port`) — the SAME constant the boot
+// preflight uses to build ServerConfig.cliConfigDir, so it always equals basename(cliConfigDir).
+import { PREFLIGHT_CLI_PROBE_DIRNAME } from "@ru-code/branding";
 
 import {
   SkillCatalogLayer,
@@ -42,11 +45,6 @@ import {
   type ProjectionProjectRepositoryShape,
 } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
-
-// The CLI config subfolder name inside a project cwd (e.g. `<cwd>/.qwen/skills`). The CLI's
-// GLOBAL config dir is `ServerConfig.cliConfigDir` (already `<home>/.qwen`), from which the
-// global roots are derived; this is the per-project counterpart.
-const CLI_FOLDER = ".qwen";
 
 // ru-code: the catalog identifies a project by its stable `ProjectId` — the SAME identity the rest of
 // the app uses (`thread.projectId`, the reactor, the respawn gate). That keeps one identity end-to-end
@@ -83,7 +81,7 @@ export const skillProjectsLayer = Layer.effect(
   Effect.gen(function* () {
     const projectRepo = yield* ProjectionProjectRepository;
     const failed = (cause: unknown) =>
-      new SkillCatalogError({ detail: "Не удалось получить список проектов.", cause });
+      new SkillCatalogError({ detail: "Could not list projects.", cause });
     return SkillManagerProjects.of({
       listLive: () => liveProjects(projectRepo).pipe(Effect.mapError(failed)),
       getCwd: (projectId) => projectCwd(projectRepo, projectId).pipe(Effect.mapError(failed)),
@@ -96,7 +94,7 @@ export const agentProjectsLayer = Layer.effect(
   Effect.gen(function* () {
     const projectRepo = yield* ProjectionProjectRepository;
     const failed = (cause: unknown) =>
-      new AgentCatalogError({ detail: "Не удалось получить список проектов.", cause });
+      new AgentCatalogError({ detail: "Could not list projects.", cause });
     return AgentManagerProjects.of({
       listLive: () => liveProjects(projectRepo).pipe(Effect.mapError(failed)),
       getCwd: (projectId) => projectCwd(projectRepo, projectId).pipe(Effect.mapError(failed)),
@@ -109,7 +107,7 @@ export const commandProjectsLayer = Layer.effect(
   Effect.gen(function* () {
     const projectRepo = yield* ProjectionProjectRepository;
     const failed = (cause: unknown) =>
-      new CommandCatalogError({ detail: "Не удалось получить список проектов.", cause });
+      new CommandCatalogError({ detail: "Could not list projects.", cause });
     return CommandManagerProjects.of({
       listLive: () => liveProjects(projectRepo).pipe(Effect.mapError(failed)),
       getCwd: (projectId) => projectCwd(projectRepo, projectId).pipe(Effect.mapError(failed)),
@@ -125,7 +123,7 @@ const skillConfigLayer = Layer.effect(
     return SkillManagerConfig.of({
       skillCatalogDir: path.join(config.stateDir, "skill-catalog"),
       cliConfigDir: config.cliConfigDir,
-      cliFolder: CLI_FOLDER,
+      cliFolder: PREFLIGHT_CLI_PROBE_DIRNAME,
     });
   }),
 );
@@ -138,7 +136,7 @@ const agentConfigLayer = Layer.effect(
     return AgentManagerConfig.of({
       agentCatalogDir: path.join(config.stateDir, "agent-catalog"),
       cliConfigDir: config.cliConfigDir,
-      cliFolder: CLI_FOLDER,
+      cliFolder: PREFLIGHT_CLI_PROBE_DIRNAME,
     });
   }),
 );
@@ -151,7 +149,7 @@ const commandConfigLayer = Layer.effect(
     return CommandManagerConfig.of({
       commandCatalogDir: path.join(config.stateDir, "command-catalog"),
       cliConfigDir: config.cliConfigDir,
-      cliFolder: CLI_FOLDER,
+      cliFolder: PREFLIGHT_CLI_PROBE_DIRNAME,
     });
   }),
 );

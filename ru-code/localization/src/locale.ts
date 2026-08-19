@@ -21,6 +21,20 @@ export type Locale = "ru" | "en";
 // source, so the existing (English-asserting) suite proves the transform and seams
 // changed no behavior. Tests that want Russian call setLocale("ru") explicitly.
 function initialLocale(): Locale {
+  // In the browser, the server stamps its effective locale into the served HTML as
+  // `window.__RU_LOCALE__` BEFORE any module script runs (localeBootstrapHtml.ts). Read it
+  // HERE — at the first evaluation of this module — so module-level `L()` constants freeze
+  // to the correct locale in EVERY bundler chunk layout. (The entry's bootLocale() runs too
+  // late for constants co-located in this module's chunk: importing anything from a chunk
+  // evaluates all of it, ahead of the entry's own statements. Real instance:
+  // CLI_PROFILES.description rendered Russian in an all-English UI.) bootLocale() remains
+  // as a backstop only. Guarded by localeInit.test.ts.
+  // No DOM lib here (this package is environment-neutral) — reach window via globalThis,
+  // same as the `process` access below.
+  const browserWindow = (globalThis as { window?: { __RU_LOCALE__?: unknown } }).window;
+  if (browserWindow !== undefined && isLocale(browserWindow.__RU_LOCALE__)) {
+    return browserWindow.__RU_LOCALE__;
+  }
   // Avoid a hard `process` type dependency (this package is imported in the browser too).
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
     ?.env;

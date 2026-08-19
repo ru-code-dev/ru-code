@@ -34,7 +34,7 @@ export const catalogSkillMenuItems = (
     type: "catalog-skill" as const,
     name: item.name,
     label: ambiguous.has(item.name) ? item.name : formatCatalogItemDisplayName(item.name),
-    description: item.description ?? "Навык",
+    description: item.description ?? "Skill",
     scope: scopeOf(item, projectId),
   }));
 };
@@ -49,7 +49,7 @@ export const catalogAgentMenuItems = (
     type: "catalog-agent" as const,
     name: item.name,
     label: ambiguous.has(item.name) ? item.name : formatCatalogItemDisplayName(item.name),
-    description: item.description ?? "Агент",
+    description: item.description ?? "Agent",
     scope: scopeOf(item, projectId),
   }));
 };
@@ -65,6 +65,6 @@ export const catalogCommandMenuItems = (
     type: "catalog-command" as const,
     name: item.name,
     label: `/${item.name}`,
-    description: item.description ?? "Команда",
+    description: item.description ?? "Command",
     scope: scopeOf(item, projectId),
   }));

@@ -18,9 +18,9 @@ const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 
 const DISCOVERED = [
   {
-    slug: "giga/coder-xl-256k",
+    slug: "acme/coder-xl-256k",
     authMethod: "openai",
-    name: "Giga Coder Xl 256K",
+    name: "Acme Coder Xl 256K",
     nTokens: 256_000,
   },
 ];

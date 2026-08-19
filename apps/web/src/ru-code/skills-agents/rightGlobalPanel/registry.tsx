@@ -3,6 +3,9 @@
 // (plus a GlobalPanelId union member). Ported from the ru-code overlay coordinator.
 
 import type { DiffPanelMode } from "@smart-tools/qwen-cli-ui-kit";
+// ru-code zone → hand seam (R19): module-const L is safe — the locale module self-seeds
+// from the server-stamped window.__RU_LOCALE__ at its own init (localeInit.test.ts).
+import { L } from "@ru-code/localization";
 import { BotIcon, SparklesIcon, TerminalIcon, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -23,19 +26,19 @@ export interface OverlayPanel {
 export const OVERLAY_PANELS: readonly OverlayPanel[] = [
   {
     id: "skills",
-    label: "Навыки",
+    label: L("Skills", "Навыки"),
     icon: SparklesIcon,
     render: (mode, onClose) => <SkillsPanelHost mode={mode} onClose={onClose} />,
   },
   {
     id: "agents",
-    label: "Агенты",
+    label: L("Agents", "Агенты"),
     icon: BotIcon,
     render: (mode, onClose) => <AgentsPanelHost mode={mode} onClose={onClose} />,
   },
   {
     id: "commands",
-    label: "Команды",
+    label: L("Commands", "Команды"),
     icon: TerminalIcon,
     render: (mode, onClose) => <CommandsPanelHost mode={mode} onClose={onClose} />,
   },

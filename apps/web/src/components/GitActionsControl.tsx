@@ -367,8 +367,11 @@ function GitQuickActionIcon({
     }
     return <SourceControlIcon className={iconClassName} />;
   }
-  if (quickAction.label === "Commit") return <GitCommitIcon className={iconClassName} />;
-  if (quickAction.label === "Push") return <CloudUploadIcon className={iconClassName} />;
+  // ru-code: match the stable `icon` discriminant, not the localized `label` (SEAMS.md).
+  // Upstream added the Push branch after this patch was written; it carries the same
+  // localized-label match, so it gets the same treatment.
+  if (quickAction.icon === "commit") return <GitCommitIcon className={iconClassName} />;
+  if (quickAction.icon === "push") return <CloudUploadIcon className={iconClassName} />;
   return <InfoIcon className={iconClassName} />;
 }
 

@@ -18,9 +18,9 @@ import { QwenModelDiscoveryStore } from "../../../qwen/discovery/QwenModelDiscov
 const INSTANCE_A = ProviderInstanceId.make("qwen");
 const INSTANCE_B = ProviderInstanceId.make("qwen_custom");
 
-const MODEL_A = { slug: "giga/a-8k", authMethod: "openai", name: "A", nTokens: 8_000 };
-const MODEL_B = { slug: "giga/b-16k", authMethod: "openai", name: "B", nTokens: 16_000 };
-const MODEL_C = { slug: "giga/c-32k", authMethod: "openai", name: "C", nTokens: 32_000 };
+const MODEL_A = { slug: "acme/a-8k", authMethod: "openai", name: "A", nTokens: 8_000 };
+const MODEL_B = { slug: "acme/b-16k", authMethod: "openai", name: "B", nTokens: 16_000 };
+const MODEL_C = { slug: "acme/c-32k", authMethod: "openai", name: "C", nTokens: 32_000 };
 
 const testLayer = (prefix: string) =>
   QwenModelDiscoveryStore.layer().pipe(
@@ -42,19 +42,19 @@ describe("QwenModelDiscoveryStore", () => {
 
       assert.deepStrictEqual(
         (yield* store.get(INSTANCE_A)).map((model) => model.slug),
-        ["giga/a-8k", "giga/b-16k"],
+        ["acme/a-8k", "acme/b-16k"],
       );
       // ru-code: per-instance isolation — B's discovery never leaks into A.
       assert.deepStrictEqual(
         (yield* store.get(INSTANCE_B)).map((model) => model.slug),
-        ["giga/c-32k"],
+        ["acme/c-32k"],
       );
 
       // A disjoint advertisement drops the old set entirely.
       yield* store.applyAdvertisement(INSTANCE_A, [MODEL_C]);
       assert.deepStrictEqual(
         (yield* store.get(INSTANCE_A)).map((model) => model.slug),
-        ["giga/c-32k"],
+        ["acme/c-32k"],
       );
     }).pipe(Effect.provide(testLayer("qwen-discovery-store-basic-"))),
   );
@@ -77,7 +77,7 @@ describe("QwenModelDiscoveryStore", () => {
 
       assert.deepStrictEqual(
         hydrated.map((model) => model.slug),
-        ["giga/a-8k"],
+        ["acme/a-8k"],
       );
 
       // And the on-disk artifact is where we say it is.
@@ -102,19 +102,19 @@ describe("QwenModelDiscoveryStore", () => {
 
       const changed = yield* store.applyModelError({
         instanceId: INSTANCE_A,
-        badModelSlug: "giga/a-8k",
+        badModelSlug: "acme/a-8k",
         suggestedModels: [MODEL_C, MODEL_B], // B already present → kept as-is, no dupe
       });
       assert.isTrue(changed);
       assert.deepStrictEqual(
         (yield* store.get(INSTANCE_A)).map((model) => model.slug),
-        ["giga/b-16k", "giga/c-32k"],
+        ["acme/b-16k", "acme/c-32k"],
       );
 
       // No-op mutation (unknown bad slug, all suggestions present) reports false.
       const unchanged = yield* store.applyModelError({
         instanceId: INSTANCE_A,
-        badModelSlug: "giga/ghost",
+        badModelSlug: "acme/ghost",
         suggestedModels: [MODEL_B],
       });
       assert.isFalse(unchanged);

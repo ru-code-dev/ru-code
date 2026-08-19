@@ -23,9 +23,9 @@ export const groupCatalogComposerItems = (
     label: string;
     scope: "project" | "global" | "builtin";
   }> = [
-    { id: "cat-project", label: "Проект", scope: "project" },
-    { id: "cat-global", label: "Глобальные", scope: "global" },
-    { id: "cat-builtin", label: "Встроенные", scope: "builtin" },
+    { id: "cat-project", label: "Project", scope: "project" },
+    { id: "cat-global", label: "Global", scope: "global" },
+    { id: "cat-builtin", label: "Built-in", scope: "builtin" },
   ];
 
   const groups: Array<{ id: string; label: string; items: ComposerCommandItem[] }> = [];

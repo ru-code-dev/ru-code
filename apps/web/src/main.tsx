@@ -1,5 +1,7 @@
-// ru-code: seed the UI language before any component module is imported, so
-// module-level L() constants evaluate against the stored locale. MUST be first.
+// ru-code: backstop locale seed. The REAL guarantee is inside @ru-code/localization —
+// initialLocale() reads the server-stamped window.__RU_LOCALE__ at the locale module's own
+// first evaluation, so module-level L() constants are correct in any chunk order (entry
+// import order alone cannot guarantee that; see localeInit.test.ts).
 import "./ru-code/bootLocale";
 
 import React from "react";

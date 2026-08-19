@@ -117,7 +117,7 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { formatRelativeTime, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
@@ -202,14 +202,19 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 
-function compactSidebarTimeLabel(label: string): string {
-  if (label === "just now") return "now";
-  return label.endsWith(" ago") ? label.slice(0, -4) : label;
+// ru-code: decide the "now" case on the producer's structural discriminant
+// (`suffix === null`), never on the rendered label text — the localization
+// transform replaces "just now" with its translated form before this code
+// ever sees it, so a text comparison here would silently break in Russian
+// (same class of bug as C-07-002/C-07-010).
+function compactSidebarTimeLabel(relative: ReturnType<typeof formatRelativeTime>): string {
+  if (!relative) return "";
+  return relative.suffix === null ? "now" : relative.value;
 }
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
-  return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+  return compactSidebarTimeLabel(formatRelativeTime(timestamp));
 }
 
 // Settled rows read "how long ago did this wrap up", matching their sort
@@ -217,7 +222,7 @@ function threadTimeLabel(thread: SidebarThreadSummary): string {
 // disagree.
 function settledTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = resolveSettledTimestamp(thread);
-  return timestamp === null ? "" : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+  return timestamp === null ? "" : compactSidebarTimeLabel(formatRelativeTime(timestamp));
 }
 
 // Floats at the row's right edge, vertically centered, while the jump

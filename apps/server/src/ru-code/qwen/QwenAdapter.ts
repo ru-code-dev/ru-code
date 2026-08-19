@@ -939,7 +939,7 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             // summary, ...), synthesise a `content.delta` event so the text
             // lands in the active turn's assistant bubble — same pipeline
             // real `agent_message_chunk` text uses. Only the vendor namespace
-            // prefix varies by CLI build (`_qwencode/…`, `_gigacode/…`, a
+            // prefix varies by CLI build (`_qwencode/…`, `_vendor/…`, a
             // fork's own), the payload is identical — so match the stable
             // `/slash_command` suffix instead of enumerating vendors.
             yield* acp.handleUnknownExtNotification((method, params) =>

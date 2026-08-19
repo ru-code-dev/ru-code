@@ -60,7 +60,11 @@ import {
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { RpcServer } from "effect/unstable/rpc";
+
+// ru-code: layerJson + egress localization — wire tokens (Lc) resolve to the server locale
+// in the serialized text before any byte leaves the socket. See ru-code/localization/wireEgress.ts.
+import { layerLocalizedJsonRpcSerialization } from "./ru-code/localization/wireEgress.ts";
 
 // ru-code: Skills + Agents catalog (Skills/Agents Manager) — the catalog services, their
 // host-wired layers, and the extracted RPC handlers + scopes. Both catalog errors are the same
@@ -2369,7 +2373,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         }).pipe(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provideMerge(layerLocalizedJsonRpcSerialization), // ru-code: egress localization
               // ru-code: the Skills + Agents catalog services. Their host ports are wired in
               // catalogLayers.ts; FileSystem + Path + ServerConfig are ambient here.
               Layer.provide(SkillCatalogHostLayer),

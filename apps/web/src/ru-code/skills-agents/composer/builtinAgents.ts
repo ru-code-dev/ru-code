@@ -20,8 +20,8 @@ const builtin = (name: string, description: string): BuiltinAgentItem => ({
 });
 
 export const BUILTIN_AGENT_ITEMS: ReadonlyArray<BuiltinAgentItem> = [
-  builtin("general-purpose", "Поиск кода и многошаговые задачи в репозитории."),
-  builtin("Explore", "Быстрый поиск файлов и кода (только чтение)."),
+  builtin("general-purpose", "Code search and multi-step tasks in the repository."),
+  builtin("Explore", "Fast file and code search (read-only)."),
 ];
 
 // Filter the built-ins by the picker query (they are not part of the searched catalog list, so the

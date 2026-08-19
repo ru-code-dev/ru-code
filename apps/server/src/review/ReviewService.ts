@@ -93,7 +93,9 @@ export const make = Effect.gen(function* () {
     }
 
     return yield* new VcsRepositoryDetectionError({
-      operation,
+      // ru-code: unique, never-localized machine token in `operation` so the web can match
+      // THIS "cwd outside workspace root" case without matching the localized `detail`.
+      operation: `${operation}.cwdOutsideWorkspaceRoot`,
       cwd,
       detail:
         operation === "ReviewService.getDiffPreview"

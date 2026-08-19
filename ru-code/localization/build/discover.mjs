@@ -3,6 +3,7 @@
 //   pnpm localize:new                 → whole repo (the full backlog)
 //   pnpm localize:new --range A B     → only files changed between commits A and B
 //   pnpm localize:new --range A..B    → same
+//   pnpm localize:new --path <p>      → a single file OR a folder (any package), recursive
 //
 // Technique: collect display units (nodes.mjs already excludes keys/types/imports/case/
 // comparison/seams), drop anything already in the dictionary, then apply a user-facing
@@ -50,12 +51,70 @@ function lineAt(source, offset) {
   return line;
 }
 
+// Recursively collect .ts/.tsx (non-test) under a directory — for `--path <folder>`.
+function walkTsFiles(absDir) {
+  const skip = new Set([
+    "node_modules",
+    "dist",
+    "dist-electron",
+    ".vite-plus",
+    ".vite",
+    "build",
+    ".git",
+    "_generated",
+  ]);
+  const out = [];
+  const walk = (dir) => {
+    let dirents;
+    try {
+      dirents = NodeFS.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const d of dirents) {
+      const p = NodePath.join(dir, d.name);
+      if (d.isDirectory()) {
+        if (!skip.has(d.name)) walk(p);
+      } else if (/\.(ts|tsx)$/.test(d.name) && !/\.test\.[tj]sx?$/.test(d.name)) {
+        out.push(p);
+      }
+    }
+  };
+  walk(absDir);
+  return out;
+}
+
 // Files to scan.
 const args = process.argv.slice(2);
 const rangeIdx = args.indexOf("--range");
+const pathIdx = args.indexOf("--path");
 let files;
 let label;
-if (rangeIdx !== -1) {
+if (pathIdx !== -1) {
+  const target = args[pathIdx + 1];
+  if (!target || target.startsWith("--")) {
+    console.error("localize:new --path <file-or-folder>: missing path argument");
+    process.exit(2);
+  }
+  const abs = NodePath.resolve(REPO_ROOT, target);
+  let stat;
+  try {
+    stat = NodeFS.statSync(abs);
+  } catch {
+    console.error(`localize:new --path: not found: ${target}`);
+    process.exit(2);
+  }
+  label = `path ${NodePath.relative(REPO_ROOT, abs).split(NodePath.sep).join("/")}`;
+  files = (stat.isDirectory() ? walkTsFiles(abs) : [abs])
+    .map((a) => NodePath.relative(REPO_ROOT, a).split(NodePath.sep).join("/"))
+    .filter(
+      (f) =>
+        /\.(ts|tsx)$/.test(f) &&
+        !/\.test\.[tj]sx?$/.test(f) &&
+        !EXCLUDE_PREFIXES.some((p) => f.startsWith(p)) &&
+        !isNoiseFile(f),
+    );
+} else if (rangeIdx !== -1) {
   const rest = args.slice(rangeIdx + 1).filter((a) => !a.startsWith("--"));
   const [a, b] = rest.length === 1 && rest[0].includes("..") ? rest[0].split("..") : rest;
   label = `range ${a}..${b}`;

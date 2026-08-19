@@ -18,6 +18,7 @@
  *
  * @module ru-code/qwen/discovery/modelErrorDiscovery
  */
+import { isHiddenModel } from "@ru-code/branding";
 import { extractModelTokens, type ParsedModelToken } from "@ru-code/qwen/models/modelToken";
 
 import type { DiscoveredQwenModel } from "./QwenModelDiscoveryStore.ts";
@@ -63,7 +64,8 @@ export function detectModelErrorDiscovery(input: {
     return {
       badModelSlug,
       suggestedModels: extractModelTokens(details)
-        .filter((token) => token.slug !== badModelSlug)
+        // Scan gate: backend-suggested HIDE_MODELS matches never enter the app.
+        .filter((token) => token.slug !== badModelSlug && !isHiddenModel(token.slug))
         .map(toDiscoveredModel),
     };
   }
@@ -78,7 +80,8 @@ export function detectModelErrorDiscovery(input: {
 
   const badModelSlug = input.sentModelSlug;
   const suggestedModels = suggested
-    .filter((token) => token.slug !== badModelSlug)
+    // Scan gate: backend-suggested HIDE_MODELS matches never enter the app.
+    .filter((token) => token.slug !== badModelSlug && !isHiddenModel(token.slug))
     .map(toDiscoveredModel);
   // Nothing to drop AND nothing to add — not an actionable discovery.
   if (badModelSlug === null && suggestedModels.length === 0) return null;

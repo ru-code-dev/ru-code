@@ -331,15 +331,15 @@ describe("model option context windows", () => {
       ...provider({ provider: ProviderDriverKind.make("qwen"), instanceId: "qwen" }),
       models: [
         {
-          slug: "giga/coder-xl-256k",
-          name: "Giga Coder XL 256K",
+          slug: "acme/coder-xl-256k",
+          name: "Acme Coder XL 256K",
           isCustom: false,
           capabilities: {},
           nTokens: 262144,
         },
         {
-          slug: "giga/chat-mini",
-          name: "Giga Chat Mini",
+          slug: "acme/chat-mini",
+          name: "Acme Chat Mini",
           isCustom: false,
           capabilities: {},
         },
@@ -353,8 +353,8 @@ describe("model option context windows", () => {
       ),
     );
 
-    expect(optionsBySlug.get("giga/coder-xl-256k")?.contextWindowTokens).toBe(262144);
+    expect(optionsBySlug.get("acme/coder-xl-256k")?.contextWindowTokens).toBe(262144);
     // No nTokens served ⇒ the key is ABSENT (not 0/null) — unknown stays unknown.
-    expect("contextWindowTokens" in optionsBySlug.get("giga/chat-mini")!).toBe(false);
+    expect("contextWindowTokens" in optionsBySlug.get("acme/chat-mini")!).toBe(false);
   });
 });

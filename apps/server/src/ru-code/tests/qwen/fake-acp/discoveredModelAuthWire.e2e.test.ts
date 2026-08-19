@@ -1,9 +1,11 @@
 // ru-code: the auth suffix on the wire must be the SELECTED model's own auth,
 // whatever its source — a DISCOVERED model advertises its auth in the session
-// advertisement (`coder-model(qwen-oauth)`), and dispatching it with the
+// advertisement (`flash-model(qwen-oauth)`), and dispatching it with the
 // instance-default auth makes qwen reject the whole setModel
-// (`Invalid value "coder-model(openai)" … expected coder-model(qwen-oauth)`).
-// Reproduces the field failure byte-for-byte, then pins the contract.
+// (`Invalid value "flash-model(openai)" … expected flash-model(qwen-oauth)`).
+// Reproduces the field failure byte-for-byte, then pins the contract. (The field
+// slug was qwen's builtin `coder-model`; that slug is now HIDE_MODELS-gated at
+// the scan, so the mechanics are pinned on a neutral slug.)
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, QwenSettings, ThreadId } from "@t3tools/contracts";
@@ -35,8 +37,8 @@ const ADVERTISED_MODELS = {
       _meta: { contextLimit: 256_000 },
     },
     {
-      modelId: "coder-model(qwen-oauth)",
-      name: "coder-model",
+      modelId: "flash-model(qwen-oauth)",
+      name: "flash-model",
       description: null,
       _meta: { contextLimit: 1_000_000 },
     },
@@ -68,7 +70,7 @@ it.effect("a DISCOVERED model dispatches with ITS advertised auth, not the insta
     yield* adapter.sendTurn({
       threadId: THREAD_ID,
       input: "hello",
-      modelSelection: { instanceId: INSTANCE_ID, model: "coder-model" },
+      modelSelection: { instanceId: INSTANCE_ID, model: "flash-model" },
     });
     yield* Deferred.await(turnDone).pipe(Effect.timeout("10 seconds"));
     yield* Fiber.interrupt(eventsFiber);
@@ -76,7 +78,7 @@ it.effect("a DISCOVERED model dispatches with ITS advertised auth, not the insta
     const modelCalls = configCalls.filter(([configId]) => configId === "model");
     assert.deepStrictEqual(
       modelCalls,
-      [["model", "coder-model(qwen-oauth)"]],
+      [["model", "flash-model(qwen-oauth)"]],
       "the discovered model's own auth must ride the wire",
     );
   }).pipe(

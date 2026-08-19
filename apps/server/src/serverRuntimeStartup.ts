@@ -2,6 +2,7 @@ import { APP_NAME } from "@ru-code/branding";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
   type ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -243,7 +244,9 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
           title: "New thread",
           modelSelection: nextProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
+          // ru-code: the fresh-install bootstrap thread must start in the app-wide default
+          // mode (auto-accept-edits), NOT full access.
+          runtimeMode: DEFAULT_RUNTIME_MODE,
           branch: null,
           worktreePath: null,
           createdAt,

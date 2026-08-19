@@ -32,9 +32,9 @@ describe("serveQwenModels — source switching", () => {
 
   it("replaces profile built-ins wholesale once ≥1 model is discovered", () => {
     const served = serveQwenModels(settingsWith(), [
-      { slug: "giga/coder-xl-256k", authMethod: "openai", name: "Giga Coder", nTokens: 256_000 },
+      { slug: "acme/coder-xl-256k", authMethod: "openai", name: "Acme Coder", nTokens: 256_000 },
     ]);
-    expect(served.map((model) => model.slug)).toEqual(["giga/coder-xl-256k"]);
+    expect(served.map((model) => model.slug)).toEqual(["acme/coder-xl-256k"]);
     expect(served[0]?.nTokens).toBe(256_000);
     expect(served[0]?.authType).toBe("openai");
   });
@@ -52,15 +52,15 @@ describe("serveQwenModels — source switching", () => {
     expect(beforeDiscovery[2]).toMatchObject({ isCustom: true, nTokens: 64_000 });
 
     const afterDiscovery = serveQwenModels(customSettings, [
-      { slug: "giga/a-8k", authMethod: "openai", name: "A", nTokens: 8_000 },
+      { slug: "acme/a-8k", authMethod: "openai", name: "A", nTokens: 8_000 },
     ]);
-    expect(afterDiscovery.map((model) => model.slug)).toEqual(["giga/a-8k", "my/custom-64k"]);
+    expect(afterDiscovery.map((model) => model.slug)).toEqual(["acme/a-8k", "my/custom-64k"]);
   });
 
   it("dedupes by slug — a discovered entry wins over the same custom slug", () => {
     const served = serveQwenModels(
-      settingsWith({ customModels: [{ slug: "giga/a-8k", authMethod: "" }] }),
-      [{ slug: "giga/a-8k", authMethod: "openai", name: "A", nTokens: 9_000 }],
+      settingsWith({ customModels: [{ slug: "acme/a-8k", authMethod: "" }] }),
+      [{ slug: "acme/a-8k", authMethod: "openai", name: "A", nTokens: 9_000 }],
     );
     expect(served).toHaveLength(1);
     expect(served[0]).toMatchObject({ isCustom: false, nTokens: 9_000 });
@@ -68,8 +68,8 @@ describe("serveQwenModels — source switching", () => {
 
   it("resolves unknown/blank discovered auth to the instance default", () => {
     const served = serveQwenModels(settingsWith(), [
-      { slug: "giga/a-8k", authMethod: "", name: "A" },
-      { slug: "giga/b-8k", authMethod: "not-a-method", name: "B" },
+      { slug: "acme/a-8k", authMethod: "", name: "A" },
+      { slug: "acme/b-8k", authMethod: "not-a-method", name: "B" },
     ]);
     // custom profile's defaultAuthMethod is "openai".
     expect(served.map((model) => model.authType)).toEqual(["openai", "openai"]);
@@ -85,13 +85,13 @@ describe("serveQwenModels — source switching", () => {
 
 describe("resolveQwenModelContextWindow — the meter denominator chain", () => {
   const discovered = [
-    { slug: "giga/coder-xl-256k", authMethod: "openai", name: "Giga", nTokens: 256_000 },
+    { slug: "acme/coder-xl-256k", authMethod: "openai", name: "Acme", nTokens: 256_000 },
     { slug: "plain-model", authMethod: "openai", name: "Plain" },
   ] as const;
 
   it("served entry's nTokens wins", () => {
     expect(
-      resolveQwenModelContextWindow(settingsWith(), [...discovered], "giga/coder-xl-256k"),
+      resolveQwenModelContextWindow(settingsWith(), [...discovered], "acme/coder-xl-256k"),
     ).toBe(256_000);
     // Profile model before discovery → profile-owned window.
     expect(resolveQwenModelContextWindow(settingsWith(), [], "qwen3-coder-flash")).toBe(252_000);
@@ -126,5 +126,39 @@ describe("resolveServedModelAuthMethod", () => {
     expect(resolveServedModelAuthMethod(settings, [], "unknown/model")).toBe(
       resolveModelAuthMethod(settings, "unknown/model"),
     );
+  });
+});
+
+describe("serveQwenModels — HIDE_MODELS and the manual-add exception", () => {
+  it("a USER custom model whose slug matches HIDE_MODELS still serves (adding it manually is deliberate)", () => {
+    // The scan gate lives in the discovery functions, NOT here: customModels are not a
+    // scan, so a hidden slug the user typed into provider settings must keep working.
+    const settings = settingsWith({
+      customModels: [{ slug: "coder-model", authMethod: "qwen-oauth" }],
+    });
+    const served = serveQwenModels(settings, []);
+    const customServed = served.find((model) => model.slug === "coder-model");
+    expect(customServed).toBeDefined();
+    expect(customServed!.isCustom).toBe(true);
+    // The scan gate dropped the advertisement that carried this model's window, so the
+    // HIDE_MODELS entry's KNOWN window fills in — the meter denominator stays correct.
+    expect(customServed!.nTokens).toBe(1_000_000);
+    expect(resolveQwenModelContextWindow(settings, [], "coder-model")).toBe(1_000_000);
+  });
+
+  it("a hidden custom slug WITH a size suffix keeps the suffix window (suffix wins over the known window)", () => {
+    const settings = settingsWith({
+      customModels: [{ slug: "acme/coder-model-256k", authMethod: "openai" }],
+    });
+    const served = serveQwenModels(settings, []);
+    expect(served.find((model) => model.slug === "acme/coder-model-256k")!.nTokens).toBe(256_000);
+  });
+
+  it("a non-hidden suffix-less custom slug still has NO window (unchanged default-meter behavior)", () => {
+    const settings = settingsWith({
+      customModels: [{ slug: "acme/plain", authMethod: "openai" }],
+    });
+    const served = serveQwenModels(settings, []);
+    expect(served.find((model) => model.slug === "acme/plain")!.nTokens).toBeUndefined();
   });
 });

@@ -5,7 +5,7 @@ import * as Stream from "effect/Stream";
 import { EXIT_DRAIN_GRACE_MS } from "./constants.ts";
 
 // ru-code: end a child's stdio stream when the PROCESS EXITS (+ a short drain),
-// instead of waiting for stdio EOF — which corporate AV / a git daemon / a stuck
+// instead of waiting for stdio EOF — which AV / a git daemon / a stuck
 // async `end` can hold open. exitCode resolves on the Node "exit" event,
 // independent of the pipe. On a healthy machine EOF ends the stream first → zero
 // added latency, identical output.

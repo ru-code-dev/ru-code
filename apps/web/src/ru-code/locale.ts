@@ -5,8 +5,10 @@
 // server (ServerSettings.locale) — there is NO client-side locale storage.
 //
 // The server stamps its effective locale into the served HTML as
-// window.__RU_LOCALE__ (see apps/server/src/ru-code/localeBootstrapHtml.ts), so
-// this module seeds it before the first render. That makes the language correct
+// window.__RU_LOCALE__ (see apps/server/src/ru-code/localeBootstrapHtml.ts). The
+// localization package itself reads the stamp at its module init (the guarantee
+// module-level L() constants rely on — see localeInit.test.ts); this glue re-seeds
+// as a backstop before the first render. That makes the language correct
 // on any origin: localStorage is keyed by origin (host + PORT) and the server
 // reserves a fresh port on most launches, so a per-origin cache would be empty
 // and unreliable. Changing the language writes the server setting and reloads —

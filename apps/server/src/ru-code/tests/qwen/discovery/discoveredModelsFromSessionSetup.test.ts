@@ -26,14 +26,14 @@ describe("discoveredModelsFromSessionSetup", () => {
       setupWithModels([
         {
           // qwen's raw hardcoded lowercase id as label — must NOT surface.
-          modelId: "coder-model(qwen-oauth)",
-          name: "coder-model",
+          modelId: "flash-model(qwen-oauth)",
+          name: "flash-model",
           description: "Qwen 3.5 Plus",
           _meta: { contextLimit: 1_000_000 },
         },
         {
           // user's ~/.qwen modelProviders display label — must NOT surface.
-          modelId: "giga/coder-xl-256k(openai)",
+          modelId: "acme/coder-xl-256k(openai)",
           name: "LM Studio Qwen",
           _meta: { contextLimit: 256_000 },
         },
@@ -41,11 +41,11 @@ describe("discoveredModelsFromSessionSetup", () => {
     );
     expect(discovered).toEqual([
       // No size suffix in the slug → contextLimit is the window fallback.
-      { slug: "coder-model", authMethod: "qwen-oauth", name: "Coder Model", nTokens: 1_000_000 },
+      { slug: "flash-model", authMethod: "qwen-oauth", name: "Flash Model", nTokens: 1_000_000 },
       {
-        slug: "giga/coder-xl-256k",
+        slug: "acme/coder-xl-256k",
         authMethod: "openai",
-        name: "Giga Coder Xl 256K",
+        name: "Acme Coder Xl 256K",
         nTokens: 256_000,
       },
     ]);
@@ -54,7 +54,7 @@ describe("discoveredModelsFromSessionSetup", () => {
   it("slug size suffix takes PRIORITY over a conflicting _meta.contextLimit", () => {
     const discovered = discoveredModelsFromSessionSetup(
       setupWithModels([
-        { modelId: "giga/coder-xl-256k(openai)", name: "X", _meta: { contextLimit: 999 } },
+        { modelId: "acme/coder-xl-256k(openai)", name: "X", _meta: { contextLimit: 999 } },
       ]),
     );
     expect(discovered[0]?.nTokens).toBe(256_000);
@@ -63,10 +63,10 @@ describe("discoveredModelsFromSessionSetup", () => {
   it("uses contextLimit only when the slug has no size suffix; junk contextLimit degrades to absent", () => {
     const discovered = discoveredModelsFromSessionSetup(
       setupWithModels([
-        { modelId: "giga/plain(openai)", name: "A", _meta: { contextLimit: 128_000 } },
-        { modelId: "giga/mini-32k(openai)", name: "B" }, // no _meta at all → suffix
-        { modelId: "giga/med(openai)", name: "C", _meta: { contextLimit: 0 } },
-        { modelId: "giga/big(openai)", name: "D", _meta: { contextLimit: "junk" } },
+        { modelId: "acme/plain(openai)", name: "A", _meta: { contextLimit: 128_000 } },
+        { modelId: "acme/mini-32k(openai)", name: "B" }, // no _meta at all → suffix
+        { modelId: "acme/med(openai)", name: "C", _meta: { contextLimit: 0 } },
+        { modelId: "acme/big(openai)", name: "D", _meta: { contextLimit: "junk" } },
       ]),
     );
     expect(discovered.map((model) => model.nTokens)).toEqual([
@@ -115,5 +115,42 @@ describe("discoveredModelsFromSessionSetup", () => {
     expect(discoveredModelsFromSessionSetup({ sessionId: "s" })).toEqual([]);
     expect(discoveredModelsFromSessionSetup({ sessionId: "s", models: null })).toEqual([]);
     expect(discoveredModelsFromSessionSetup(setupWithModels([]))).toEqual([]);
+  });
+});
+
+describe("discoveredModelsFromSessionSetup — the HIDE_MODELS scan gate", () => {
+  it("drops an advertised model whose slug matches HIDE_MODELS ('er-model' ⊂ 'coder-model')", () => {
+    const discovered = discoveredModelsFromSessionSetup(
+      setupWithModels([
+        {
+          // qwen's hardcoded builtin — HIDE_MODELS match, must never enter the app.
+          modelId: "coder-model(qwen-oauth)",
+          name: "coder-model",
+          description: null,
+          _meta: { contextLimit: 1_000_000 },
+        },
+        {
+          modelId: "flash-model(qwen-oauth)",
+          name: "flash-model",
+          description: null,
+          _meta: { contextLimit: 256_000 },
+        },
+      ]),
+    );
+    expect(discovered.map((model) => model.slug)).toEqual(["flash-model"]);
+  });
+
+  it("an advertisement of ONLY hidden models comes out empty (the caller's empty-guard keeps the current set)", () => {
+    const discovered = discoveredModelsFromSessionSetup(
+      setupWithModels([
+        {
+          modelId: "coder-model(qwen-oauth)",
+          name: "coder-model",
+          description: null,
+          _meta: { contextLimit: 1_000_000 },
+        },
+      ]),
+    );
+    expect(discovered).toEqual([]);
   });
 });

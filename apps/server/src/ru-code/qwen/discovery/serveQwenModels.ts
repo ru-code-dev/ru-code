@@ -17,7 +17,12 @@
  */
 import type { QwenSettings, ServerProviderModel } from "@t3tools/contracts";
 
-import { asAuthMethodId, resolveCliProfile, type AuthMethodId } from "@ru-code/branding";
+import {
+  asAuthMethodId,
+  hiddenModelWindow,
+  resolveCliProfile,
+  type AuthMethodId,
+} from "@ru-code/branding";
 import { QWEN_MODELS_AUTO_DISCOVERY } from "@ru-code/qwen/constants";
 import { parseContextWindowFromSlug } from "@ru-code/qwen/models/modelToken";
 
@@ -65,7 +70,9 @@ export function serveQwenModels(
   const custom: ServerProviderModel[] = settings.customModels
     .filter((model) => !baseSlugs.has(model.slug))
     .map((model) => {
-      const nTokens = parseContextWindowFromSlug(model.slug);
+      // Slug size-suffix first; else, for a manually-added HIDE_MODELS match, the entry's
+      // KNOWN window (the scan gate dropped the advertisement that would have carried it).
+      const nTokens = parseContextWindowFromSlug(model.slug) ?? hiddenModelWindow(model.slug);
       return {
         slug: model.slug,
         name: model.slug,

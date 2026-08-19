@@ -37,11 +37,11 @@ const INSTANCE_ID = ProviderInstanceId.make("qwen");
 // Real 0.13.1 session/load advertisement: oauth models FIRST, per-model auth
 // riding the modelId.
 const ADVERTISED_MODELS = {
-  currentModelId: "coder-model(qwen-oauth)",
+  currentModelId: "flash-model(qwen-oauth)",
   availableModels: [
     {
-      modelId: "coder-model(qwen-oauth)",
-      name: "coder-model",
+      modelId: "flash-model(qwen-oauth)",
+      name: "flash-model",
       description: null,
       _meta: { contextLimit: 1_000_000 },
     },
@@ -145,8 +145,27 @@ it.effect("resume: an EXPLICITLY chosen qwen-oauth model still dispatches verbat
   Effect.gen(function* () {
     const modelCalls = yield* resumeAndCaptureModelCalls({
       threadId: ThreadId.make("qwen-resume-explicit-oauth-model"),
-      modelSelection: { instanceId: INSTANCE_ID, model: "coder-model" },
+      modelSelection: { instanceId: INSTANCE_ID, model: "flash-model" },
     });
-    assert.deepStrictEqual(modelCalls, [["model", "coder-model(qwen-oauth)"]]);
+    assert.deepStrictEqual(modelCalls, [["model", "flash-model(qwen-oauth)"]]);
   }),
+);
+
+it.effect(
+  "resume: a HIDE_MODELS slug the user chose STILL dispatches (hidden from scans, usable manually)",
+  () =>
+    Effect.gen(function* () {
+      // `coder-model` matches HIDE_MODELS, so the advertisement can never serve it —
+      // but a user who added/kept it deliberately must still be able to dispatch it.
+      // Its auth falls back to the settings-based resolution (no advertised entry).
+      const modelCalls = yield* resumeAndCaptureModelCalls({
+        threadId: ThreadId.make("qwen-resume-hidden-model"),
+        modelSelection: { instanceId: INSTANCE_ID, model: "coder-model" },
+      });
+      assert.lengthOf(modelCalls, 1, "the hidden model must still be dispatched");
+      assert.isTrue(
+        String(modelCalls[0]![1]).startsWith("coder-model("),
+        `dispatched verbatim with a resolved auth suffix, got: ${String(modelCalls[0]![1])}`,
+      );
+    }),
 );

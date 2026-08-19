@@ -37,12 +37,15 @@ const INSTANCE_ID = ProviderInstanceId.make("qwen");
 const SENTINEL = "MODEL_DISCOVERY_SENTINEL_DONE";
 
 // The REAL session/new advertisement shape (qwen acpAgent.ts buildAvailableModels).
+// `coder-model` (qwen's hardcoded builtin) is DELIBERATELY kept in the fixture: its slug
+// matches HIDE_MODELS ("er-model"), so every test here also proves the scan gate on the
+// real wire — the entry must never reach the store.
 const ADVERTISED_MODELS = {
-  currentModelId: "giga/coder-xl-256k(openai)",
+  currentModelId: "acme/coder-xl-256k(openai)",
   availableModels: [
     {
-      modelId: "giga/coder-xl-256k(openai)",
-      name: "Giga Coder XL",
+      modelId: "acme/coder-xl-256k(openai)",
+      name: "Acme Coder XL",
       description: "flagship",
       _meta: { contextLimit: 256_000 },
     },
@@ -109,16 +112,16 @@ it.effect("channel A: session/new advertisement lands in the store with real win
     });
 
     // Names are ALWAYS humanized from the slug — the advertised labels
-    // ("Giga Coder XL", "coder-model") are CLI-side config junk and ignored.
+    // ("Acme Coder XL", "coder-model") are CLI-side config junk and ignored.
     // Windows resolve slug-suffix-first (256k), contextLimit as the fallback.
+    // `coder-model` is ABSENT: its slug matches HIDE_MODELS — gated at the scan.
     assert.deepStrictEqual(yield* store.get(INSTANCE_ID), [
       {
-        slug: "giga/coder-xl-256k",
+        slug: "acme/coder-xl-256k",
         authMethod: "openai",
-        name: "Giga Coder Xl 256K",
+        name: "Acme Coder Xl 256K",
         nTokens: 256_000,
       },
-      { slug: "coder-model", authMethod: "qwen-oauth", name: "Coder Model", nTokens: 1_000_000 },
     ]);
   }).pipe(
     Effect.scoped,
@@ -142,7 +145,7 @@ it.effect("meter denominator: live usage rides the DISCOVERED model's window", (
   Effect.gen(function* () {
     const { events } = yield* runDiscoveryScenario({
       threadId: ThreadId.make("discovery-meter"),
-      modelSelection: { instanceId: INSTANCE_ID, model: "giga/coder-xl-256k" },
+      modelSelection: { instanceId: INSTANCE_ID, model: "acme/coder-xl-256k" },
     });
 
     const usageEvents = events.filter(
@@ -175,13 +178,14 @@ it.effect("channel B: backend model-not-found drops the dead model and merges su
   Effect.gen(function* () {
     const { store } = yield* runDiscoveryScenario({
       threadId: ThreadId.make("discovery-channel-b"),
-      modelSelection: { instanceId: INSTANCE_ID, model: "giga/coder-xl-256k" },
+      modelSelection: { instanceId: INSTANCE_ID, model: "acme/coder-xl-256k" },
     });
 
-    // Dead model dropped; backend-suggested models merged in.
+    // Dead model dropped; backend-suggested models merged in. (`coder-model`
+    // never entered the store — HIDE_MODELS gated it at the advertisement.)
     assert.deepStrictEqual(
       (yield* store.get(INSTANCE_ID)).map((model) => model.slug),
-      ["coder-model", "giga/fresh-128k", "giga/tiny-8k"],
+      ["acme/fresh-128k", "acme/tiny-8k"],
     );
   }).pipe(
     Effect.scoped,
@@ -195,7 +199,7 @@ it.effect("channel B: backend model-not-found drops the dead model and merges su
               // a thrown Error as -32603 internalError with details).
               steps.respondError(-32603, "Internal error", {
                 details:
-                  "404 Model not found. Available models: giga/fresh-128k(openai), giga/tiny-8k(openai)",
+                  "404 Model not found. Available models: acme/fresh-128k(openai), acme/tiny-8k(openai)",
               }),
           }),
           QwenModelDiscoveryStore.layer(),
@@ -211,13 +215,14 @@ it.effect("channel B: qwen-local setModel registry miss drops the dead model, tu
   Effect.gen(function* () {
     const { store, events } = yield* runDiscoveryScenario({
       threadId: ThreadId.make("discovery-setmodel"),
-      modelSelection: { instanceId: INSTANCE_ID, model: "giga/coder-xl-256k" },
+      modelSelection: { instanceId: INSTANCE_ID, model: "acme/coder-xl-256k" },
     });
 
-    // The dead model is gone; the rest of the advertisement survives.
+    // The dead model is gone; nothing else remains (`coder-model` never entered
+    // the store — HIDE_MODELS gated it at the advertisement).
     assert.deepStrictEqual(
       (yield* store.get(INSTANCE_ID)).map((model) => model.slug),
-      ["coder-model"],
+      [],
     );
     // setModel failures are logged + swallowed — the turn itself completed.
     const completed = events.find((event) => event.type === "turn.completed");
@@ -237,7 +242,7 @@ it.effect("channel B: qwen-local setModel registry miss drops the dead model, tu
               code: -32603,
               message: "Internal error",
               data: {
-                details: "Model 'giga/coder-xl-256k' not found for authType 'openai'",
+                details: "Model 'acme/coder-xl-256k' not found for authType 'openai'",
               },
             },
             onPrompt: (steps) => steps.emitText(SENTINEL).respondOk(),

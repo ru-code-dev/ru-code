@@ -9,6 +9,8 @@
 // One kind under the hood (see QWEN_KIND) so models/continuation/checkpoints are
 // shared; the profile only changes branding + defaults. See specs/cli-profiles.md.
 
+import { L } from "@ru-code/localization"; // ru-code: hand seam (transform doesn't scan ru-code/). Module-const L is safe: the locale module self-seeds from the server-stamped window.__RU_LOCALE__ at its own init (see locale.ts initialLocale + localeInit.test.ts).
+
 export type CliProfileId = "custom" | "qwen";
 
 // ru-code: qwen's ACP `authenticate` methodId + per-model auth are one of these five
@@ -75,8 +77,10 @@ export const CLI_PROFILES = {
     artifact: "CUSTOM_CODE",
     binDefault: null,
     dirDefault: null,
-    description:
+    description: L(
+      "Uses the CLI detected at startup. The path and directory can be overridden below.",
       "Использует CLI, обнаруженный при запуске. Путь и каталог можно переопределить ниже.",
+    ),
     models: [
       {
         slug: "qwen/qwen3.6-35b-a3b",
@@ -103,8 +107,10 @@ export const CLI_PROFILES = {
     // point `binaryPath` at a cli.js or another executable to override.
     binDefault: "qwen",
     dirDefault: "~/.qwen",
-    description:
+    description: L(
+      "Standard Qwen Code CLI («qwen», «~/.qwen»). Specify the path to the executable if it is not in PATH.",
       "Стандартный Qwen Code CLI («qwen», «~/.qwen»). Укажите путь до исполняемого файла, если его нет в PATH.",
+    ),
     // Stock qwen ships no preconfigured models — the user adds them (each with an
     // auth method) in the provider card. Native auth is Qwen OAuth.
     models: [],

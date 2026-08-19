@@ -93,8 +93,8 @@ const qwenId = ProviderInstanceId.make("qwen");
 const codexId = ProviderInstanceId.make("codex");
 
 const discoveredQwenModels = [
-  model("giga/coder-xl-256k", "Giga Coder XL 256K"),
-  model("giga/chat-mini", "Giga Chat Mini"),
+  model("acme/coder-xl-256k", "Acme Coder XL 256K"),
+  model("acme/chat-mini", "Acme Chat Mini"),
 ];
 
 describe("flattenModelPickerModels — ready instance contributes its discovered models", () => {
@@ -102,8 +102,8 @@ describe("flattenModelPickerModels — ready instance contributes its discovered
     const entries = [entry({ instanceId: "qwen", status: "ready" })];
     const rows = flattenForEntries(entries, new Map([[qwenId, discoveredQwenModels]]));
 
-    expect(rows.map((row) => row.slug)).toEqual(["giga/coder-xl-256k", "giga/chat-mini"]);
-    expect(rows.map((row) => row.name)).toEqual(["Giga Coder XL 256K", "Giga Chat Mini"]);
+    expect(rows.map((row) => row.slug)).toEqual(["acme/coder-xl-256k", "acme/chat-mini"]);
+    expect(rows.map((row) => row.name)).toEqual(["Acme Coder XL 256K", "Acme Chat Mini"]);
     // Each row carries its owning instance so the list can render icon + name.
     expect(rows[0]).toMatchObject({
       instanceId: qwenId,
@@ -165,7 +165,7 @@ describe("filterModelPickerModels — what the list finally shows", () => {
       selectedInstanceId: qwenId,
       instanceOrder: [qwenId, codexId],
     });
-    expect(shown.map((row) => row.slug)).toEqual(["giga/coder-xl-256k", "giga/chat-mini"]);
+    expect(shown.map((row) => row.slug)).toEqual(["acme/coder-xl-256k", "acme/chat-mini"]);
   });
 
   it("search query filters across instances as the component does", () => {
@@ -178,7 +178,7 @@ describe("filterModelPickerModels — what the list finally shows", () => {
       selectedInstanceId: qwenId,
       instanceOrder: [qwenId, codexId],
     });
-    expect(shown.map((row) => row.slug)).toEqual(["giga/coder-xl-256k"]);
+    expect(shown.map((row) => row.slug)).toEqual(["acme/coder-xl-256k"]);
   });
 
   it("search ignores the rail selection — a model of ANOTHER instance is still found", () => {
@@ -197,7 +197,7 @@ describe("filterModelPickerModels — what the list finally shows", () => {
   it("searching under a LOCKED provider only surfaces the locked driver's models", () => {
     const shown = filterModelPickerModels({
       flatModels,
-      searchQuery: "g", // prefix-matches BOTH "Giga …" and "GPT-5"
+      searchQuery: "g", // prefix-matches BOTH "Acme …" and "GPT-5"
       favoriteModelKeys: noFavorites,
       lockedProvider: ProviderDriverKind.make("codex"),
       lockedContinuationGroupKey: null,
@@ -210,7 +210,7 @@ describe("filterModelPickerModels — what the list finally shows", () => {
   it("Favorites rail shows only favorited keys, ordered by instance order", () => {
     const favorites = new Set([
       providerModelKey(codexId, "gpt-5"),
-      providerModelKey(qwenId, "giga/chat-mini"),
+      providerModelKey(qwenId, "acme/chat-mini"),
     ]);
     const shown = filterModelPickerModels({
       flatModels,
@@ -222,7 +222,7 @@ describe("filterModelPickerModels — what the list finally shows", () => {
       instanceOrder: [qwenId, codexId],
     });
     expect(shown.map((row) => providerModelKey(row.instanceId, row.slug))).toEqual([
-      providerModelKey(qwenId, "giga/chat-mini"),
+      providerModelKey(qwenId, "acme/chat-mini"),
       providerModelKey(codexId, "gpt-5"),
     ]);
   });
@@ -234,9 +234,9 @@ describe("filterModelPickerModels — what the list finally shows", () => {
 // NEVER gated.
 describe("flattenModelPickerModels — disabledByContext capacity gate", () => {
   const windowedQwenModels: ReadonlyArray<ModelEsque> = [
-    { slug: "giga/coder-xl-256k", name: "Giga Coder XL 256K", contextWindowTokens: 262_144 },
-    { slug: "giga/chat-mini", name: "Giga Chat Mini", contextWindowTokens: 32_768 },
-    { slug: "giga/mystery", name: "Giga Mystery" }, // no served window
+    { slug: "acme/coder-xl-256k", name: "Acme Coder XL 256K", contextWindowTokens: 262_144 },
+    { slug: "acme/chat-mini", name: "Acme Chat Mini", contextWindowTokens: 32_768 },
+    { slug: "acme/mystery", name: "Acme Mystery" }, // no served window
   ];
 
   function flattenWithUsage(input: {
@@ -262,23 +262,23 @@ describe("flattenModelPickerModels — disabledByContext capacity gate", () => {
 
   it("a model whose window is SMALLER than the usage is disabled", () => {
     const rows = flattenWithUsage({ usedTokens: 100_000 });
-    expect(rows.get("giga/chat-mini")?.disabledByContext).toBe(true); // 32k < 100k
-    expect(rows.get("giga/coder-xl-256k")?.disabledByContext).toBe(false); // 256k holds it
+    expect(rows.get("acme/chat-mini")?.disabledByContext).toBe(true); // 32k < 100k
+    expect(rows.get("acme/coder-xl-256k")?.disabledByContext).toBe(false); // 256k holds it
   });
 
   it("a window exactly EQUAL to the usage is NOT disabled", () => {
     const rows = flattenWithUsage({ usedTokens: 32_768 });
-    expect(rows.get("giga/chat-mini")?.disabledByContext).toBe(false);
+    expect(rows.get("acme/chat-mini")?.disabledByContext).toBe(false);
   });
 
   it("an unknown window is NEVER disabled (non-qwen providers serve none)", () => {
     const rows = flattenWithUsage({ usedTokens: 10_000_000 });
-    expect(rows.get("giga/mystery")?.disabledByContext).toBe(false);
+    expect(rows.get("acme/mystery")?.disabledByContext).toBe(false);
   });
 
   it("the ACTIVE model is never disabled even when it no longer fits", () => {
-    const rows = flattenWithUsage({ usedTokens: 100_000, activeModelSlug: "giga/chat-mini" });
-    expect(rows.get("giga/chat-mini")?.disabledByContext).toBe(false);
+    const rows = flattenWithUsage({ usedTokens: 100_000, activeModelSlug: "acme/chat-mini" });
+    expect(rows.get("acme/chat-mini")?.disabledByContext).toBe(false);
   });
 
   it("fresh chat (usedTokens null) disables NOTHING", () => {
@@ -290,7 +290,7 @@ describe("flattenModelPickerModels — disabledByContext capacity gate", () => {
     const entries = [entry({ instanceId: "qwen", status: "ready" })];
     const rows = flattenForEntries(entries, new Map([[qwenId, windowedQwenModels]]));
     expect(rows.every((row) => !row.disabledByContext)).toBe(true);
-    expect(rows.find((row) => row.slug === "giga/chat-mini")?.contextWindowTokens).toBe(32_768);
-    expect(rows.find((row) => row.slug === "giga/mystery")?.contextWindowTokens).toBeUndefined();
+    expect(rows.find((row) => row.slug === "acme/chat-mini")?.contextWindowTokens).toBe(32_768);
+    expect(rows.find((row) => row.slug === "acme/mystery")?.contextWindowTokens).toBeUndefined();
   });
 });

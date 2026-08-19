@@ -258,7 +258,9 @@ export default function DiffPanel({
   );
   const shouldRetryBranchDiffAtEnvironmentCwd =
     selectedTurnId === null &&
-    primaryBranchDiffPreview.error?.includes("configured workspace root") === true &&
+    // ru-code: match the error's stable `operation` token, not the localized `detail`, so the
+    // out-of-workspace retry works in every locale (compare-guard fix — see SEAMS.md).
+    primaryBranchDiffPreview.error?.includes("cwdOutsideWorkspaceRoot") === true &&
     serverConfig?.cwd !== undefined &&
     serverConfig.cwd !== activeCwd;
   const fallbackBranchDiffPreview = useEnvironmentQuery(

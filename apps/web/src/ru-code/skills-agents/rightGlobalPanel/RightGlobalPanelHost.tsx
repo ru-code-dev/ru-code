@@ -53,7 +53,7 @@ export function RightGlobalPanelHost() {
       <>
         <button
           type="button"
-          aria-label="Закрыть панель"
+          aria-label="Close panel"
           className="fixed inset-0 z-40 bg-black/30"
           onClick={close}
         />

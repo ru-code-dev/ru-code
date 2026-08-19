@@ -15,14 +15,22 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeURL from "node:url";
 import { loadDictionaryByScope, placeEntries } from "./locate.mjs";
 import { failOnLocalizationError } from "./strict.mjs";
+import { runCompareGuard, report as reportCompareGuard } from "./compareGuard.mjs";
 
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(new URL("../../..", import.meta.url)));
 
+// Compare-guard runs once per process (both the web and server plugin instances share
+// this module scope): fail the build if any translated string is compared/parsed.
+let compareGuardChecked = false;
+
 const L_IMPORT_NAME = "__ruL";
 const LT_IMPORT_NAME = "__ruLT";
+// ru-code: wire-token emitter for server-emitted display strings (resolved in the viewer's
+// locale on the web, not at the server's emit locale). See ../src/serverToken.ts.
+const LC_IMPORT_NAME = "__ruLc";
 
 function renderFile(code, units) {
-  const used = { L: false, LT: false };
+  const used = { L: false, LT: false, Lc: false };
 
   // Units within [from, to), rendered left-to-right; a unit that contains others (a
   // template with translated interpolations) renders its inner units by recursing over
@@ -54,6 +62,15 @@ function renderFile(code, units) {
   const renderUnit = (u) => {
     const en = JSON.stringify(u.en);
     const ru = JSON.stringify(u.ru);
+    // ru-code: wire entries emit Lc(en, ru, ...args) — a locale-independent token resolved on
+    // the web. Interpolation args ride as varargs (not the LT array), so the token carries them.
+    if (u.wire) {
+      used.Lc = true;
+      const args = u.kind === "tpl" ? (u.exprs || []).map(([s, e]) => renderRange(s, e)) : [];
+      const call = `${LC_IMPORT_NAME}(${[en, ru, ...args].join(", ")})`;
+      if (u.kind === "jsx" || u.braces) return `{${call}}`;
+      return call;
+    }
     if (u.kind === "tpl") {
       used.LT = true;
       const exprs = (u.exprs || []).map(([s, e]) => renderRange(s, e)).join(", ");
@@ -73,6 +90,7 @@ function prependImport(code, used) {
   const names = [];
   if (used.L) names.push(`L as ${L_IMPORT_NAME}`);
   if (used.LT) names.push(`LT as ${LT_IMPORT_NAME}`);
+  if (used.Lc) names.push(`Lc as ${LC_IMPORT_NAME}`); // ru-code: wire-token emitter
   if (names.length === 0) return code;
   const importLine = `import { ${names.join(", ")} } from "@ru-code/localization";\n`;
   // Preserve a leading shebang if present (bin entry files).
@@ -100,6 +118,27 @@ export function ruCodeLocalizationPlugin() {
   return {
     name: "ru-code-localization",
     enforce: "pre",
+    buildStart() {
+      if (compareGuardChecked) return;
+      compareGuardChecked = true;
+      const result = runCompareGuard();
+      if (result.active.length > 0) {
+        const message =
+          "ru-code localization compare-guard failed — a translated string is compared/parsed as a key.\n" +
+          "Fix the comparison to use a stable key, or record a decision in " +
+          "ru-code/localization/dict/compare-allowlist.txt.\n\n" +
+          reportCompareGuard(result);
+        // Same strict switch as the placement gate: hard-fail only on the finished fork
+        // (branding applied, FAIL_ON_LOCALIZATION_ERROR = true). Mid-resync the guard's seam
+        // fixes may not be replayed yet — report, don't break intermediate builds.
+        if (failOnLocalizationError()) {
+          throw new Error(message);
+        }
+        this.warn(
+          `${message}\n(FAIL_ON_LOCALIZATION_ERROR is not set — reporting only, build continues.)`,
+        );
+      }
+    },
     transform(code, id) {
       const clean = id.split("?")[0];
       if (clean.startsWith("\0") || !/\.(ts|tsx|js|jsx)$/.test(clean)) return null;

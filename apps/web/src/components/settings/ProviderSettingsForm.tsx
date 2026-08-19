@@ -9,6 +9,7 @@ import type {
   ProviderSettingsFormSchemaAnnotation,
 } from "@t3tools/contracts";
 
+import { getLocale, resolveDeep } from "@ru-code/localization"; // ru-code: resolve wire-token labels
 import { cn } from "../../lib/utils";
 // ru-code: profile-aware placeholder override (empty for the fork profile).
 import { withProfilePlaceholders } from "~/ru-code/cliProfiles/profileForm";
@@ -80,7 +81,10 @@ export function deriveProviderSettingsFields(
   );
   const orderFallbackOffset = orderedKeys.size;
 
-  return Object.keys(definition.settingsSchema.fields)
+  // ru-code: provider-form labels ship as locale-independent wire tokens (Lc) — they are read
+  // from the client-bundled schema (not sent over the wire), so we resolve them here at render
+  // in the viewer's current locale. Non-token strings (titleize fallbacks) pass through untouched.
+  const fields = Object.keys(definition.settingsSchema.fields)
     .map((key, index) => ({ key, index }))
     .toSorted((left, right) => {
       return (
@@ -111,6 +115,7 @@ export function deriveProviderSettingsFields(
         } satisfies ProviderSettingsFieldModel,
       ];
     });
+  return resolveDeep(fields, getLocale());
 }
 
 export function readProviderConfigString(config: unknown, key: string): string {

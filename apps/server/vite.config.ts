@@ -14,6 +14,14 @@ import packageJson from "./package.json" with { type: "json" };
 //
 // Inverted here — bundle everything except the packages that genuinely cannot be
 // inlined. See scripts/lib/cli-external-packages.ts for what earns an exemption.
+//
+// ru-code: the fork's own inline list (@ru-code/branding, @ru-code/localization,
+// @pierre/diffs, @t3tools/, effect-acp, effect-codex-app-server) is DROPPED here —
+// this inversion already inlines every one of them. Both ru-code packages are
+// source-only leaves that MUST be bundled (the shipped tarball has no node_modules
+// for them, and localization would throw ERR_UNKNOWN_FILE_EXTENSION on node 22);
+// `shouldBundleCliDependency` returns true for both, since neither appears in
+// CLI_EXTERNAL_PACKAGE_PREFIXES. Verified by executing the predicate per package.
 import {
   isExternalCliDependency,
   shouldBundleCliDependency,

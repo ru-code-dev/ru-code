@@ -27,6 +27,11 @@ import { isAutoCompactDisarmed } from "../../../qwen/compaction/compactionHistor
 import { COMPRESS_IN_PROGRESS_DETAIL } from "../../../qwen/errors/recognizers.ts";
 import { type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
+// ru-code: compaction summaries/details are now server WIRE tokens (Lc) — resolve to English
+// before asserting the text (the suite runs in EN locale). resolveString is a no-op on plain
+// strings, so it is safe on any value.
+import { resolveString } from "@ru-code/localization";
+const enText = (value: unknown): string => resolveString(String(value), "en");
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const COMPRESS_METHOD = "_qwencode/slash_command";
@@ -124,7 +129,10 @@ it.effect("compactContext: ONE morphing row — progress before the prompt, succ
     assert.isDefined(completed, "no compaction task.completed emitted");
     assert.strictEqual(completed!.payload.taskId, progress!.payload.taskId);
     assert.strictEqual(completed!.payload.status, "completed");
-    assert.strictEqual(completed!.payload.summary, "Compaction succeeded (200000 -> 12345).");
+    assert.strictEqual(
+      enText(completed!.payload.summary),
+      "Compaction succeeded (200000 -> 12345).",
+    );
     assert.isUndefined(completed!.payload.tone);
     // Raw numbers persist with the row — the breaker's restart-proof state.
     assert.deepStrictEqual(completed!.payload.usage, { preTokens: 200_000, postTokens: 12_345 });
@@ -217,7 +225,7 @@ it.effect("compactContext: an unconfirmed compress (no frames) ends the row as f
     assert.isDefined(completed);
     assert.strictEqual(completed!.payload.status, "failed");
     assert.strictEqual(
-      completed!.payload.summary,
+      enText(completed!.payload.summary),
       "The provider did not confirm context compaction (stopReason: end_turn).",
     );
   }).pipe(
@@ -293,9 +301,9 @@ it.effect(
       assert.isDefined(trip, "no breaker completion row");
       assert.strictEqual(trip!.payload.status, "completed");
       assert.strictEqual(trip!.payload.tone, "warning");
-      assert.strictEqual(trip!.payload.summary, BREAKER_TRIP_TEXT);
+      assert.strictEqual(enText(trip!.payload.summary), BREAKER_TRIP_TEXT);
       // The advice rides separately: visible title + expandable body on the web.
-      assert.strictEqual(trip!.payload.detail, COMPACTION_ADVICE_DETAIL);
+      assert.strictEqual(enText(trip!.payload.detail), COMPACTION_ADVICE_DETAIL);
       // The numbers ride the event — this is the breaker state the projection
       // persists and `getThreadCompactionState` re-derives after a restart.
       assert.deepStrictEqual(trip!.payload.usage, TRIPPED_COMPACTION);
@@ -346,10 +354,10 @@ it.effect(
       assert.strictEqual(row!.payload.status, "completed");
       assert.strictEqual(row!.payload.tone, "warning");
       assert.strictEqual(
-        row!.payload.summary,
+        enText(row!.payload.summary),
         "Compaction did not reduce the context (15762 -> 16246).",
       );
-      assert.strictEqual(row!.payload.detail, COMPACTION_ADVICE_DETAIL);
+      assert.strictEqual(enText(row!.payload.detail), COMPACTION_ADVICE_DETAIL);
       assert.deepStrictEqual(row!.payload.usage, { preTokens: 15_762, postTokens: 16_246 });
       // The persisted numbers sit far below the disarm line — the history-derived
       // breaker state stays ARMED (only the 60% gate disarms).
@@ -406,7 +414,7 @@ it.effect(
       const row = events.find(isCompactionCompleted);
       assert.isDefined(row, "no completion row");
       assert.strictEqual(row!.payload.status, "completed");
-      assert.strictEqual(row!.payload.summary, "Compaction succeeded (12000 -> 2000).");
+      assert.strictEqual(enText(row!.payload.summary), "Compaction succeeded (12000 -> 2000).");
       assert.isUndefined(row!.payload.tone);
       assert.isUndefined(row!.payload.detail);
       assert.deepStrictEqual(row!.payload.usage, { preTokens: 12_000, postTokens: 2_000 });
@@ -501,7 +509,10 @@ it.effect("breaker: a usage dip below 60% in persisted history re-arms auto-comp
     const completed = events.find(isCompactionCompleted);
     assert.isDefined(completed);
     assert.strictEqual(completed!.payload.status, "completed");
-    assert.strictEqual(completed!.payload.summary, "Compaction succeeded (199000 -> 9000).");
+    assert.strictEqual(
+      enText(completed!.payload.summary),
+      "Compaction succeeded (199000 -> 9000).",
+    );
     assert.isUndefined(completed!.payload.tone);
     yield* stop;
   }).pipe(
@@ -541,7 +552,7 @@ it.effect("child crash mid-compress: the row ends as failed, the call itself suc
     assert.strictEqual(completed!.payload.taskId, progress!.payload.taskId);
     assert.strictEqual(completed!.payload.status, "failed");
     assert.isTrue(
-      completed!.payload.summary!.startsWith("Could not compact the context:"),
+      enText(completed!.payload.summary).startsWith("Could not compact the context:"),
       `unexpected summary: ${completed!.payload.summary}`,
     );
   }).pipe(
@@ -594,7 +605,7 @@ it.effect("fiber interruption mid-compress: the row closes as stopped and send u
     assert.isDefined(completed, "interruption left the row dangling");
     assert.strictEqual(completed!.payload.taskId, progress!.payload.taskId);
     assert.strictEqual(completed!.payload.status, "stopped");
-    assert.strictEqual(completed!.payload.summary, "Compaction interrupted.");
+    assert.strictEqual(enText(completed!.payload.summary), "Compaction interrupted.");
 
     // The compress flag is released: the next send reaches the wire instead of
     // failing fast with B5.
@@ -784,7 +795,10 @@ it.effect("auto-compact: a turn ending ≥75% full fires the hidden /compress", 
     assert.deepStrictEqual(autoOnPromptTexts, ["do heavy work", "/compress"]);
     const completed = events.find(isCompactionCompleted);
     assert.isDefined(completed, "auto-compact did not emit the completion row");
-    assert.strictEqual(completed!.payload.summary, "Compaction succeeded (199000 -> 9000).");
+    assert.strictEqual(
+      enText(completed!.payload.summary),
+      "Compaction succeeded (199000 -> 9000).",
+    );
   }).pipe(
     Effect.scoped,
     Effect.provide(

@@ -48,7 +48,8 @@ describe("ReviewService", () => {
       }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
 
       assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
-      assert.strictEqual(error.operation, "ReviewService.getDiffPreview");
+      // ru-code: unique operation token so the web can match this case locale-independently (SEAMS.md).
+      assert.strictEqual(error.operation, "ReviewService.getDiffPreview.cwdOutsideWorkspaceRoot");
       assert.match(
         "detail" in error ? error.detail : "",
         /must stay within the configured workspace root/,
@@ -81,7 +82,11 @@ describe("ReviewService", () => {
       }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
 
       assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
-      assert.strictEqual(error.operation, "ReviewService.getDiffFileContents");
+      // ru-code: unique operation token so the web can match this case locale-independently (SEAMS.md).
+      assert.strictEqual(
+        error.operation,
+        "ReviewService.getDiffFileContents.cwdOutsideWorkspaceRoot",
+      );
       assert.match(
         "detail" in error ? error.detail : "",
         /must stay within the configured workspace root/,

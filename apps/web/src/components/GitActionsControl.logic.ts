@@ -29,6 +29,10 @@ export interface GitQuickAction {
   kind: "run_action" | "run_pull" | "open_pr" | "open_publish" | "show_hint";
   action?: GitStackedAction;
   hint?: string;
+  // ru-code: stable icon discriminant so the icon selector matches this, not the localized
+  // `label` (compare-guard fix — see ru-code/localization/SEAMS.md). Only the `show_hint`
+  // returns need it: every other kind is resolved earlier by `kind`/`action`.
+  icon?: "commit" | "push";
 }
 
 export interface DefaultBranchActionDialogCopy {
@@ -171,7 +175,14 @@ export function resolveQuickAction(
   hasPrimaryRemote = true,
 ): GitQuickAction {
   if (isBusy) {
-    return { label: "Commit", disabled: true, kind: "show_hint", hint: "Git action in progress." };
+    // ru-code: icon discriminant (SEAMS.md)
+    return {
+      label: "Commit",
+      disabled: true,
+      kind: "show_hint",
+      hint: "Git action in progress.",
+      icon: "commit",
+    };
   }
 
   if (!gitStatus) {
@@ -180,6 +191,7 @@ export function resolveQuickAction(
       disabled: true,
       kind: "show_hint",
       hint: "Git status is unavailable.",
+      icon: "commit", // ru-code: icon discriminant (SEAMS.md)
     };
   }
 
@@ -198,6 +210,7 @@ export function resolveQuickAction(
       disabled: true,
       kind: "show_hint",
       hint: `Create and checkout a ref before pushing or opening a ${terminology.singular}.`,
+      icon: "commit", // ru-code: icon discriminant (SEAMS.md)
     };
   }
 
@@ -236,6 +249,7 @@ export function resolveQuickAction(
         disabled: true,
         kind: "show_hint",
         hint: "No local commits to push.",
+        icon: "push", // ru-code: icon discriminant (SEAMS.md)
       };
     }
     if (hasOpenPr || isDefaultRef) {
@@ -306,6 +320,7 @@ export function resolveQuickAction(
     disabled: true,
     kind: "show_hint",
     hint: "Branch is up to date. No action needed.",
+    icon: "commit", // ru-code: icon discriminant (SEAMS.md)
   };
 }
 

@@ -5,6 +5,7 @@
 // else. Everywhere else references these constants.
 
 export * from "./cliProfiles.ts";
+export * from "./hiddenModels.ts";
 
 /**
  * APP_NAME — display name of the application. This is the one and only place

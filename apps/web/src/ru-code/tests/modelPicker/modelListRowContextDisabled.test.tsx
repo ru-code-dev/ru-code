@@ -19,10 +19,10 @@ const INSTANCE = ProviderInstanceId.make("qwen");
 
 const renderRow = (disabledReason: string | null) =>
   renderToStaticMarkup(
-    <Combobox items={[`${INSTANCE}:giga/chat-mini`]}>
+    <Combobox items={[`${INSTANCE}:acme/chat-mini`]}>
       <ModelListRow
         index={0}
-        model={{ slug: "giga/chat-mini", name: "Giga Chat Mini", contextWindowTokens: 32_768 }}
+        model={{ slug: "acme/chat-mini", name: "Acme Chat Mini", contextWindowTokens: 32_768 }}
         instanceId={INSTANCE}
         driverKind={QWEN}
         providerDisplayName="qwen"

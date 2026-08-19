@@ -94,7 +94,7 @@ export function useCatalogClient(
       input: EnvironmentRpcInput<TTag>,
     ): Promise<EnvironmentRpcSuccess<TTag>> => {
       if (environmentId === null) {
-        throw new Error("Нет активного подключения к серверу.");
+        throw new Error("No active connection to the server.");
       }
       const command = createEnvironmentRpcCommand(connectionAtomRuntime, {
         label: `catalog:${tag}`,

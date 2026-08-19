@@ -9,6 +9,9 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
+// ru-code: snapshots leave the server here (the cold-cache door beside the WS RPC one) —
+// resolve localization wire tokens before they egress.
+import { localizeWireValue } from "../ru-code/localization/wireEgress.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -37,13 +40,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           // and activity payload in the database has OOM-killed servers, and
           // the route's only consumer (the project CLI) reads projects alone —
           // UI clients load the shell and per-thread snapshots instead.
-          return yield* projectionSnapshotQuery
-            .getCommandReadModel()
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_snapshot_failed", cause),
-              ),
-            );
+          return yield* projectionSnapshotQuery.getCommandReadModel().pipe(
+            Effect.map(localizeWireValue), // ru-code: egress localization
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_snapshot_failed", cause),
+            ),
+          );
         }),
       )
       .handle(
@@ -51,13 +53,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* projectionSnapshotQuery
-            .getShellSnapshot()
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_snapshot_failed", cause),
-              ),
-            );
+          return yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+            Effect.map(localizeWireValue), // ru-code: egress localization
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_snapshot_failed", cause),
+            ),
+          );
         }),
       )
       .handle(
@@ -85,7 +86,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          return projectThreadDetailSnapshot(snapshot.value);
+          // ru-code: resolve wraps the pruning projection's output, not the input —
+          // pruning must still see the un-resolved shape it does today.
+          return localizeWireValue(projectThreadDetailSnapshot(snapshot.value));
         }),
       )
       .handle(

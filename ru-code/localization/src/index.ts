@@ -6,3 +6,4 @@
 
 export * from "./pluralRu.ts";
 export * from "./locale.ts";
+export * from "./serverToken.ts";

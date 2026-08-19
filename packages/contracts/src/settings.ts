@@ -22,7 +22,8 @@ import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.t
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
-export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
+// ru-code: default 24-hour so fresh installs show 24h timestamps (was "locale").
+export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "24-hour";
 
 // ru-code: UI language. Persisted server-side so both the web client and the server
 // (which renders some user-facing strings) read the same value. Default Russian.
@@ -155,7 +156,8 @@ export const ClientSettingsSchema = Schema.Struct({
   // app quits; a quick tap only shows a hint. Browser clients ignore it.
   confirmQuit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // ru-code: default FALSE so fresh installs delete threads without a confirm dialog.
+  confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),

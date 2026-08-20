@@ -25,6 +25,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+// ru-code: surface the pairing URL to the daemon launcher via the state file.
+import { persistServerRuntimePairingUrl } from "./serverRuntimeState.ts";
 // ru-code: pre-made starter project registered on startup (see install script).
 import { resolveStarterProjectRoot } from "./ru-code/startup/starterProject.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -450,6 +452,12 @@ export const make = (options?: StartupOptions) =>
             );
           } else {
             const startupBrowserTarget = yield* resolveStartupBrowserTarget;
+            // ru-code: record the tokenized target so `ru-code` (daemon launcher) can
+            // print the pairing link. Best-effort; never blocks the browser open.
+            yield* persistServerRuntimePairingUrl({
+              path: serverConfig.serverRuntimeStatePath,
+              pairingUrl: startupBrowserTarget,
+            }).pipe(Effect.ignore);
             if (serverConfig.mode !== "desktop") {
               yield* Effect.logInfo(
                 `Authentication required. Open ${APP_NAME} using the pairing URL.`,

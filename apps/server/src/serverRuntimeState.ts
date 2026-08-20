@@ -1,4 +1,5 @@
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -18,6 +19,10 @@ export const PersistedServerRuntimeState = Schema.Struct({
   // Dev is single-origin: browsers must pair through this URL, not `origin`.
   devUrl: Schema.optional(Schema.String),
   startedAt: Schema.String,
+  // ru-code: the tokenized browser target, folded in post-listen so the daemon
+  // launcher (@ru-code/daemon) can print the pairing link. Additive + optional →
+  // old files still decode.
+  pairingUrl: Schema.optional(Schema.String),
 });
 export type PersistedServerRuntimeState = typeof PersistedServerRuntimeState.Type;
 
@@ -78,6 +83,29 @@ export const persistServerRuntimeState = (input: {
         }),
     ),
   );
+
+// ru-code: fold the resolved pairing URL into the runtime-state file so the daemon
+// launcher can surface the tokenized link. The base state is written by a sibling
+// fiber on listen, so we retry the read briefly to avoid racing that write (both
+// run once the HTTP server is up). Best-effort — a miss just leaves the launcher
+// printing the plain origin; never fails startup.
+export const persistServerRuntimePairingUrl = (input: {
+  readonly path: string;
+  readonly pairingUrl: string;
+}) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const current = yield* readPersistedServerRuntimeState(input.path);
+      if (Option.isSome(current)) {
+        yield* persistServerRuntimeState({
+          path: input.path,
+          state: { ...current.value, pairingUrl: input.pairingUrl },
+        }).pipe(Effect.ignore);
+        return;
+      }
+      yield* Effect.sleep(Duration.millis(80));
+    }
+  });
 
 export const clearPersistedServerRuntimeState = (path: string) =>
   Effect.gen(function* () {

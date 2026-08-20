@@ -66,3 +66,5 @@ apps/desktop/src/preview/AnnotationStyles.generated.ts
 # cross-repo link to the sibling @smart-tools/qwen-cli-* packages (symlink + pnpm hook)
 ru-code-packages
 .pnpmfile.cjs
+apps/web/src/routeTree.gen.ts
+apps/desktop/src/preview/AnnotationStyles.generated.ts

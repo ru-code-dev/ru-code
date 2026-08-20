@@ -7,23 +7,75 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Argument, Command } from "effect/unstable/cli";
+import * as Option from "effect/Option";
+import { Argument, Command, GlobalFlag } from "effect/unstable/cli";
 import * as CliError from "effect/unstable/cli/CliError";
 // oxlint-disable-next-line t3code/namespace-node-imports -- named `pathToFileURL` import kept for Node 22.16 compatibility
 import { pathToFileURL } from "node:url";
 
 import { APP_COMMAND, APP_NAME } from "@ru-code/branding";
+import * as Daemon from "@ru-code/daemon"; // ru-code: `stop` subcommand
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
 import { authCommand } from "./cli/auth.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { pairCommand } from "./cli/pair.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
-import { sharedServerCommandFlags } from "./cli/config.ts";
+import { resolveServerConfig, sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+
+// ru-code: `ru-code stop` — resolve the state path via the app config, then
+// delegate the pid kill/drain to @ru-code/daemon. See specs/daemon/seam-map.md.
+const stopCommand = Command.make("stop", {
+  ...sharedServerCommandFlags,
+  force: Daemon.forceFlag,
+}).pipe(
+  Command.withDescription(`Stop the background ${APP_NAME} server.`),
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      const logLevel = yield* GlobalFlag.LogLevel;
+      const config = yield* resolveServerConfig(flags, logLevel);
+      return yield* Daemon.stopDaemon({
+        statePath: config.serverRuntimeStatePath,
+        force: Option.getOrElse(flags.force, () => false),
+      });
+    }),
+  ),
+);
+
+// ru-code: `ru-code restart` — stop (server + children) then start fresh.
+const restartCommand = Command.make("restart", { ...sharedServerCommandFlags }).pipe(
+  Command.withDescription(`Restart the background ${APP_NAME} server.`),
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      const logLevel = yield* GlobalFlag.LogLevel;
+      const config = yield* resolveServerConfig(flags, logLevel);
+      return yield* Daemon.restartDaemon({
+        flags,
+        statePath: config.serverRuntimeStatePath,
+        baseDir: config.baseDir,
+        version: packageJson.version,
+      });
+    }),
+  ),
+);
+
+// ru-code: hidden `ru-code env-analysis` — read-only probe of this machine's
+// process-enumeration + kill capabilities (see @ru-code/daemon/envAnalysis).
+const envAnalysisCommand = Command.make("env-analysis", { ...sharedServerCommandFlags }).pipe(
+  Command.withDescription("Probe process/kill capabilities of this machine (read-only)."),
+  Command.withHidden,
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      const logLevel = yield* GlobalFlag.LogLevel;
+      const config = yield* resolveServerConfig(flags, logLevel);
+      return yield* Daemon.runEnvAnalysis({ statePath: config.serverRuntimeStatePath });
+    }),
+  ),
+);
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -60,6 +112,10 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
     Command.withSubcommands([
       startCommand,
       serveCommand,
+      stopCommand, // ru-code: daemon stop
+      restartCommand, // ru-code: daemon restart
+      envAnalysisCommand, // ru-code: hidden capability probe
+
       // ru-code: `auth`, `project`, `pair` and `service` stay fully invocable but are
       // hidden from --help / completions (Command.withHidden), not removed. `pair` and
       // `service` are hidden because their upstream descriptions carry the T3 Code brand

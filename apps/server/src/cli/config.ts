@@ -13,6 +13,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { Argument, Flag } from "effect/unstable/cli";
 
+import { foregroundFlag } from "@ru-code/daemon"; // ru-code: --foreground (daemon opt-out)
 import { isLocale, setLocaleOverride } from "@ru-code/localization"; // ru-code: --language flag
 
 import { readBootstrapEnvelope } from "../bootstrap.ts";
@@ -176,6 +177,9 @@ export interface CliServerFlags {
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
   readonly language: Option.Option<"en" | "ru">;
+  // ru-code: --foreground opts out of daemon-by-default (routing only; unused by
+  // config resolution, hence optional so existing flag literals still satisfy it).
+  readonly foreground?: Option.Option<boolean>;
 }
 
 export interface CliAuthLocationFlags {
@@ -212,6 +216,7 @@ export const sharedServerCommandFlags = {
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
   language: languageFlag,
+  foreground: foregroundFlag, // ru-code: daemon opt-out
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;

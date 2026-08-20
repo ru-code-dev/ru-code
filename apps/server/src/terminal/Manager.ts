@@ -58,6 +58,19 @@ import {
   terminalSessionsTotal,
 } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
+// ru-code: Windows terminal compat strategies — shell selection/fallback, PowerShell-free
+// foreground inspection, opt-in inspection gate, signal-safe kills (bodies in the zone).
+import { TERMINAL_INSPECT_WINDOWS_METHOD } from "@ru-code/platform-compat/constants";
+import { capturePortScanGate } from "../ru-code/platform-compat/portScanGate.ts";
+import { inspectWindowsSubprocessCompat } from "../ru-code/platform-compat/terminalInspectWindows.ts";
+import {
+  shouldForceKillAfterFailedGracefulKill,
+  shouldSkipForceKillAfterGracefulKill,
+} from "../ru-code/platform-compat/terminalKillCompat.ts";
+import {
+  isRetryableShellSpawnErrorCompat,
+  orderWindowsShellCandidatesCompat,
+} from "../ru-code/platform-compat/terminalShellCompat.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
@@ -89,7 +102,8 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   "TerminalSubprocessCheckError",
   {
     cause: Schema.optional(Schema.Defect()),
-    command: Schema.Literals(["powershell", "ps"]),
+    // ru-code: + the PowerShell-free Windows inspection methods.
+    command: Schema.Literals(["powershell", "ps", "tasklist", "console-list"]),
     exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
     timedOut: Schema.optional(Schema.Boolean),
     stdoutTruncated: Schema.optional(Schema.Boolean),
@@ -550,15 +564,19 @@ function resolveShellCandidates(
   );
 
   if (platform === "win32") {
-    return uniqueShellCandidates([
-      requested,
-      shellCandidateFromCommand("pwsh.exe", platform),
-      shellCandidateFromCommand(windowsPowerShellPath(env), platform),
-      shellCandidateFromCommand("powershell.exe", platform),
-      shellCandidateFromCommand(env.ComSpec ?? null, platform),
-      shellCandidateFromCommand(windowsCmdPath(env), platform),
-      shellCandidateFromCommand("cmd.exe", platform),
-    ]);
+    // ru-code: TERMINAL_WINDOWS_SHELL reorders these (and can add Git-Bash) — body in zone.
+    return orderWindowsShellCandidatesCompat(
+      uniqueShellCandidates([
+        requested,
+        shellCandidateFromCommand("pwsh.exe", platform),
+        shellCandidateFromCommand(windowsPowerShellPath(env), platform),
+        shellCandidateFromCommand("powershell.exe", platform),
+        shellCandidateFromCommand(env.ComSpec ?? null, platform),
+        shellCandidateFromCommand(windowsCmdPath(env), platform),
+        shellCandidateFromCommand("cmd.exe", platform),
+      ]),
+      env,
+    );
   }
 
   return uniqueShellCandidates([
@@ -1115,6 +1133,9 @@ interface TerminalManagerOptions {
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: TerminalSubprocessInspector;
+  // ru-code: inspection gate override (tests). Default: on iff `preview.portScanEnabled` —
+  // port→terminal attribution is the poll's only consumer, and the poll spawns processes.
+  subprocessInspectionEnabled?: Effect.Effect<boolean>;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
@@ -1174,12 +1195,29 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   > =
     customSubprocessInspector !== undefined
       ? Effect.succeed(customSubprocessInspector)
-      : Effect.map(
-          fetchProcessTableSnapshot,
-          (snapshot): TerminalSubprocessInspector =>
-            (terminalPid) =>
-              Effect.succeed(deriveSubprocessInspectResult(snapshot, terminalPid, platform)),
-        );
+      : platform === "win32" && TERMINAL_INSPECT_WINDOWS_METHOD !== "powershell"
+        ? Effect.succeed((terminalPid: number) =>
+            inspectWindowsSubprocessCompat(terminalPid).pipe(
+              Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+              Effect.mapError(
+                (cause) =>
+                  new TerminalSubprocessCheckError({
+                    cause,
+                    command: TERMINAL_INSPECT_WINDOWS_METHOD,
+                  }),
+              ),
+            ),
+          )
+        : Effect.map(
+            fetchProcessTableSnapshot,
+            (snapshot): TerminalSubprocessInspector =>
+              (terminalPid) =>
+                Effect.succeed(deriveSubprocessInspectResult(snapshot, terminalPid, platform)),
+          );
+  // ru-code: see the option doc — the settings-gated default (captured at construction)
+  // re-reads the live value per poll.
+  const subprocessInspectionEnabled =
+    options.subprocessInspectionEnabled ?? (yield* capturePortScanGate);
   const subprocessPollIntervalMs =
     options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
   const processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
@@ -1305,6 +1343,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       ),
     );
     if (!terminated) {
+      // ru-code: a THROWN graceful kill must not abandon the escalation — still force-kill.
+      if (!shouldForceKillAfterFailedGracefulKill()) {
+        return;
+      }
+    }
+    // ru-code: on win32 (kill compat) the successful kill() above was already the hard ConPTY
+    // kill — no separate force step exists, and a second kill() on the closed pty just throws.
+    if (terminated && shouldSkipForceKillAfterGracefulKill(platform)) {
       return;
     }
 
@@ -1815,14 +1861,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
 
     if (attempt._tag === "Success") {
+      const shellLabel = formatShellCandidate(candidate);
+      // ru-code: which shell candidate actually spawned (index > 0 ⇒ earlier candidates failed
+      // and the fallback advanced) — the signal for verifying TERMINAL_WINDOWS_SHELL choices.
+      yield* Effect.logDebug("[terminal-shell] spawned shell candidate", {
+        shell: shellLabel,
+        candidateIndex: index,
+      });
       return {
         process: attempt.success,
-        shellLabel: formatShellCandidate(candidate),
+        shellLabel,
       };
     }
 
     const spawnError = attempt.failure;
-    if (!isRetryableShellSpawnError(spawnError)) {
+    // ru-code: with TERMINAL_SHELL_FALLBACK_ANY_ERROR any candidate failure advances to the
+    // next candidate (an environment where powershell fails must still fall through to cmd.exe).
+    if (!isRetryableShellSpawnErrorCompat(isRetryableShellSpawnError(spawnError))) {
       return yield* spawnError;
     }
 
@@ -2001,6 +2056,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const pollSubprocessActivity = Effect.fn("terminal.pollSubprocessActivity")(function* () {
+    // ru-code: opt-in gate — no inspection spawns unless port scanning is enabled in Settings.
+    if (!(yield* subprocessInspectionEnabled)) {
+      return;
+    }
     const state = yield* readManagerState;
     const runningSessions = [...state.sessions.values()].filter(
       (session): session is TerminalSessionState & { pid: number } =>

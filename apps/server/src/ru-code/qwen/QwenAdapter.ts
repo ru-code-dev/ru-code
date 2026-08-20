@@ -11,6 +11,7 @@
 import { CONTEXT_COMPACTION_TASK_PREFIX, QWEN_KIND } from "@ru-code/branding";
 import {
   ApprovalRequestId,
+  defaultInstanceIdForDriver,
   EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -50,15 +51,25 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   type AbortMethod,
+  ACP_CANCEL_GRACE_MS,
   ACP_SESSION_START_TIMEOUT_MS,
+  ACP_WARM_ENGINE,
   AUTO_COMPACT_DISARM_FRACTION,
   COMPACT_MIN_GAIN_PRE_FRACTION,
   COMPACTION_RESTART_METHOD,
   AUTO_COMPACT_USED_FRACTION,
   MAINTENANCE_METHOD,
+  MCP_ENGINE_USE_OVERLAY,
   MODE_CHANGE_METHOD,
   QWEN_MODELS_AUTO_DISCOVERY,
   STOP_BUTTON_METHOD,
+  MCP_PREWARM_INSTANCES,
+  MCP_PREWARM_MAX_PROJECTS,
+  PREWARM_GENERIC_INSTANCES,
+  WARM_REFILL_BREAKER_FAILS,
+  WARM_SLOT_MAX_AGE_ENABLED,
+  WARM_SLOT_MAX_AGE_MS,
+  WARM_SLOT_WARMUP_TIMEOUT_MS,
 } from "@ru-code/qwen/constants";
 import { settleAndDelete, type AcpPendingKind } from "@ru-code/qwen/acp/QwenAcpPendingRequests";
 import {
@@ -74,6 +85,18 @@ import {
   mapAcpToAdapterError,
 } from "./acp/QwenAcpAdapterSupport.ts";
 import { type AcpSessionRuntimeShape } from "./acp/QwenAcpSessionRuntime.ts";
+// ru-code (warm engine): the warm CLI process pool — take at startSession,
+// refill after a successful bind (acp-process-pool §2.3). Extracted to the
+// external package (generic over the slot runtime; host supplies the spawn).
+import {
+  makeWarmAcpPool,
+  type TakenWarmSlot,
+  type WarmKeyInput,
+  type WarmTakeRequest,
+} from "@smart-tools/acp-warm-pool/server";
+// ru-code (warm engine): write-only pid journal for a future leftover-cleanup
+// feature (acp-process-pool §2.5) — record on spawn, remove on teardown.
+import { makeQwenProcessJournal } from "./lifecycle/QwenProcessJournal.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -197,6 +220,37 @@ export interface QwenAdapterLiveOptions {
   readonly getThreadCompactionState?: (
     threadId: ThreadId,
   ) => Effect.Effect<QwenThreadCompactionState>;
+  /**
+   * ru-code: warm-engine gate override. Production omits it ⇒ ACP_WARM_ENGINE.
+   * Tests pass an explicit value to pin either the warm or the classic path
+   * without flipping the repo constant.
+   */
+  readonly warmEngine?: boolean;
+  /**
+   * ru-code: grace between `session/cancel` and the background SIGKILL on a
+   * stop with an in-flight prompt. Production omits it ⇒ ACP_CANCEL_GRACE_MS.
+   * Tests pass a tiny value so the grace path settles without a real wait.
+   */
+  readonly cancelGraceMs?: number;
+  /**
+   * ru-code: boot prewarm override. Default: only the first/default qwen
+   * instance prewarms the generic pool at adapter start; other instances pool
+   * lazily on first use. Tests pin either behavior explicitly.
+   */
+  readonly prewarmOnCreate?: boolean;
+  /**
+   * ru-code: warm-pool sizing/behavior overrides for tests (production omits
+   * ⇒ the constants). See ru-code/qwen/constants.ts for semantics.
+   */
+  readonly poolOptions?: {
+    readonly genericTarget?: number;
+    readonly mcpTarget?: number;
+    readonly mcpMaxProjects?: number;
+    readonly breakerFails?: number;
+    readonly maxAgeEnabled?: boolean;
+    readonly maxAgeMs?: number;
+    readonly warmupTimeoutMs?: number;
+  };
 }
 
 interface PendingApproval {
@@ -254,6 +308,19 @@ interface QwenSessionContext {
   // real failure label. Reset to false at the start of each `sendTurn`.
   userCancelRequested: boolean;
   stopped: boolean;
+  // ru-code (warm engine): the in-flight `session/prompt` RPC, forked by
+  // sendTurn so the instant-settle stop can interrupt exactly the prompt —
+  // the turn then settles cancelled at ~0ms while the process dies in a
+  // detached background teardown. undefined outside the prompt window (the
+  // stop falls back to the classic inline-kill path there).
+  activePromptFiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, ProviderAdapterError> | undefined;
+  // ru-code (warm engine): set by the child-exit watcher BEFORE it schedules
+  // the teardown. A crash-driven teardown must NOT take the instant-settle
+  // path — interrupting the prompt fiber there could beat the transport
+  // failure and mislabel the crash `cancelled` instead of its classified
+  // error (B1.<code>). With the flag, the classic path runs and the turn
+  // settles through the classifier exactly as today.
+  childExitObserved: boolean;
   // ru-code: live runtimeMode mirror. Refreshed by sendTurn and
   // respondToRequest from their per-call inputs. Read by the cli-initiated
   // requestPermission callback (plan-approval optionId and full-access
@@ -542,6 +609,9 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     // ru-code: bound the start handshake so a wedged `cli --acp` boot fails instead
     // of hanging the turn forever (and, for MCP, promptly releases the ephemeral overlay).
     const sessionStartTimeoutMs = options?.sessionStartTimeoutMs ?? ACP_SESSION_START_TIMEOUT_MS;
+    // ru-code: warm-engine gate + stop grace (see ru-code/qwen/constants.ts).
+    const warmEngine = options?.warmEngine ?? ACP_WARM_ENGINE;
+    const cancelGraceMs = options?.cancelGraceMs ?? ACP_CANCEL_GRACE_MS;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -560,6 +630,17 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const nativeEventLogger = options?.nativeEventLogger ?? undefined;
 
     const sessions = new Map<ThreadId, QwenSessionContext>();
+    // ru-code (warm engine): per-thread teardown latches. An instant-settle
+    // stop resolves client-side immediately and parks the dying process's
+    // cancel→grace→SIGKILL in a background fiber; the latch marks that window.
+    // Only an immediate SAME-thread re-send awaits it (the old process must
+    // stop appending to the session JSONL before `session/load` re-reads it).
+    const teardownLatches = new Map<ThreadId, Deferred.Deferred<void>>();
+    // ru-code (warm engine): set at the adapter finalizer's entry. A detached
+    // teardown forked onto a CLOSING layer scope would be interrupted before
+    // it ever evaluates (kill/latch tail silently dropped) — teardowns check
+    // this and finish inline instead.
+    let adapterClosing = false;
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     // ru-code: the adapter-layer scope. Session-bound fibers (child-exit
@@ -569,6 +650,122 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     // those very fibers), aborting the teardown before it offers
     // `session.exited`.
     const layerScope = yield* Effect.scope;
+
+    // ru-code (warm engine): the warm process pool + its slot-overlay dir.
+    // One pool per adapter instance (instances never mix, I-3); pool scope ⊂
+    // adapter layer scope so instance rebuild / shutdown drains it (I-7). The
+    // dir sweep clears slot-overlay copies a hard crash left behind (mirrors
+    // the canonical overlay boot sweep). Warm slots spawn through the SAME
+    // factory + spawn-input builder as cold sessions — the recipe cannot
+    // drift; only the neutral spawn cwd and the slot overlay path differ, the
+    // real cwd/resume cursor arrive at bind (G2/G8).
+    // ru-code (warm engine): BOTH per-stateDir artifacts are keyed by the
+    // instance — multiple configured qwen instances (brand profiles) each get
+    // their own journal file and warm dir, so one instance's flushes/wipes can
+    // never clobber another's entries or in-flight overlay copies.
+    const instanceSlug = String(boundInstanceId).replace(/[^A-Za-z0-9._-]/g, "_");
+    const warmDir = path.join(serverConfig.stateDir, "qwen-warm", instanceSlug);
+    // ru-code (warm engine): write-only, best-effort pid journal (I-12) — a
+    // future leftover-cleanup feature's data source; nothing reads it here.
+    const processJournal = warmEngine
+      ? yield* makeQwenProcessJournal({
+          journalPath: path.join(serverConfig.stateDir, `qwen-pids.${instanceSlug}.json`),
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        )
+      : undefined;
+    // ru-code (warm engine): one slot runtime — the SAME factory + spawn-input
+    // builder as cold sessions (the recipe cannot drift, I-3); only the
+    // neutral spawn cwd and the slot overlay path differ.
+    const makeSlotRuntime = (request: {
+      readonly slotOverlayPath: string | undefined;
+      readonly keyInput: WarmKeyInput;
+      readonly currentThreadId: () => string;
+    }) =>
+      makeQwenAcpRuntime({
+        qwenSettings,
+        ...(options?.environment ? { environment: options.environment } : {}),
+        childProcessSpawner,
+        cliJs: resolved.bin,
+        // Neutral spawn cwd — pre-session the process is project-
+        // agnostic; the thread's cwd arrives via bindAndStart.
+        cwd: serverConfig.stateDir,
+        ...(request.slotOverlayPath !== undefined || request.keyInput.allowedMcpServers.length > 0
+          ? {
+              settingsOverlay: {
+                ...(request.slotOverlayPath !== undefined
+                  ? { settingsOverlayPath: request.slotOverlayPath }
+                  : {}),
+                allowedMcpServers: request.keyInput.allowedMcpServers,
+              },
+            }
+          : {}),
+        clientInfo: { name: "t3-code", version: "0.0.0" },
+        // Same failure-only logger as cold sessions; the threadId is
+        // "warm-slot" until the slot is taken.
+        requestLogger: (event) =>
+          event.status === "failed" && !(event.cause && Cause.hasInterruptsOnly(event.cause))
+            ? Effect.logError("[cli-acp.request.failed]", {
+                threadId: request.currentThreadId(),
+                profile: resolved.profile.id, // ru-code
+                method: event.method,
+                payload: describeRequestPayload(event.payload),
+                ...(event.cause ? describeRequestFailure(event.cause) : {}),
+              })
+            : Effect.void,
+      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+
+    const warmPool = warmEngine
+      ? yield* Effect.gen(function* () {
+          yield* Effect.ignore(fileSystem.remove(warmDir, { recursive: true, force: true }));
+          return yield* makeWarmAcpPool<AcpSessionRuntimeShape>({
+            warmDir,
+            // The generic recipe: empty allowlist; overlay-env presence follows
+            // the MCP-engine gate (with the engine on, every start carries an
+            // overlay path — an empty one for projects without tools).
+            genericKeyInput: { overlayPresent: MCP_ENGINE_USE_OVERLAY, allowedMcpServers: [] },
+            genericTarget: options?.poolOptions?.genericTarget ?? PREWARM_GENERIC_INSTANCES,
+            mcpTarget: options?.poolOptions?.mcpTarget ?? MCP_PREWARM_INSTANCES,
+            mcpMaxProjects: options?.poolOptions?.mcpMaxProjects ?? MCP_PREWARM_MAX_PROJECTS,
+            breakerFails: options?.poolOptions?.breakerFails ?? WARM_REFILL_BREAKER_FAILS,
+            maxAgeEnabled: options?.poolOptions?.maxAgeEnabled ?? WARM_SLOT_MAX_AGE_ENABLED,
+            maxAgeMs: options?.poolOptions?.maxAgeMs ?? WARM_SLOT_MAX_AGE_MS,
+            warmupTimeoutMs: options?.poolOptions?.warmupTimeoutMs ?? WARM_SLOT_WARMUP_TIMEOUT_MS,
+            nextSlotId: cryptoUuid,
+            makeRuntime: (request) =>
+              Effect.gen(function* () {
+                // Journal the warm spawn; the entry drops when the slot's
+                // scope closes — pool discard/evict/drain, or (after take)
+                // the owning session's teardown. The remove-finalizer is
+                // registered BEFORE the spawn (via the pid box) so the LIFO
+                // scope close runs the spawner's kill FIRST and the journal
+                // drop LAST — the journal never forgets a still-alive child.
+                let journaledPid: number | null = null;
+                if (processJournal !== undefined) {
+                  yield* Effect.addFinalizer(() =>
+                    journaledPid !== null ? processJournal.remove(journaledPid) : Effect.void,
+                  );
+                }
+                const runtime = yield* makeSlotRuntime(request);
+                if (processJournal !== undefined) {
+                  journaledPid = runtime.childPid;
+                  yield* processJournal.record({ pid: runtime.childPid, kind: "warm" });
+                }
+                return runtime;
+              }),
+          });
+        })
+      : undefined;
+    // ru-code (warm engine): boot prewarm — only the first/default qwen
+    // instance keeps the generic pool hot from app start (a chat's very first
+    // send lands on a prewarmed process); other configured instances pool
+    // lazily on their first use.
+    const prewarmOnCreate =
+      options?.prewarmOnCreate ?? boundInstanceId === defaultInstanceIdForDriver(PROVIDER);
+    if (warmPool !== undefined && prewarmOnCreate) {
+      yield* warmPool.prewarmGeneric;
+    }
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(cryptoUuid, (id) => EventId.make(id));
@@ -695,6 +892,60 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
       return Effect.succeed(ctx);
     };
 
+    // ru-code (warm engine): the INSTANT client-side settle shared by the
+    // regular stop and the coordinated shutdown — everything the user (and
+    // the event pipeline) observes, with zero waiting on the dying process:
+    // queue `session/cancel` (a plain outgoing write; a dead transport fails
+    // it as a typed error, swallowed), interrupt the notification/child-exit/
+    // prompt fibers (streaming freezes; the turn settles `cancelled` into
+    // sendTurn's finalizer), await the I5 barrier (now instant), unregister
+    // the session and emit `session.exited`. The process itself is NOT killed
+    // here — the caller owns the cancel→grace→SIGKILL tail.
+    const settleActiveTurnForTeardown = (ctx: QwenSessionContext, method: AbortMethod) =>
+      Effect.gen(function* () {
+        yield* Effect.ignore(ctx.acp.cancel);
+        if (ctx.notificationFiber) {
+          yield* Fiber.interrupt(ctx.notificationFiber);
+        }
+        if (ctx.childExitFiber) {
+          yield* Fiber.interrupt(ctx.childExitFiber);
+        }
+        if (ctx.activePromptFiber) {
+          yield* Fiber.interrupt(ctx.activePromptFiber);
+        }
+        // Same I5 ordering barrier as the classic path — now instant: the
+        // interrupted prompt settles into sendTurn's finalizer without
+        // waiting on the process. Defensively bounded: sendTurn's onExit
+        // safety net makes an unresolved turnFinalized unreachable, but a
+        // stop must never be able to hang on it regardless.
+        if (ctx.turnFinalized !== undefined) {
+          yield* Deferred.await(ctx.turnFinalized).pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(cancelGraceMs),
+              orElse: () =>
+                Effect.logError("[cli-adapter] turn finalizer barrier timed out — proceeding", {
+                  threadId: ctx.threadId,
+                }),
+            }),
+          );
+        }
+        sessions.delete(ctx.threadId);
+        if (method === MAINTENANCE_METHOD) {
+          yield* SynchronizedRef.update(threadLocksRef, (locks) => {
+            const next = new Map(locks);
+            next.delete(ctx.threadId);
+            return next;
+          });
+        }
+        yield* offerRuntimeEvent({
+          type: "session.exited",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          payload: { exitKind: "graceful" },
+        });
+      });
+
     /**
      * End an ACP session using one of the three strategies in AbortMethod
      * (see contracts/providerRuntime). Picking the right method per call
@@ -721,7 +972,41 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
      * something down, surfacing a partial failure is less useful than
      * continuing the teardown.
      */
-    const abortSession = (ctx: QwenSessionContext, method: AbortMethod) =>
+    // ru-code (warm engine): the shared kill→close→latch-resolve tail —
+    // used by the single-stop detached teardown and stopAll's batch tail.
+    // Byte-identical semantics in both: SIGKILL, close the session scope,
+    // drop the latch registration only if it is still OURS (a successor's
+    // latch must survive), then release the waiter.
+    const finishSessionTeardown = (
+      ctx: QwenSessionContext,
+      teardownLatch: Deferred.Deferred<void>,
+    ) =>
+      ctx.acp.forceKill.pipe(
+        Effect.andThen(Effect.ignore(Scope.close(ctx.scope, Exit.void))),
+        Effect.andThen(
+          Effect.sync(() => {
+            if (teardownLatches.get(ctx.threadId) === teardownLatch) {
+              teardownLatches.delete(ctx.threadId);
+            }
+          }),
+        ),
+        Effect.andThen(Deferred.succeed(teardownLatch, undefined)),
+        Effect.asVoid,
+      );
+
+    const abortSession = (
+      ctx: QwenSessionContext,
+      method: AbortMethod,
+      options?: {
+        /**
+         * ru-code (warm engine): stopAll's instant-kill batch forces the
+         * classic inline path even when a prompt fiber appeared between its
+         * partition and this call — a detached grace teardown here would let
+         * the child outlive stopAll's "everything dead on return" contract.
+         */
+        readonly disallowDetachedTeardown?: boolean;
+      },
+    ) =>
       Effect.gen(function* () {
         if (method === "cancel-turn") {
           // Don't mark stopped — the session continues. Just unblock any
@@ -737,7 +1022,15 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           return;
         }
 
-        // end-graceful or end-force: full teardown.
+        // end-graceful or end-force: full teardown. The ENTIRE claim-to-
+        // completion region is UNINTERRUPTIBLE: the claim (`ctx.stopped`)
+        // must never be separable from the teardown it promises — an
+        // interrupt landing between them would leave a claimed-but-alive
+        // child that no later stop can reach (requireSession rejects stopped
+        // sessions). Every step inside is bounded: settles are event/interrupt
+        // work, the finalizer barrier is time-bounded, and kills are SIGKILL.
+        // A pending external interrupt is delivered at the region's boundary,
+        // after everything below completed or was forked.
         if (ctx.stopped) {
           yield* Effect.logDebug("[cli-adapter] ACP session abort skipped (already stopped)", {
             threadId: ctx.threadId,
@@ -745,10 +1038,69 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           });
           return;
         }
+        yield* Effect.uninterruptible(abortSessionTeardown(ctx, method, options));
+      });
+
+    const abortSessionTeardown = (
+      ctx: QwenSessionContext,
+      method: AbortMethod,
+      options?: { readonly disallowDetachedTeardown?: boolean },
+    ) =>
+      Effect.gen(function* () {
         ctx.stopped = true;
 
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+
+        // ru-code (warm engine): instant-settle stop. An end-force teardown
+        // with a prompt actually in flight settles the turn CLIENT-SIDE at
+        // ~0ms (settleActiveTurnForTeardown) and runs cancel→grace→SIGKILL
+        // against the dying process in a DETACHED background fiber — the user
+        // never waits on it. `session/cancel` is what lets qwen reap detached
+        // shell process-groups and finish its synchronous session-file appends
+        // (killing after the prompt settled removes the torn-JSONL-line
+        // window); the SIGKILL after the grace is the unmaskable backstop.
+        // Crash-driven teardowns (childExitObserved) and the pre/post-prompt
+        // phases keep the classic inline path below — identical to today.
+        if (
+          warmEngine &&
+          method === "end-force" &&
+          options?.disallowDetachedTeardown !== true &&
+          ctx.activeTurnId !== undefined &&
+          ctx.activePromptFiber !== undefined &&
+          !ctx.childExitObserved
+        ) {
+          yield* settleActiveTurnForTeardown(ctx, method);
+          const teardownLatch = yield* Deferred.make<void>();
+          teardownLatches.set(ctx.threadId, teardownLatch);
+          if (adapterClosing) {
+            // The layer scope is closing — a forkIn there would be dropped
+            // before it ever evaluates (no grace, no kill). Finish inline
+            // and immediately; the process is going down anyway.
+            yield* finishSessionTeardown(ctx, teardownLatch);
+          } else {
+            // Detached teardown: give the cancelled agent up to the grace to
+            // reap its children and flush its files, then SIGKILL and close
+            // the scope. The kill+close+latch tail rides `Effect.onExit`, so
+            // it runs even when the fiber is interrupted mid-grace — the
+            // child can never leak and a latch waiter can never hang.
+            yield* Effect.race(
+              ctx.acp.waitForExit,
+              Effect.sleep(Duration.millis(cancelGraceMs)),
+            ).pipe(
+              Effect.onExit(() => finishSessionTeardown(ctx, teardownLatch)),
+              Effect.forkIn(layerScope),
+              Effect.asVoid,
+            );
+          }
+          yield* Effect.logDebug("[cli-adapter] ACP session aborted", {
+            threadId: ctx.threadId,
+            method,
+            sessionTornDown: true,
+            instantSettle: true, // ru-code: warm-engine stop path
+          });
+          return;
+        }
 
         if (method === "end-graceful") {
           // Give the agent a chance to unwind cleanly. Without this, CLI
@@ -786,7 +1138,19 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         // message after that strip leaves the bubble timer stuck (I5). The kill
         // guarantees the prompt settles, so this await cannot hang.
         if (ctx.activeTurnId !== undefined && ctx.turnFinalized !== undefined) {
-          yield* Deferred.await(ctx.turnFinalized);
+          // Defensively bounded like the instant-settle barrier: the kill
+          // guarantees the prompt settles, but a stop must never be able to
+          // hang here regardless (this runs inside the uninterruptible
+          // teardown region).
+          yield* Deferred.await(ctx.turnFinalized).pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(cancelGraceMs),
+              orElse: () =>
+                Effect.logError("[cli-adapter] turn finalizer barrier timed out — proceeding", {
+                  threadId: ctx.threadId,
+                }),
+            }),
+          );
         }
 
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
@@ -825,8 +1189,15 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const scheduleTeardown = (ctx: QwenSessionContext, method: AbortMethod) =>
       abortSession(ctx, method).pipe(Effect.forkIn(layerScope), Effect.asVoid);
 
-    const startSession: QwenAdapterShape["startSession"] = (input) =>
-      withThreadLock(
+    const startSession: QwenAdapterShape["startSession"] = (input) => {
+      // ru-code (warm engine): set once the "starting" feedback left the
+      // adapter — a failed start then compensates with a terminal state.
+      let startingEmitted = false;
+      // ru-code (warm engine): set once the session is REGISTERED (scope
+      // custody handed to `sessions`); read by the custody finalizer and by
+      // the compensating-event guard on the pipe below.
+      let sessionScopeTransferred = false;
+      return withThreadLock(
         input.threadId,
         Effect.gen(function* () {
           if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -844,6 +1215,26 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             });
           }
 
+          // ru-code (warm engine): instant "working" feedback — emitted the
+          // moment the start begins, so the web flips to the "connecting"
+          // busy phase with zero delay (cold spawn, teardown latch, warm
+          // bind alike). Safe at 0ms because of the preserve-modes seam
+          // (ThreadSessionSetCommand): ingestion's carried-over fields are
+          // re-resolved at the decider's serialized execution, so this event
+          // can never clobber a concurrent start-failure banner; and a failed
+          // start compensates with a terminal state (see the start's onExit compensating event below)
+          // so the projection can never stick at "starting".
+          if (warmEngine) {
+            yield* offerRuntimeEvent({
+              type: "session.state.changed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { state: "starting", reason: "Cli ACP session starting" },
+            });
+            startingEmitted = true;
+          }
+
           const cwd = path.resolve(input.cwd.trim());
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
@@ -853,84 +1244,260 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             yield* abortSession(existing, MODE_CHANGE_METHOD);
           }
 
+          // ru-code (warm engine): if this thread's previous process is still
+          // inside its detached cancel→grace→SIGKILL window, wait for it to
+          // die before binding — it must stop appending to the session JSONL
+          // before `session/load` re-reads it. Bounded by grace + kill; the
+          // latch always resolves. This is the ONLY wait in the stop system,
+          // and §2.2b above renders it as "connecting".
+          if (warmEngine) {
+            const teardownLatch = teardownLatches.get(input.threadId);
+            if (teardownLatch !== undefined) {
+              yield* Deferred.await(teardownLatch);
+            }
+          }
+
           const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
-          const sessionScope = yield* Scope.make("sequential");
-          let sessionScopeTransferred = false;
-          yield* Effect.addFinalizer(() =>
-            sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
-          );
-          let ctx!: QwenSessionContext;
 
           const resumeSessionId = parseQwenResume(input.resumeCursor)?.sessionId;
 
-          // ru-code: MCP overlay is a separate, out-of-scope feature — the port's
-          // start input carries no overlay fields, so no overlay is supplied.
-          const settingsOverlay = undefined;
+          // ru-code: the per-project MCP overlay resolved by the provider-command reactor at
+          // turn-start (path to qwen's highest-precedence settings file + server allowlist).
+          // Absent ⇒ spawn byte-for-byte identical to a no-MCP app (kill-switch off / no overlay).
+          const settingsOverlay =
+            input.settingsOverlayPath !== undefined || input.allowedMcpServers !== undefined
+              ? {
+                  ...(input.settingsOverlayPath !== undefined
+                    ? { settingsOverlayPath: input.settingsOverlayPath }
+                    : {}),
+                  ...(input.allowedMcpServers !== undefined
+                    ? { allowedMcpServers: input.allowedMcpServers }
+                    : {}),
+                }
+              : undefined;
 
-          const acp = yield* makeQwenAcpRuntime({
-            qwenSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
-            childProcessSpawner,
-            // ru-code: resolved bin — a cli.js is spawned as `node <cliJs> --acp`, a
-            // bare command runs directly (see buildCliSpawn). Per-instance via profile
-            // default / binaryPath override, falling back to the boot preflight cli.js.
-            cliJs: resolved.bin,
-            cwd,
-            ...(settingsOverlay ? { settingsOverlay } : {}),
-            clientInfo: { name: "t3-code", version: "0.0.0" },
-            ...(resumeSessionId ? { resumeSessionId } : {}),
-            // ru-code: log every failed RPC at error level with the pretty-
-            // printed Cause. This is the only triage breadcrumb we keep after
-            // the empty-stream investigation — it's failure-only (no noise on
-            // healthy turns) and contains everything we need to identify a new
-            // class of cli-side error without re-enabling wire dumps.
-            //
-            // Cause.hasInterruptsOnly filters out cancellations (user clicks
-            // Stop, session torn down, supersede).
-            // Those are deliberate teardowns, not errors — logging them as
-            // "request.failed" was just noise.
-            requestLogger: (event) =>
-              event.status === "failed" && !(event.cause && Cause.hasInterruptsOnly(event.cause))
-                ? Effect.logError("[cli-acp.request.failed]", {
-                    threadId: input.threadId,
-                    profile: resolved.profile.id, // ru-code: which brand (custom fork / stock qwen)
-                    method: event.method,
-                    payload: describeRequestPayload(event.payload),
-                    ...(event.cause ? describeRequestFailure(event.cause) : {}),
-                  })
-                : Effect.void,
-          }).pipe(
-            Effect.provideService(Scope.Scope, sessionScope),
-            Effect.provideService(Crypto.Crypto, crypto),
-            // ru-code: capture the original stream-side cause at the
-            // boundary — `mapAcpToAdapterError` below wraps it in a
-            // `ProviderAdapterProcessError` whose `.cause` is preserved
-            // but whose pretty-printed `Cause` chain in higher-level
-            // handlers loses the original frames. Logging here keeps the
-            // root cause grep-able under a stable tag.
-            Effect.tapError((cause) =>
-              Effect.logError("[cli-acp.stream-error]", {
-                threadId: input.threadId,
-                profile: resolved.profile.id, // ru-code
-                ...describeRequestFailure(Cause.fail(cause)),
-              }),
-            ),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterProcessError({
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  detail: cause.message,
-                  cause,
-                }),
-            ),
-            // ru-code: a spawn failure (B3) surfaces here as a
-            // `ProviderAdapterProcessError` wrapping the `AcpSpawnError`; remap it
-            // to a `ProviderAdapterRequestError` carrying the classified B3 text so
-            // the reactor's pre-turn start-failure path shows the classified banner.
-            Effect.mapError((error) => remapStartFailureThroughClassifier("session/start", error)),
+          // ru-code (warm engine): take a matching warm slot. The key mirrors
+          // exactly what the classic spawn bakes (I-3): overlay-env presence +
+          // the argv allowlist, both under the MCP_ENGINE_USE_OVERLAY gate.
+          const warmKeyInput: WarmKeyInput = {
+            overlayPresent: MCP_ENGINE_USE_OVERLAY && input.settingsOverlayPath !== undefined,
+            allowedMcpServers: MCP_ENGINE_USE_OVERLAY ? (input.allowedMcpServers ?? []) : [],
+          };
+          // ru-code: MCP-project identity for the per-project pools — the
+          // overlay path is `<overlayDir>/<projectId>/system.json` by the MCP
+          // manager's contract; generic (no enabled tools) requests carry null.
+          const derivedWarmProjectId =
+            warmKeyInput.allowedMcpServers.length > 0 && input.settingsOverlayPath !== undefined
+              ? path.basename(path.dirname(input.settingsOverlayPath))
+              : null;
+          // Defensive: if the overlay path ever stops following the
+          // `<overlayDir>/<projectId>/system.json` contract, a degenerate
+          // basename must not become a pool identity — the start goes cold
+          // (take logs the miss) instead of polluting a wrong bucket.
+          const warmProjectId =
+            derivedWarmProjectId !== null &&
+            derivedWarmProjectId !== "" &&
+            derivedWarmProjectId !== "." &&
+            derivedWarmProjectId !== ".."
+              ? derivedWarmProjectId
+              : null;
+          const warmRequest: WarmTakeRequest = {
+            keyInput: warmKeyInput,
+            projectId: warmProjectId,
+            threadId: input.threadId,
+          };
+          let pooledSlot: TakenWarmSlot<AcpSessionRuntimeShape> | null = null;
+          // Scope custody, FINALIZER-FIRST: the closing finalizer is
+          // registered BEFORE the pool take, against mutable boxes — an
+          // external interrupt landing anywhere between the pool handing the
+          // slot over and this start completing can therefore never orphan a
+          // live child (the boxes already own whatever exists). The runtime
+          // is boxed alongside the scope so an abandonment close can SIGKILL
+          // FIRST — the spawner's release is SIGTERM + an unbounded
+          // wait-for-exit, which a SIGTERM-surviving child would block.
+          let ownedSessionScope: Scope.Closeable | null = null;
+          let ownedSlotRuntime: AcpSessionRuntimeShape | null = null;
+          yield* Effect.addFinalizer(() =>
+            ownedSessionScope !== null && !sessionScopeTransferred
+              ? (ownedSlotRuntime !== null ? ownedSlotRuntime.forceKill : Effect.void).pipe(
+                  Effect.andThen(Effect.ignore(Scope.close(ownedSessionScope, Exit.void))),
+                )
+              : Effect.void,
           );
+          if (warmPool !== undefined) {
+            // Uninterruptible WITH the custody assignment INSIDE the region:
+            // a pending external interrupt is delivered AT the region's
+            // boundary (the continuation after it never runs), so boxing the
+            // slot after the region would lose it — the tap keeps take and
+            // custody one atomic step.
+            pooledSlot = yield* Effect.uninterruptible(
+              warmPool.take(warmRequest).pipe(
+                Effect.tap((taken) =>
+                  Effect.sync(() => {
+                    ownedSessionScope = taken?.scope ?? null;
+                    ownedSlotRuntime = taken?.runtime ?? null;
+                  }),
+                ),
+              ),
+            );
+            if (pooledSlot !== null && warmKeyInput.overlayPresent) {
+              // The slot was spawned pointing at its own overlay path; feed it
+              // the CANONICAL overlay bytes (alive throughout startSession, G9)
+              // before the bind reads settings. 0600/0700 — the copy holds
+              // resolved secrets, exactly like the canonical file.
+              const canonicalPath = input.settingsOverlayPath!;
+              const slotOverlayPath = pooledSlot.slotOverlayPath!;
+              // Ephemeral-secret hygiene, registered BEFORE the write: the
+              // copy (even a torn, partially-written one on failure) and its
+              // slot dir are removed when this start settles — success, error,
+              // or interrupt.
+              yield* Effect.addFinalizer(() =>
+                Effect.ignore(
+                  fileSystem.remove(path.dirname(slotOverlayPath), {
+                    recursive: true,
+                    force: true,
+                  }),
+                ),
+              );
+              const copied = yield* Effect.gen(function* () {
+                const contents = yield* fileSystem.readFileString(canonicalPath);
+                yield* fileSystem.makeDirectory(path.dirname(slotOverlayPath), {
+                  recursive: true,
+                  mode: 0o700,
+                });
+                yield* fileSystem.writeFileString(slotOverlayPath, contents, { mode: 0o600 });
+              }).pipe(Effect.exit);
+              if (Exit.isFailure(copied)) {
+                // Discard the slot and go cold — the canonical file is still
+                // there for the classic spawn (failure-mode table §2.7).
+                yield* Effect.logDebug("[acp-pool] slot overlay copy failed — going cold", {
+                  threadId: input.threadId,
+                  slotOverlayPath,
+                });
+                yield* pooledSlot.runtime.forceKill;
+                yield* Effect.ignore(Scope.close(pooledSlot.scope, Exit.void));
+                pooledSlot = null;
+                ownedSessionScope = null;
+                ownedSlotRuntime = null;
+              }
+            }
+            if (pooledSlot !== null) {
+              pooledSlot.setThreadId(input.threadId);
+              // The child now serves a session — keep the journal truthful
+              // (the re-record flips `kind` only; the original spawnedAt is
+              // preserved by the journal).
+              if (processJournal !== undefined) {
+                yield* processJournal.record({
+                  pid: pooledSlot.runtime.childPid,
+                  kind: "session",
+                });
+              }
+            }
+          }
+
+          // Pooled: adopt the slot's scope — finalizer semantics identical to
+          // a fresh session scope (a bind failure closes it ⇒ child killed).
+          const sessionScope = pooledSlot?.scope ?? (yield* Scope.make("sequential"));
+          ownedSessionScope = sessionScope;
+          // Cold-path journal remove-finalizer, registered BEFORE the runtime
+          // spawn adds the spawner's kill release to this scope: the LIFO
+          // close then kills the child FIRST and drops the journal entry
+          // LAST — the journal never forgets a still-alive child. (Pooled
+          // slots get the identical ordering inside the pool's makeRuntime.)
+          let coldJournaledPid: number | null = null;
+          if (processJournal !== undefined && pooledSlot === null) {
+            yield* Scope.addFinalizer(
+              sessionScope,
+              Effect.suspend(() =>
+                coldJournaledPid !== null ? processJournal.remove(coldJournaledPid) : Effect.void,
+              ),
+            );
+          }
+          let ctx!: QwenSessionContext;
+
+          const acp =
+            pooledSlot !== null
+              ? pooledSlot.runtime
+              : yield* makeQwenAcpRuntime({
+                  qwenSettings,
+                  ...(options?.environment ? { environment: options.environment } : {}),
+                  childProcessSpawner,
+                  // ru-code: resolved bin — a cli.js is spawned as `node <cliJs> --acp`, a
+                  // bare command runs directly (see buildCliSpawn). Per-instance via profile
+                  // default / binaryPath override, falling back to the boot preflight cli.js.
+                  cliJs: resolved.bin,
+                  cwd,
+                  ...(settingsOverlay ? { settingsOverlay } : {}),
+                  clientInfo: { name: "t3-code", version: "0.0.0" },
+                  ...(resumeSessionId ? { resumeSessionId } : {}),
+                  // ru-code: log every failed RPC at error level with the pretty-
+                  // printed Cause. This is the only triage breadcrumb we keep after
+                  // the empty-stream investigation — it's failure-only (no noise on
+                  // healthy turns) and contains everything we need to identify a new
+                  // class of cli-side error without re-enabling wire dumps.
+                  //
+                  // Cause.hasInterruptsOnly filters out cancellations (user clicks
+                  // Stop, session torn down, supersede).
+                  // Those are deliberate teardowns, not errors — logging them as
+                  // "request.failed" was just noise.
+                  requestLogger: (event) =>
+                    event.status === "failed" &&
+                    !(event.cause && Cause.hasInterruptsOnly(event.cause))
+                      ? Effect.logError("[cli-acp.request.failed]", {
+                          threadId: input.threadId,
+                          profile: resolved.profile.id, // ru-code: which brand (custom fork / stock qwen)
+                          method: event.method,
+                          payload: describeRequestPayload(event.payload),
+                          ...(event.cause ? describeRequestFailure(event.cause) : {}),
+                        })
+                      : Effect.void,
+                }).pipe(
+                  Effect.provideService(Scope.Scope, sessionScope),
+                  Effect.provideService(Crypto.Crypto, crypto),
+                  // ru-code: capture the original stream-side cause at the
+                  // boundary — `mapAcpToAdapterError` below wraps it in a
+                  // `ProviderAdapterProcessError` whose `.cause` is preserved
+                  // but whose pretty-printed `Cause` chain in higher-level
+                  // handlers loses the original frames. Logging here keeps the
+                  // root cause grep-able under a stable tag.
+                  Effect.tapError((cause) =>
+                    Effect.logError("[cli-acp.stream-error]", {
+                      threadId: input.threadId,
+                      profile: resolved.profile.id, // ru-code
+                      ...describeRequestFailure(Cause.fail(cause)),
+                    }),
+                  ),
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderAdapterProcessError({
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        detail: cause.message,
+                        cause,
+                      }),
+                  ),
+                  // ru-code: a spawn failure (B3) surfaces here as a
+                  // `ProviderAdapterProcessError` wrapping the `AcpSpawnError`; remap it
+                  // to a `ProviderAdapterRequestError` carrying the classified B3 text so
+                  // the reactor's pre-turn start-failure path shows the classified banner.
+                  Effect.mapError((error) =>
+                    remapStartFailureThroughClassifier("session/start", error),
+                  ),
+                );
+
+          // The cold runtime now exists — box it so the custody finalizer's
+          // abandonment close can SIGKILL first (same guarantee as pooled).
+          ownedSlotRuntime = acp;
+
+          // ru-code (warm engine): journal the cold session spawn; the entry
+          // drops when the session scope closes (every kill path ends there —
+          // see the remove-finalizer registered above, BEFORE the spawn).
+          // Pooled slots were journaled at their warm spawn.
+          if (processJournal !== undefined && pooledSlot === null) {
+            coldJournaledPid = acp.childPid;
+            yield* processJournal.record({ pid: acp.childPid, kind: "session" });
+          }
 
           const started = yield* Effect.gen(function* () {
             // ru-code: catch every CLI vendor extension notification.
@@ -1287,7 +1854,16 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 };
               }),
             );
-            return yield* acp.start();
+            // ru-code (warm engine): a pooled slot binds with THIS thread's
+            // cwd/resume cursor (its creation options carry the neutral spawn
+            // cwd); the classic runtime keeps its byte-identical start()
+            // (≡ bindAndStart of its own creation options).
+            return yield* pooledSlot !== null
+              ? acp.bindAndStart({
+                  cwd,
+                  ...(resumeSessionId ? { resumeSessionId } : {}),
+                })
+              : acp.start();
           }).pipe(
             // ru-code: capture the CLI exit code at the boundary —
             // `mapAcpToAdapterError` below wraps `AcpProcessExitedError`
@@ -1392,6 +1968,9 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             turnFinalized: undefined,
             userCancelRequested: false,
             stopped: false,
+            activePromptFiber: undefined, // ru-code: warm engine
+            childExitObserved: false, // ru-code: warm engine
+
             // ru-code: seed the live runtimeMode mirror from startSession
             // input (the orchestrator passes thread.runtimeMode here). Future
             // sendTurn / respondToRequest calls refresh it.
@@ -1567,6 +2146,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           const childExitFiber = yield* Effect.gen(function* () {
             yield* acp.waitForExit;
             if (ctx.stopped) return;
+            // ru-code (warm engine): mark the teardown as crash-driven BEFORE
+            // scheduling it — abortSession must take the classic path so the
+            // in-flight turn settles through the classifier (B1.<code>), never
+            // the instant-settle cancel label.
+            ctx.childExitObserved = true;
             yield* Effect.logDebug("[cli-adapter] ACP child exited unexpectedly", {
               threadId: ctx.threadId,
               activeTurnId: ctx.activeTurnId ?? null,
@@ -1585,6 +2169,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
 
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
+
+          // ru-code (warm engine): refill only after a successful bind (I-8) —
+          // idle slot deaths are never auto-respawned, so no crash-loops. The
+          // spawn is inline (deterministic counts); the warmup RPCs fork.
+          if (warmPool !== undefined) {
+            yield* warmPool.ensureAfterSuccess(warmRequest);
+          }
 
           yield* offerRuntimeEvent({
             type: "session.started",
@@ -1609,8 +2200,42 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           });
 
           return session;
-        }).pipe(Effect.scoped),
+        }).pipe(
+          // ru-code (warm engine): a failed OR abandoned start must never
+          // leave the projected session stuck on "starting" (the web would
+          // show "connecting" forever). `Effect.onExit` — NOT tapCause/
+          // catchCause — because only onExit-family frames run when the fiber
+          // is EXTERNALLY INTERRUPTED (reactor teardown, instance rebuild);
+          // a cause-tap would be skipped and the abandonment would strand the
+          // projection. The compensating terminal event rides the SAME
+          // ingestion queue as the starting event, so it is processed
+          // strictly after it; the reactor's own failure write and this one
+          // converge on a terminal status under every interleaving (its
+          // status logic keeps "stopped", and the preserve-modes seam keeps
+          // its lastError banner).
+          Effect.onExit((exit) =>
+            // `sessionScopeTransferred` = the session was REGISTERED: an
+            // interrupt after that point abandons a LIVE session (the next
+            // start supersedes it) — compensating with "stopped" there would
+            // wrongly mark a running session stopped.
+            !Exit.isSuccess(exit) && startingEmitted && !sessionScopeTransferred
+              ? makeEventStamp().pipe(
+                  Effect.flatMap((stamp) =>
+                    offerRuntimeEvent({
+                      type: "session.state.changed",
+                      ...stamp,
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      payload: { state: "stopped", reason: "Cli ACP session start failed" },
+                    }),
+                  ),
+                )
+              : Effect.void,
+          ),
+          Effect.scoped,
+        ),
       );
+    };
 
     const sendTurn: QwenAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
@@ -1923,7 +2548,7 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             );
           }
 
-          const result = yield* ctx.acp
+          const promptEffect = ctx.acp
             .prompt({
               prompt: promptParts,
             })
@@ -2012,6 +2637,51 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
               ),
             );
 
+          // ru-code (warm engine): fork the prompt so the instant-settle stop
+          // can interrupt exactly it — the turn then settles cancelled here at
+          // ~0ms while the process dies in abortSession's detached background
+          // teardown. Gate off ⇒ the prompt runs inline, byte-identical to
+          // the classic path.
+          let result: EffectAcpSchema.PromptResponse;
+          if (warmEngine) {
+            const promptFiber = yield* Effect.forkChild(promptEffect);
+            ctx.activePromptFiber = promptFiber;
+            // Race-closer: a stop that landed during the pre-prompt yields saw
+            // no prompt fiber (its abortSession took the classic inline-kill
+            // path) — self-interrupt so this turn still settles cancelled and
+            // the stop's turnFinalized await can never hang. The assignment
+            // above and this read are one synchronous block, so exactly one
+            // side always observes the other.
+            if (ctx.stopped) {
+              yield* Fiber.interrupt(promptFiber);
+            }
+            const promptExit = yield* Fiber.await(promptFiber);
+            ctx.activePromptFiber = undefined;
+            if (Exit.isSuccess(promptExit)) {
+              result = promptExit.value;
+            } else if (Cause.hasInterruptsOnly(promptExit.cause)) {
+              // Only the stop paths interrupt the prompt FIBER (a genuine
+              // interrupt of this request fiber interrupts Fiber.await itself
+              // and propagates through the catchCause below, as today). Settle
+              // the turn cancelled — same label + recovery the classic
+              // kill-driven stop produces.
+              yield* finalize({ state: "cancelled", stopReason: "cancelled" });
+              return {
+                threadId: input.threadId,
+                turnId,
+                ...(ctx.session.resumeCursor !== undefined
+                  ? { resumeCursor: ctx.session.resumeCursor }
+                  : {}),
+              };
+            } else {
+              // Re-inject the prompt failure so the catchCause finalizer
+              // classifies it exactly as the classic inline path does.
+              result = yield* Effect.failCause(promptExit.cause);
+            }
+          } else {
+            result = yield* promptEffect;
+          }
+
           ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
           ctx.session = {
             ...ctx.session,
@@ -2061,6 +2731,24 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   : {}),
               };
             }),
+          ),
+          // ru-code (warm engine): EXTERNAL-INTERRUPT safety net. Cause
+          // frames (the catchCause above) are SKIPPED when this request fiber
+          // is externally interrupted (reactor teardown / instance rebuild) —
+          // without this, `turnFinalized` would stay unresolved and a later
+          // stop would hang on its barrier, with `activePromptFiber` left
+          // pointing at a dead fiber. onExit-family frames DO run under
+          // interruption; `finalize` is idempotent, so the normal failure
+          // path (already finalized above) is unaffected.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : Effect.gen(function* () {
+                  if (activeCtx !== undefined) {
+                    activeCtx.activePromptFiber = undefined;
+                  }
+                  yield* finalizeFromCause(exit.cause);
+                }),
           ),
         );
       });
@@ -2439,15 +3127,118 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         return c.pendingApprovals.size > 0 || c.pendingUserInputs.size > 0;
       });
 
-    const stopAll: QwenAdapterShape["stopAll"] = () =>
+    // ru-code (warm engine): coordinated teardown (acp-process-pool §2.5) —
+    // driven entirely by in-memory state, bounded by ONE shared grace:
+    //   1. in parallel, instantly: SIGKILL every session with no in-flight
+    //      prompt (classic inline path) and every warm slot (pool drain);
+    //   2. simultaneously: settle every active turn instantly (cancel sent,
+    //      turn.completed → session.exited, zero waiting on the process);
+    //   3. one shared deadline min(all active children exited, grace), then
+    //      parallel SIGKILL + scope close.
+    // Worst case ≈ cancelGraceMs + ε, and only when turns are running; an
+    // idle shutdown is as instant as today. When it returns, every child this
+    // adapter spawned is dead and every scope closed (journal drained).
+    const stopAllWarm = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const contexts = Array.from(sessions.values()).filter((ctx) => !ctx.stopped);
+        const instantKill: QwenSessionContext[] = [];
+        const activeTurn: QwenSessionContext[] = [];
+        for (const ctx of contexts) {
+          if (
+            ctx.activeTurnId !== undefined &&
+            ctx.activePromptFiber !== undefined &&
+            !ctx.childExitObserved
+          ) {
+            activeTurn.push(ctx);
+          } else {
+            instantKill.push(ctx);
+          }
+        }
+        // Sessions THIS stopAll claimed (check-and-set of `ctx.stopped` is one
+        // synchronous step, so a racing single stop and this batch settle each
+        // session exactly once) — the batch tail kills and latch-resolves ONLY
+        // its own claims; a single-stop claim is finished by its own detached
+        // teardown. The WHOLE body runs under an uninterruptibility mask (an
+        // interrupted stopAll RPC would otherwise strand claimed latches with
+        // children never killed — bricking those threads forever); only the
+        // shared grace wait below is restored, with its kill tail on onExit.
+        const claimed: {
+          readonly ctx: QwenSessionContext;
+          readonly latch: Deferred.Deferred<void>;
+        }[] = [];
+        const settleActive = Effect.forEach(
+          activeTurn,
+          (ctx) =>
+            Effect.gen(function* () {
+              if (ctx.stopped) return; // a racing single stop owns this teardown
+              ctx.stopped = true;
+              // Same-thread restart protection as the single-stop path: an
+              // immediate re-send must await the old child's death before
+              // session/load re-reads the JSONL it may still be appending.
+              const latch = yield* Deferred.make<void>();
+              teardownLatches.set(ctx.threadId, latch);
+              claimed.push({ ctx, latch });
+              yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+              yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+              yield* settleActiveTurnForTeardown(ctx, MAINTENANCE_METHOD);
+            }),
+          { concurrency: "unbounded", discard: true },
+        );
+        const killInstant = Effect.forEach(
+          instantKill,
+          // Forced classic inline kill: even if a prompt fiber appeared
+          // between the partition above and this call, a detached grace
+          // teardown here would let that child outlive stopAll's
+          // "everything dead on return" contract.
+          (ctx) => abortSession(ctx, MAINTENANCE_METHOD, { disallowDetachedTeardown: true }),
+          { concurrency: "unbounded", discard: true },
+        );
+        const drainSlots = warmPool !== undefined ? warmPool.drainAll : Effect.void;
+        yield* Effect.all([settleActive, killInstant, drainSlots], {
+          concurrency: "unbounded",
+          discard: true,
+        });
+        if (claimed.length > 0) {
+          // ONE shared grace for the whole fleet — cancelled agents get up to
+          // cancelGraceMs total (not each) to reap children and flush files.
+          // The grace wait is the only RESTORED (interruptible) region; its
+          // kill+close+latch tail rides `Effect.onExit`, so an interrupted
+          // stopAll RPC mid-grace still kills and releases everything.
+          yield* restore(
+            Effect.race(
+              Effect.forEach(claimed, (entry) => entry.ctx.acp.waitForExit, {
+                concurrency: "unbounded",
+                discard: true,
+              }),
+              Effect.sleep(Duration.millis(cancelGraceMs)),
+            ),
+          ).pipe(
+            Effect.onExit(() =>
+              Effect.forEach(claimed, (entry) => finishSessionTeardown(entry.ctx, entry.latch), {
+                concurrency: "unbounded",
+                discard: true,
+              }),
+            ),
+          );
+        }
+      }),
+    );
+
+    const stopAllClassic = Effect.suspend(() =>
       Effect.forEach(sessions.values(), (ctx) => abortSession(ctx, MAINTENANCE_METHOD), {
         discard: true,
-      });
+      }),
+    );
+
+    const stopAll: QwenAdapterShape["stopAll"] = () => (warmEngine ? stopAllWarm : stopAllClassic);
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(sessions.values(), (ctx) => abortSession(ctx, MAINTENANCE_METHOD), {
-        discard: true,
-      }).pipe(Effect.tap(() => PubSub.shutdown(runtimeEventPubSub))),
+      Effect.sync(() => {
+        adapterClosing = true;
+      }).pipe(
+        Effect.andThen(warmEngine ? stopAllWarm : stopAllClassic),
+        Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
+      ),
     );
 
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);

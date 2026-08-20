@@ -61,6 +61,8 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 // ru-code: the skill/agent respawn gate the reactor depends on (provides Skill/AgentCatalogHostLayer).
 import { SessionRespawnGateLive } from "./ru-code/skills-agents/SessionRespawnGate.ts";
+// ru-code: MCP manager host wiring (ports + package runtime services).
+import { McpManagerHostLayer } from "./ru-code/mcp/mcpPorts.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -246,8 +248,15 @@ const PlatformServicesLive = Layer.unwrap(
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
-  // ru-code: provide the respawn gate into the reactor (it, in turn, provides the catalog host layers).
-  Layer.provideMerge(ProviderCommandReactorLive.pipe(Layer.provide(SessionRespawnGateLive))),
+  // ru-code: provide the respawn gate into the reactor (it, in turn, provides the catalog host layers)
+  // + the MCP session-overlay gate (module-level layer — memoized, so startup/ws see the SAME
+  // supervisor/overlay instances).
+  Layer.provideMerge(
+    ProviderCommandReactorLive.pipe(
+      Layer.provide(SessionRespawnGateLive),
+      Layer.provide(McpManagerHostLayer),
+    ),
+  ),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
@@ -325,11 +334,17 @@ const CheckpointingLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
 );
 
-const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
+const PortScannerLayerLive = PortScanner.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
+  // ru-code: the opt-in port-scan gate reads settings before any probe spawns.
+  Layer.provide(ServerSettingsLayerLive),
+);
 
 const TerminalLayerLive = TerminalManager.layer.pipe(
   Layer.provide(PtyAdapterLive),
   Layer.provide(PortScannerLayerLive),
+  // ru-code: the foreground-inspection poll is gated on the same port-scan setting.
+  Layer.provide(ServerSettingsLayerLive),
 );
 
 const PreviewLayerLive = Layer.empty.pipe(
@@ -680,7 +695,15 @@ export const makeServerLayer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+    }).pipe(
+      // ru-code: the startup phases start the MCP supervisor/reactor + sweep stale overlays.
+      // Provided here (not provideMerge'd into the runtime union) to keep the merged layer
+      // types small; the module-level layer is memoized, so this is the same instance the
+      // provider-command reactor and the ws RPC layer see.
+      Layer.provide(McpManagerHostLayer),
+      Layer.provideMerge(RuntimeDependenciesLive),
+      Layer.provide(launcherLayer),
+    );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,

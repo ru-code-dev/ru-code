@@ -22,7 +22,14 @@ import { expect } from "vite-plus/test";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import * as ProcessRunner from "../processRunner.ts";
+// ru-code: scanning is settings-gated (off by default; this harness has no settings service)
+// — these suites exercise the scan itself, so the gate is opened explicitly.
+import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import * as PortScanner from "./PortScanner.ts";
+
+// ru-code: see the import note.
+const PortScanEnabledSettings = serverSettingsLayerTest({ preview: { portScanEnabled: true } });
+
 const processProbeFailure: ProcessRunner.ProcessRunner["Service"]["run"] = (input) =>
   Effect.fail(
     new ProcessRunner.ProcessSpawnError({
@@ -59,6 +66,8 @@ const makeProbeFailureLayer = (
   PortScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        // ru-code: gate opened for the suite (see the import note).
+        PortScanEnabledSettings,
         Layer.succeed(ProcessRunner.ProcessRunner, { run }),
         Layer.succeed(Net.NetService, {
           canListenOnHost: () => Effect.succeed(true),
@@ -76,6 +85,8 @@ const makeProbeFailureLayer = (
 const TestPortDiscoveryLive = PortScanner.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      // ru-code: gate opened for the suite (see the import note).
+      PortScanEnabledSettings,
       TestProcessRunner,
       TestIntegrationNet,
       Layer.succeed(HostProcessPlatform, "win32"),
@@ -93,6 +104,8 @@ const makeLsofScannerLayer = (input: {
   PortScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        // ru-code: gate opened for the suite (see the import note).
+        PortScanEnabledSettings,
         Layer.succeed(ProcessRunner.ProcessRunner, {
           run: () =>
             Effect.succeed({

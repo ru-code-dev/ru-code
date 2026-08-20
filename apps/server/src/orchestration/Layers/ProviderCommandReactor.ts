@@ -37,6 +37,11 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 // changes (qwen reads them only at spawn). All logic is in the ru-code gate service; the reactor only
 // calls it. See SessionRespawnGate.
 import { SessionRespawnGate } from "../../ru-code/skills-agents/SessionRespawnGate.ts";
+// ru-code: per-project MCP overlay resolved (in memory) at turn-start; the file is written
+// only by an actual spawn. Kill-switch + fingerprint tracking live in the package service;
+// the per-turn choreography lives in the zone module — this file only makes thin calls.
+import { McpSessionOverlay } from "@smart-tools/qwen-cli-mcp-manager/server";
+import { makeMcpTurnOverlay, type McpOverlaySpawnKind } from "../../ru-code/mcp/mcpTurnOverlay.ts";
 import { provisionThenSpawn } from "../../ru-code/skills-agents/provisionThenSpawn.ts";
 import { shouldRestartProviderSession } from "../../ru-code/skills-agents/respawnDecision.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
@@ -327,6 +332,8 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   // ru-code: skill/agent respawn gate (fingerprint tracking + change decision live in the service).
   const respawnGate = yield* SessionRespawnGate;
+  // ru-code: MCP session-overlay gate (turn-start overlay write + per-thread fingerprint diff).
+  const mcpSessionOverlay = yield* McpSessionOverlay;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -401,6 +408,10 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
     readonly createdAt: string;
+    // ru-code: preserve-modes seam passthrough — a caller whose lastError is
+    // merely carried over from its own stale read declares it (see
+    // ThreadSessionSetCommand).
+    readonly preserveLastError?: boolean;
   }) =>
     serverCommandId("provider-session-set").pipe(
       Effect.flatMap((commandId) =>
@@ -409,6 +420,7 @@ const make = Effect.gen(function* () {
           commandId,
           threadId: input.threadId,
           session: input.session,
+          ...(input.preserveLastError === true ? { preserveLastError: true } : {}),
           createdAt: input.createdAt,
         }),
       ),
@@ -625,9 +637,20 @@ const make = Effect.gen(function* () {
       projects: project ? [project] : [],
     });
 
+    // ru-code: resolve the per-project MCP overlay ONCE at turn-start — IN MEMORY, no file
+    // write. The fingerprint drives the respawn diff; the FILE is written only by an actual
+    // spawn with ≥1 enabled server. Choreography lives in the zone module (mcpTurnOverlay.ts).
+    const mcpOverlayTurn = yield* makeMcpTurnOverlay({
+      mcpSessionOverlay,
+      projectId: thread.projectId,
+      threadId,
+    });
+    const currentOverlayFingerprint = mcpOverlayTurn.fingerprint;
+
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
+      readonly spawnKind?: McpOverlaySpawnKind; // ru-code: fresh-spawn vs respawn, for the overlay logs
     }) =>
       // ru-code: qwen reads skills/agents/commands from <cwd>/.qwen at spawn, but the catalogs only
       // write the project's main workspaceRoot — so mirror the worktree's copies in BEFORE the spawn
@@ -638,18 +661,26 @@ const make = Effect.gen(function* () {
         respawnGate,
         { threadId, projectId: thread.projectId, cwd: effectiveCwd ?? null },
         () =>
-          providerService.startSession(threadId, {
-            threadId,
-            ...(preferredProvider ? { provider: preferredProvider } : {}),
-            providerInstanceId: desiredInstanceId,
-            ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-            // t3 #5941: the real thread title goes in at session create, so OpenCode
-            // stops minting a placeholder and mirroring it back over the user's title.
-            ...(thread.title ? { title: thread.title } : {}),
-            modelSelection: desiredModelSelection,
-            ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-            runtimeMode: desiredRuntimeMode,
-          }),
+          // ru-code: the MCP overlay file is written HERE — only on an actual spawn
+          // (zone: mcpTurnOverlay). Empty fields ⇒ a clean no-MCP spawn.
+          Effect.flatMap(
+            mcpOverlayTurn.overlayFieldsForSpawn(input?.spawnKind ?? "fresh-spawn"),
+            (mcpOverlayFields) =>
+              providerService.startSession(threadId, {
+                threadId,
+                ...(preferredProvider ? { provider: preferredProvider } : {}),
+                providerInstanceId: desiredInstanceId,
+                ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+                // t3 #5941: the real thread title goes in at session create, so OpenCode
+                // stops minting a placeholder and mirroring it back over the user's title.
+                ...(thread.title ? { title: thread.title } : {}),
+                modelSelection: desiredModelSelection,
+                ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+                runtimeMode: desiredRuntimeMode,
+                // ru-code: the MCP overlay path + server allowlist for this spawn.
+                ...mcpOverlayFields,
+              }),
+          ),
       );
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -679,96 +710,126 @@ const make = Effect.gen(function* () {
           },
           createdAt,
         });
+        // ru-code: record the overlay state this (re)spawn was based on, so the next
+        // turn's `overlayChanged` check compares against it.
+        yield* mcpOverlayTurn.recordSpawn;
       });
 
-    const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
-    if (existingSessionThreadId) {
-      const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
-      const cwdChanged = effectiveCwd !== activeSession?.cwd;
-      const capabilities = yield* providerService.getCapabilities(desiredInstanceId);
-      const sessionModelSwitch = capabilities.sessionModelSwitch;
-      // ru-code: a capable adapter (qwen) applies runtime-mode changes live via per-turn
-      // setMode, so it must NOT respawn on a mode change. Every other adapter leaves the
-      // flag unset ⇒ shouldRestartForRuntimeMode === runtimeModeChanged ⇒ respawns as before.
-      const shouldRestartForRuntimeMode =
-        runtimeModeChanged && capabilities.supportsInSessionRuntimeMode !== true;
-      const modelChanged =
-        requestedModelSelection !== undefined &&
-        requestedModelSelection.model !== activeSession?.model;
-      const instanceChanged =
-        requestedModelSelection !== undefined &&
-        activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
-      const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
-      const previousModelSelection = threadModelSelections.get(threadId);
-      const shouldRestartForModelSelectionChange =
-        preferredProvider === "claudeAgent" &&
-        requestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, requestedModelSelection);
-      // ru-code: did this thread's effective skill/agent set change vs. what the live session spawned
-      // with? qwen reads them only at spawn, so a change re-spawns on this turn (resume preserves
-      // history). The fingerprint tracking + decision live in the ru-code gate service.
-      const catalogChanged = yield* respawnGate.changedForThread(threadId, thread.projectId);
+    // ru-code[HEAVY]: the spawn-decision region — respawn, reuse, or fresh spawn — is wrapped
+    // in one effect so an ephemeral overlay FILE (plaintext secrets), if this turn's spawn
+    // wrote one, is deleted the moment the region settles (success, failure, or interrupt):
+    // the file is only needed until a freshly spawned child boots and reads it; reuse turns
+    // and 0-server spawns never write one. The restart DECISION uses the in-memory
+    // fingerprint, never the file, so deleting it cannot trigger a spurious respawn next
+    // turn. Body is unchanged upstream logic, only indented.
+    const decideAndSpawn = Effect.gen(function* () {
+      const existingSessionThreadId =
+        thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
+      if (existingSessionThreadId) {
+        const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
+        const cwdChanged = effectiveCwd !== activeSession?.cwd;
+        const capabilities = yield* providerService.getCapabilities(desiredInstanceId);
+        const sessionModelSwitch = capabilities.sessionModelSwitch;
+        // ru-code: a capable adapter (qwen) applies runtime-mode changes live via per-turn
+        // setMode, so it must NOT respawn on a mode change. Every other adapter leaves the
+        // flag unset ⇒ shouldRestartForRuntimeMode === runtimeModeChanged ⇒ respawns as before.
+        const shouldRestartForRuntimeMode =
+          runtimeModeChanged && capabilities.supportsInSessionRuntimeMode !== true;
+        const modelChanged =
+          requestedModelSelection !== undefined &&
+          requestedModelSelection.model !== activeSession?.model;
+        const instanceChanged =
+          requestedModelSelection !== undefined &&
+          activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
+        const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
+        const previousModelSelection = threadModelSelections.get(threadId);
+        const shouldRestartForModelSelectionChange =
+          preferredProvider === "claudeAgent" &&
+          requestedModelSelection !== undefined &&
+          !Equal.equals(previousModelSelection, requestedModelSelection);
+        // ru-code: did this thread's effective skill/agent set change vs. what the live session spawned
+        // with? qwen reads them only at spawn, so a change re-spawns on this turn (resume preserves
+        // history). The fingerprint tracking + decision live in the ru-code gate service.
+        const catalogChanged = yield* respawnGate.changedForThread(threadId, thread.projectId);
+        // ru-code: the MCP overlay this thread's live session spawned with vs. the current one.
+        // A changed overlay (server edited / bound / unbound / extraArgs / tool policy / trust)
+        // re-spawns on this turn with resumeCursor — qwen only reads the overlay at spawn. The
+        // fingerprint subsumes the allow-list (removing an MCP changes it).
+        const overlayChanged = yield* mcpOverlayTurn.overlayChanged;
 
-      // ru-code: restart iff any dimension changed — extracted as a pure predicate so the decision
-      // (incl. the skill/agent `catalogChanged` dimension) is unit-tested in respawnDecision.test.ts.
-      if (
-        !shouldRestartProviderSession({
-          // ru-code: the base gates runtime-mode restart by capability (qwen applies the mode live via
-          // per-turn setMode), so feed the gated `shouldRestartForRuntimeMode` — NOT raw
-          // runtimeModeChanged — into the predicate's runtimeModeChanged slot.
-          runtimeModeChanged: shouldRestartForRuntimeMode,
+        // ru-code: restart iff any dimension changed — extracted as a pure predicate so the decision
+        // (incl. the skill/agent `catalogChanged` dimension) is unit-tested in respawnDecision.test.ts.
+        if (
+          !shouldRestartProviderSession({
+            // ru-code: the base gates runtime-mode restart by capability (qwen applies the mode live via
+            // per-turn setMode), so feed the gated `shouldRestartForRuntimeMode` — NOT raw
+            // runtimeModeChanged — into the predicate's runtimeModeChanged slot.
+            runtimeModeChanged: shouldRestartForRuntimeMode,
+            cwdChanged,
+            instanceChanged,
+            shouldRestartForModelChange,
+            shouldRestartForModelSelectionChange,
+            catalogChanged,
+            overlayChanged,
+          })
+        ) {
+          // ru-code: live session reused — nothing spawns, so no overlay file is written.
+          yield* mcpOverlayTurn.logReuseSkip;
+          return existingSessionThreadId;
+        }
+
+        const resumeCursor = shouldRestartForModelChange
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
+        yield* Effect.logInfo("provider command reactor restarting provider session", {
+          threadId,
+          existingSessionThreadId,
+          currentProvider: activeSession?.provider,
+          currentInstanceId,
+          desiredInstanceId,
+          desiredProvider: desiredModelSelection.instanceId,
+          currentRuntimeMode: thread.session?.runtimeMode,
+          desiredRuntimeMode: thread.runtimeMode,
+          runtimeModeChanged,
+          previousCwd: activeSession?.cwd,
+          desiredCwd: effectiveCwd,
           cwdChanged,
+          modelChanged,
           instanceChanged,
           shouldRestartForModelChange,
           shouldRestartForModelSelectionChange,
-          catalogChanged,
-        })
-      ) {
-        return existingSessionThreadId;
+          catalogChanged, // ru-code: a skill/subagent add/remove/sync forced this respawn (qwen re-reads at spawn)
+          // ru-code: the MCP overlay trigger — a changed overlay fingerprint re-spawns the session
+          // so qwen re-reads the overlay. Logged so an MCP-config-driven restart is visible.
+          overlayChanged,
+          currentOverlayFingerprint,
+          hasResumeCursor: resumeCursor !== undefined,
+        });
+        const restartedSession = yield* startProviderSession({
+          ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+          spawnKind: "respawn", // ru-code: refined into a per-cause overlay spawnReason
+        });
+        yield* Effect.logInfo("provider command reactor restarted provider session", {
+          threadId,
+          previousSessionId: existingSessionThreadId,
+          restartedSessionThreadId: restartedSession.threadId,
+          provider: restartedSession.provider,
+          runtimeMode: restartedSession.runtimeMode,
+          cwd: restartedSession.cwd,
+        });
+        yield* bindSessionToThread(restartedSession);
+        return restartedSession.threadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
-      yield* Effect.logInfo("provider command reactor restarting provider session", {
-        threadId,
-        existingSessionThreadId,
-        currentProvider: activeSession?.provider,
-        currentInstanceId,
-        desiredInstanceId,
-        desiredProvider: desiredModelSelection.instanceId,
-        currentRuntimeMode: thread.session?.runtimeMode,
-        desiredRuntimeMode: thread.runtimeMode,
-        runtimeModeChanged,
-        previousCwd: activeSession?.cwd,
-        desiredCwd: effectiveCwd,
-        cwdChanged,
-        modelChanged,
-        instanceChanged,
-        shouldRestartForModelChange,
-        shouldRestartForModelSelectionChange,
-        catalogChanged, // ru-code: a skill/subagent add/remove/sync forced this respawn (qwen re-reads at spawn)
-        hasResumeCursor: resumeCursor !== undefined,
-      });
-      const restartedSession = yield* startProviderSession(
-        resumeCursor !== undefined ? { resumeCursor } : undefined,
-      );
-      yield* Effect.logInfo("provider command reactor restarted provider session", {
-        threadId,
-        previousSessionId: existingSessionThreadId,
-        restartedSessionThreadId: restartedSession.threadId,
-        provider: restartedSession.provider,
-        runtimeMode: restartedSession.runtimeMode,
-        cwd: restartedSession.cwd,
-      });
-      yield* bindSessionToThread(restartedSession);
-      return restartedSession.threadId;
-    }
+      const startedSession = yield* startProviderSession(undefined);
+      yield* bindSessionToThread(startedSession);
+      return startedSession.threadId;
+    });
 
-    const startedSession = yield* startProviderSession(undefined);
-    yield* bindSessionToThread(startedSession);
-    return startedSession.threadId;
+    // ru-code: delete the ephemeral overlay file once the spawn-decision region settles
+    // (see the HEAVY note above) — IF this turn wrote one; reuse turns and 0-server
+    // spawns write nothing.
+    return yield* mcpOverlayTurn.withCleanup(decideAndSpawn);
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
@@ -1454,6 +1515,13 @@ const make = Effect.gen(function* () {
         lastError: thread.session?.lastError ?? null,
         updatedAt: now,
       },
+      // ru-code: preserve-modes seam — `lastError` above is merely CARRIED
+      // OVER from this handler's projection-snapshot read; declaring preserve
+      // makes the decider re-resolve it against the CURRENT session, so a
+      // stop racing a concurrent banner write (the user stopping BECAUSE an
+      // error just appeared) can never erase that banner. `activeTurnId` is
+      // an intentional clear — no flag.
+      preserveLastError: true,
       createdAt: now,
     });
   });

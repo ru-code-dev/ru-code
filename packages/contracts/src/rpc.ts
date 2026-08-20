@@ -209,6 +209,11 @@ import {
 } from "@smart-tools/qwen-cli-commands-manager/contracts";
 
 export { SKILL_CATALOG_METHODS, AGENT_CATALOG_METHODS, COMMAND_CATALOG_METHODS };
+// ru-code: the MCP manager RPC surface (reads + subscriptions; mutations reuse
+// orchestration.dispatchCommand) — minted in its package, spread into WsRpcGroup below.
+import { mcpManagerRpcs, MCP_MANAGER_METHODS } from "@smart-tools/qwen-cli-mcp-manager/contracts";
+
+export { MCP_MANAGER_METHODS };
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1103,4 +1108,6 @@ export const WsRpcGroup = RpcGroup.make(
   ...skillCatalogRpcs,
   ...agentCatalogRpcs,
   ...commandCatalogRpcs,
+  // ru-code: the 5 MCP manager RPCs (snapshot / setActiveProject / recheck + 2 subscriptions).
+  ...mcpManagerRpcs,
 );

@@ -21,6 +21,8 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type * as AcpSchema from "effect-acp/schema";
 
+import { PREWARM_GENERIC_INSTANCES } from "@ru-code/qwen/constants";
+
 import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
@@ -143,9 +145,16 @@ it.effect(
         assert.strictEqual(completion.payload.state, "completed");
       }
 
-      // (c) NO respawn at the adapter level: exactly one child spawned for the
-      // whole two-turn session, and the session was never torn down between turns.
-      assert.strictEqual(spawnCount, 1, "the adapter spawned exactly one child (no respawn)");
+      // (c) NO respawn at the adapter level (ru-code warm engine v2): the
+      // adapter boot-prewarms 2 generic spares, the session start TAKES one
+      // and refills one — so 3 spawns total, ONE session child. The
+      // no-`session.exited`-between-turns assertion below still proves the
+      // session itself was never respawned.
+      assert.strictEqual(
+        spawnCount,
+        PREWARM_GENERIC_INSTANCES + 1,
+        "boot spares + 1 refill; one session child",
+      ); // ru-code: was 1 pre-pool
       assert.isUndefined(
         events.find((e) => e.type === "session.exited"),
         "session was not torn down between turns",

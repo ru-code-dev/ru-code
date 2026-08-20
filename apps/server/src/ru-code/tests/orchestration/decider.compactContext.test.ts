@@ -11,7 +11,10 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// ru-code: memory MCP secret store for the decider context.
+import { McpManagerSecretStoreMemory } from "../../mcp/mcpPorts.ts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { expect, it } from "@effect/vitest";
 
 import { decideOrchestrationCommand } from "../../../orchestration/decider.ts";
@@ -70,46 +73,50 @@ const seedReadModel = Effect.gen(function* () {
   });
 });
 
-it.layer(NodeServices.layer)("decider context-compact", (it) => {
-  it.effect("thread.context.compact → thread.context-compact-requested for a known thread", () =>
-    Effect.gen(function* () {
-      const readModel = yield* seedReadModel;
-      const planned = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.context.compact",
-          commandId: CommandId.make("cmd-compact"),
-          threadId: THREAD_ID,
-          createdAt: NOW,
-        },
-        readModel,
-      });
-      const events = Array.isArray(planned) ? planned : [planned];
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: "thread.context-compact-requested",
-        aggregateKind: "thread",
-        aggregateId: THREAD_ID,
-        commandId: CommandId.make("cmd-compact"),
-        payload: { threadId: THREAD_ID, createdAt: NOW },
-      });
-    }),
-  );
-
-  it.effect("thread.context.compact for an unknown thread is rejected (requireThread)", () =>
-    Effect.gen(function* () {
-      const readModel = yield* seedReadModel;
-      const exit = yield* Effect.exit(
-        decideOrchestrationCommand({
+// ru-code: the decider now carries the MCP secret-store port in its context.
+it.layer(Layer.mergeAll(NodeServices.layer, McpManagerSecretStoreMemory))(
+  "decider context-compact",
+  (it) => {
+    it.effect("thread.context.compact → thread.context-compact-requested for a known thread", () =>
+      Effect.gen(function* () {
+        const readModel = yield* seedReadModel;
+        const planned = yield* decideOrchestrationCommand({
           command: {
             type: "thread.context.compact",
-            commandId: CommandId.make("cmd-compact-ghost"),
-            threadId: ThreadId.make("thread-ghost"),
+            commandId: CommandId.make("cmd-compact"),
+            threadId: THREAD_ID,
             createdAt: NOW,
           },
           readModel,
-        }),
-      );
-      expect(exit._tag).toBe("Failure");
-    }),
-  );
-});
+        });
+        const events = Array.isArray(planned) ? planned : [planned];
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          type: "thread.context-compact-requested",
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          commandId: CommandId.make("cmd-compact"),
+          payload: { threadId: THREAD_ID, createdAt: NOW },
+        });
+      }),
+    );
+
+    it.effect("thread.context.compact for an unknown thread is rejected (requireThread)", () =>
+      Effect.gen(function* () {
+        const readModel = yield* seedReadModel;
+        const exit = yield* Effect.exit(
+          decideOrchestrationCommand({
+            command: {
+              type: "thread.context.compact",
+              commandId: CommandId.make("cmd-compact-ghost"),
+              threadId: ThreadId.make("thread-ghost"),
+              createdAt: NOW,
+            },
+            readModel,
+          }),
+        );
+        expect(exit._tag).toBe("Failure");
+      }),
+    );
+  },
+);

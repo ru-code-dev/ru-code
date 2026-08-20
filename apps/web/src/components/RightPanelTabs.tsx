@@ -26,6 +26,9 @@ import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
+// ru-code: terminal UI visibility switch — hides the Terminal surface entries entirely.
+import { useTerminalUiEnabled } from "../ru-code/platform-compat/terminalUiGate";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import { readLocalApi } from "~/localApi";
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -163,6 +166,8 @@ function RightPanelEmptyState(props: {
   onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
+  // ru-code: terminal UI visibility switch (card filtered out below).
+  terminalHidden: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
@@ -183,16 +188,21 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddBrowser,
       badgeCount: 0,
     },
-    {
-      label: "Terminal",
-      description: "Start a shell in this workspace.",
-      icon: TerminalSquare,
-      shortcut: "T",
-      available: props.terminalAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.terminal,
-      onClick: props.onAddTerminal,
-      badgeCount: 0,
-    },
+    // ru-code: Terminal card removed entirely when the visibility switch is off.
+    ...(props.terminalHidden
+      ? []
+      : [
+          {
+            label: "Terminal",
+            description: "Start a shell in this workspace.",
+            icon: TerminalSquare,
+            shortcut: "T",
+            available: props.terminalAvailable,
+            disabledReason: SURFACE_UNAVAILABLE_HINTS.terminal,
+            onClick: props.onAddTerminal,
+            badgeCount: 0,
+          },
+        ]),
     {
       label: "Files",
       description: "Browse and read workspace files.",
@@ -516,6 +526,8 @@ function SurfaceIcon({
 }
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
+  // ru-code: TERMINAL_UI_VISIBILITY — when off, the Terminal card and the "+" menu item vanish.
+  const terminalUiEnabled = useTerminalUiEnabled(usePrimaryEnvironmentId());
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -704,14 +716,17 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Globe2 />
                     Browser
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.terminalAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.terminal}
-                    onClick={props.onAddTerminal}
-                  >
-                    <TerminalSquare />
-                    Terminal
-                  </SurfaceMenuItem>
+                  {/* ru-code: hidden with the terminal UI visibility switch. */}
+                  {terminalUiEnabled ? (
+                    <SurfaceMenuItem
+                      available={props.terminalAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.terminal}
+                      onClick={props.onAddTerminal}
+                    >
+                      <TerminalSquare />
+                      Terminal
+                    </SurfaceMenuItem>
+                  ) : null}
                   <SurfaceMenuItem
                     available={props.filesAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.files}
@@ -762,6 +777,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
+            // ru-code: terminal UI visibility switch.
+            terminalHidden={!terminalUiEnabled}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}

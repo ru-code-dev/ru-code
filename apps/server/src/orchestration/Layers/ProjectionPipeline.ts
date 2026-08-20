@@ -46,6 +46,14 @@ import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
+// ru-code: MCP catalog/binding SQL projectors + repos (bodies in the manager package).
+import {
+  makeMcpBindingProjector,
+  makeMcpCatalogProjector,
+  McpBindingRepository,
+  McpCatalogRepository,
+  McpRepositoriesLive,
+} from "@smart-tools/qwen-cli-mcp-manager/server";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -67,6 +75,9 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  // ru-code: MCP manager projections.
+  mcpCatalog: "projection.mcp-catalog",
+  mcpBindings: "projection.mcp-bindings",
 } as const;
 
 type ProjectorName =
@@ -475,6 +486,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const eventStore = yield* OrchestrationEventStore;
     const projectionStateRepository = yield* ProjectionStateRepository;
     const projectionProjectRepository = yield* ProjectionProjectRepository;
+    // ru-code: MCP repos (package services, memoized → shared with the snapshot query).
+    const mcpCatalogRepository = yield* McpCatalogRepository;
+    const mcpBindingRepository = yield* McpBindingRepository;
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -1633,10 +1647,30 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    // ru-code: MCP catalog/binding SQL projectors (bodies in the manager package; the
+    // package error is re-labelled into the pipeline's repository error).
+    const mcpProjectorError = toPersistenceSqlError("ProjectionPipeline.mcp");
+    const applyMcpCatalogProjection: ProjectorDefinition["apply"] = (event) =>
+      makeMcpCatalogProjector(
+        mcpCatalogRepository,
+        mcpBindingRepository,
+      )(event).pipe(Effect.mapError(mcpProjectorError));
+    const applyMcpBindingProjection: ProjectorDefinition["apply"] = (event) =>
+      makeMcpBindingProjector(mcpBindingRepository)(event).pipe(Effect.mapError(mcpProjectorError));
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,
+      },
+      // ru-code: MCP manager projections (catalog first — binding rows reference servers).
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.mcpCatalog,
+        apply: applyMcpCatalogProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.mcpBindings,
+        apply: applyMcpBindingProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
@@ -1773,4 +1807,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  // ru-code: MCP catalog + binding + probe-cache repos (memoized → shared with the
+  // snapshot query and the MCP runtime services).
+  Layer.provideMerge(McpRepositoriesLive),
 );

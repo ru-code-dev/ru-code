@@ -1642,6 +1642,32 @@ const make = Effect.gen(function* () {
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
+        // ru-code: preserve-modes seam (ThreadSessionSetCommand). The arms above
+        // that merely CARRY OVER the stale `thread.session` read (instead of
+        // intentionally setting/clearing) declare "preserve" so the decider
+        // re-resolves them against the CURRENT session at its serialized
+        // execution point — a concurrent writer (the reactor's start-failure
+        // banner) can no longer be clobbered by this read-modify-write.
+        // DELIBERATE EXCEPTION: the two intentional-SET arms fall back to the
+        // stale read when their event carries no reason/errorMessage — those
+        // subcases keep the (rare) clobber window, because declaring preserve
+        // there could resolve to null and lose the guaranteed banner.
+        const preserveLastError =
+          event.type === "session.state.changed" && event.payload.state === "error"
+            ? false // intentionally sets the error text
+            : event.type === "turn.completed" &&
+                normalizeRuntimeTurnState(event.payload.state) === "failed"
+              ? event.payload.showNotification === false // banner-suppressed ⇒ carried over
+              : status !== "ready"; // "ready" intentionally clears; the rest carries over
+        const preserveActiveTurnId =
+          event.type === "session.started" ||
+          event.type === "thread.started" ||
+          (event.type === "session.state.changed" &&
+            // ru-code: upstream 501ce27b8 (#3159) made the non-active states an
+            // intentional CLEAR — only the carry-over arm may declare preserve.
+            sessionStatusAllowsActiveTurn(
+              orchestrationSessionStatusFromRuntimeState(event.payload.state),
+            ));
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1681,6 +1707,9 @@ const make = Effect.gen(function* () {
             ...(settledTurnState !== undefined && eventTurnId !== null
               ? { settledTurnState, settledTurnId: eventTurnId }
               : {}),
+            // ru-code: preserve-modes seam — see the flags' derivation above.
+            ...(preserveLastError ? { preserveLastError: true } : {}),
+            ...(preserveActiveTurnId ? { preserveActiveTurnId: true } : {}),
             session: {
               threadId: thread.id,
               status,

@@ -248,6 +248,9 @@ const createManager = (
         ...(options.subprocessInspector !== undefined
           ? { subprocessInspector: options.subprocessInspector }
           : {}),
+        // ru-code: inspection is settings-gated (off by default, and this harness has no
+        // settings service) — this harness always intends inspection to run.
+        subprocessInspectionEnabled: Effect.succeed(true),
         ...(options.subprocessPollIntervalMs !== undefined
           ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
           : {}),

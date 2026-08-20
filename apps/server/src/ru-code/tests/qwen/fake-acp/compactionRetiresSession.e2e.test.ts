@@ -134,7 +134,11 @@ it.effect("a CONFIRMED compression retires the session; the next start resumes i
         [FAKE_SESSION_ID],
         "the restart must take session/load with the same sessionId",
       );
-      assert.strictEqual(spawns, 2, "the resume runs on a fresh child");
+      // ru-code (warm engine v2): was 2 pre-pool — now 2 boot spares + a
+      // take/refill per start (first start and the post-retire resume): 4
+      // total, zero cold boots. The session/load assertion above still
+      // proves the compressed resume path.
+      assert.strictEqual(spawns, 4, "2 boot spares + refill per start (x2)");
 
       const secondTurn = yield* adapter
         .sendTurn({ threadId, input: "снова привет", runtimeMode: "approval-required" })
@@ -224,7 +228,10 @@ for (const shape of [
           .sendTurn({ threadId, input: "привет", runtimeMode: "approval-required" })
           .pipe(Effect.timeout("10 seconds"));
         yield* awaitReplyDelta(collected, turn.turnId);
-        assert.strictEqual(spawns, 1, "same child serves the follow-up turn");
+        // ru-code (warm engine v2): was 1 pre-pool — 2 boot spares + one
+        // refill after the take; the follow-up turn still rides the SAME
+        // session child (no session.exited above proves it).
+        assert.strictEqual(spawns, 3, "2 boot spares + 1 refill; one session child");
         yield* Fiber.interrupt(eventsFiber);
       }).pipe(
         Effect.scoped,

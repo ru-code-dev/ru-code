@@ -45,6 +45,8 @@ import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+// ru-code: memory/no-op MCP ports for the engine decider context.
+import { McpManagerSecretStoreMemory } from "../../ru-code/mcp/mcpPorts.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -305,12 +307,16 @@ describe("CheckpointReactor", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
     );
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provide(ThreadPlanProgress.layer),
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
     );
 
     const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {

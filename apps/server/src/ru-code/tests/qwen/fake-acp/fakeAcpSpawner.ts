@@ -13,7 +13,7 @@ import * as Queue from "effect/Queue";
 import * as Sink from "effect/Sink";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   type FakeAcpScript,
@@ -42,7 +42,48 @@ const brokenPipeError = new PlatformError.PlatformError(
  */
 export interface FakeAcpSpawnerObservers {
   readonly onSpawn?: () => void;
+  /**
+   * Fires when a kill signal reaches a LIVE child (adapter forceKill or a
+   * scope close finding the process still running) — mirrors the real
+   * spawner, where killing an already-exited pid is an ESRCH no-op. A child
+   * that exited on its own never counts here; watch `onDispose` for reaping.
+   */
   readonly onKill?: () => void;
+  /**
+   * ru-code (warm engine failure modes): fires exactly once per child when
+   * its scope is closed (pool discard/evict/drain or session teardown) —
+   * REGARDLESS of whether the child was killed or had already self-exited.
+   * The observable for "the pool reaped this slot".
+   */
+  readonly onDispose?: () => void;
+  /**
+   * ru-code (warm engine): spawn-recipe capture — fires with the exact
+   * command/args/env/cwd of every spawn, so pool tests can assert the
+   * byte-identical-spawn invariant (argv allowlist, slot overlay env path,
+   * QWEN_CODE_NO_RELAUNCH).
+   */
+  readonly onSpawnInput?: (input: {
+    readonly command: string;
+    readonly args: ReadonlyArray<string>;
+    readonly cwd: string | undefined;
+    readonly env: Readonly<Record<string, string | undefined>> | undefined;
+  }) => void;
+  /**
+   * ru-code (warm engine failure modes): per-child script override, keyed by
+   * 1-based spawn index. Lets a pool test give SPECIFIC children a failure
+   * personality (e.g. the two boot-prewarmed spares crash at initialize while
+   * later spawns are healthy). Returned fields shallow-merge over the base
+   * script; `undefined` keeps the base script untouched.
+   */
+  readonly perSpawnScript?: (spawnIndex: number) => Partial<FakeAcpScript> | undefined;
+  /**
+   * ru-code (warm engine failure modes): hands the test each child's raw
+   * transport controls, keyed by 1-based spawn index — an EXTERNAL kill switch.
+   * Lets a test make a PARKED warm spare die on its own (`exit(1)`) at a moment
+   * the test controls, reproducing an idle crash (OOM kill, uncaught exception)
+   * of a pooled child that has no session attached.
+   */
+  readonly onSpawnControls?: (spawnIndex: number, controls: FakeAcpTransportControls) => void;
 }
 
 /**
@@ -69,7 +110,14 @@ export const fakeAcpSpawnerLayer = (
       // handle, `onSpawn` still counts every spawn).
       const spawnFakeChild = Effect.gen(function* () {
         spawnCount += 1;
+        const spawnIndex = spawnCount;
         observers?.onSpawn?.();
+        // ru-code (warm engine failure modes): this child's effective script —
+        // the base script with the per-spawn override merged on top.
+        const effectiveScript: FakeAcpScript = {
+          ...script,
+          ...observers?.perSpawnScript?.(spawnIndex),
+        };
         // client→server (the agent reads this) and server→client (the client
         // reads handle.stdout from this). `Cause.Done<void>` is the
         // clean-completion type used by effect-acp's own in-memory stdio.
@@ -80,22 +128,41 @@ export const fakeAcpSpawnerLayer = (
           PlatformError.PlatformError
         >();
 
+        let exited = false;
         const controls: FakeAcpTransportControls = {
           // malformed frame → client AcpProtocolParseError (C1)
           writeRaw: (bytes) =>
             Queue.offer(serverToClient, encoder.encode(bytes)).pipe(Effect.asVoid),
-          // EOF + failed exit status → client AcpTransportError (C4)
+          // EOF + failed exit status → client AcpTransportError (C4). The
+          // process itself lives (broken pipe ≠ death) — stdin stays open.
           closeTransport: Queue.end(serverToClient).pipe(
             Effect.andThen(Deferred.fail(exitDeferred, brokenPipeError)),
             Effect.asVoid,
           ),
-          // EOF + exit status `code` → client AcpProcessExitedError (B1)
+          // Process DEATH: EOF + exit status `code` → client
+          // AcpProcessExitedError (B1). Both pipes end — a dead process can
+          // neither write NOR READ, so the agent stops serving requests and
+          // script hooks stop firing, exactly like a real child.
           exit: (code) =>
-            Queue.end(serverToClient).pipe(
+            Effect.sync(() => {
+              exited = true;
+            }).pipe(
+              Effect.andThen(Queue.end(serverToClient)),
+              Effect.andThen(Queue.end(clientToServer)),
               Effect.andThen(Deferred.succeed(exitDeferred, ChildProcessSpawner.ExitCode(code))),
               Effect.asVoid,
             ),
         };
+
+        // ru-code (warm engine failure modes): external per-child kill switch.
+        observers?.onSpawnControls?.(spawnIndex, controls);
+
+        // ru-code (warm engine failure modes): boot-time stdout pollution —
+        // raw bytes land in front of the host's ndjson parser before the
+        // agent's first frame (see the `preludeStdout` doc in fakeAcpCore).
+        if (effectiveScript.preludeStdout !== undefined) {
+          yield* Queue.offer(serverToClient, encoder.encode(effectiveScript.preludeStdout));
+        }
 
         const agentStdio = Stdio.make({
           args: Effect.succeed([]),
@@ -110,29 +177,53 @@ export const fakeAcpSpawnerLayer = (
           stderr: () => Sink.drain,
         });
 
-        yield* runFakeAcpAgent(agentStdio, script, controls).pipe(
+        yield* runFakeAcpAgent(agentStdio, effectiveScript, controls).pipe(
           // The agent fiber may end abnormally when we tear the transport down;
           // that is the scenario under test, not a harness failure.
           Effect.catchCause(() => Effect.void),
           Effect.forkIn(layerScope),
         );
 
+        // ru-code (warm engine): one disposal per child — `onDispose` fires
+        // once whether the reap came from an explicit forceKill or from the
+        // scope finalizer below; `onKill` additionally fires only when the
+        // child was STILL ALIVE (killing an exited pid is an ESRCH no-op on
+        // the real spawner).
+        let disposed = false;
+        const performKill = Effect.sync(() => {
+          if (!disposed) {
+            disposed = true;
+            if (!exited) {
+              exited = true;
+              observers?.onKill?.();
+            }
+            observers?.onDispose?.();
+          }
+        }).pipe(
+          Effect.andThen(Queue.end(serverToClient)),
+          Effect.andThen(Queue.end(clientToServer)),
+          Effect.andThen(Deferred.succeed(exitDeferred, ChildProcessSpawner.ExitCode(137))),
+          Effect.asVoid,
+          Effect.ignore,
+        );
+        // ru-code (warm engine): the REAL node spawner spawns via
+        // Effect.acquireRelease — closing the spawn scope kills the child.
+        // Mirror that so scope-driven teardowns (warm-pool discard/evict/
+        // drain) kill fake children exactly like production.
+        yield* Effect.addFinalizer(() => performKill);
+
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(spawnCount),
           exitCode: Deferred.await(exitDeferred),
-          isRunning: Effect.succeed(true),
+          isRunning: Effect.sync(() => !exited),
           // Adapter forceKill (SIGKILL): EOF + non-zero exit so the in-flight
           // prompt fails into the finalizer AND the child-exit watcher fires.
-          kill: () =>
-            Effect.sync(() => observers?.onKill?.()).pipe(
-              Effect.andThen(Queue.end(serverToClient)),
-              Effect.andThen(Deferred.succeed(exitDeferred, ChildProcessSpawner.ExitCode(137))),
-              Effect.asVoid,
-              Effect.ignore,
-            ),
+          kill: () => performKill,
           unref: Effect.succeed(Effect.void),
+          // Writes to a dead child's stdin are dropped (EPIPE-like) — the
+          // ended queue must not defect the writer.
           stdin: Sink.forEach((bytes: Uint8Array) =>
-            Queue.offer(clientToServer, bytes).pipe(Effect.asVoid),
+            Queue.offer(clientToServer, bytes).pipe(Effect.asVoid, Effect.ignore),
           ),
           stdout: Stream.fromQueue(serverToClient),
           stderr: Stream.empty,
@@ -142,7 +233,18 @@ export const fakeAcpSpawnerLayer = (
         });
       });
 
-      return ChildProcessSpawner.make(() => spawnFakeChild);
+      return ChildProcessSpawner.make((command) => {
+        // ru-code (warm engine): expose the exact spawn recipe to tests.
+        if (observers?.onSpawnInput && ChildProcess.isStandardCommand(command)) {
+          observers.onSpawnInput({
+            command: command.command,
+            args: command.args,
+            cwd: command.options.cwd,
+            env: command.options.env,
+          });
+        }
+        return spawnFakeChild;
+      });
     }),
   );
 

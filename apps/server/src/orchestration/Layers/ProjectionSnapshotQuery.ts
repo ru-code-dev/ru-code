@@ -58,6 +58,12 @@ import {
 } from "../threadDetailCursor.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
+// ru-code: MCP repos — the command read-model folds catalog + bindings for the decider.
+import {
+  McpBindingRepository,
+  McpCatalogRepository,
+  McpRepositoriesLive,
+} from "@smart-tools/qwen-cli-mcp-manager/server";
 import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
@@ -353,6 +359,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const sql = yield* SqlClient.SqlClient;
+  // ru-code: MCP repos (package services, memoized → the same instances the pipeline uses).
+  const mcpCatalogRepository = yield* McpCatalogRepository;
+  const mcpBindingRepository = yield* McpBindingRepository;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const repositoryIdentityResolutionConcurrency = 4;
   const resolveRepositoryIdentitiesForProjects = Effect.fn(
@@ -1792,7 +1801,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       .pipe(
         Effect.flatMap(
           ([projectRows, threadRows, proposedPlanRows, sessionRows, latestTurnRows, stateRows]) =>
-            Effect.sync(() => {
+            // ru-code: gen (was sync) — the MCP fold below reads the two package repos.
+            Effect.gen(function* () {
               let updatedAt: string | null = null;
               const projects: OrchestrationProject[] = [];
               const threads: OrchestrationThread[] = [];
@@ -1921,10 +1931,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 });
               }
 
+              // ru-code: fold current MCP state into the command read-model (the decider's
+              // invariants validate mcp.* commands against it).
+              const mcpCatalog = yield* mcpCatalogRepository.listAll();
+              const mcpBindings = yield* mcpBindingRepository.listAll();
+
               return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
+                mcpCatalog,
+                mcpBindings,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
@@ -2833,4 +2850,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 export const OrchestrationProjectionSnapshotQueryLive = Layer.effect(
   ProjectionSnapshotQuery,
   makeProjectionSnapshotQuery,
+).pipe(
+  // ru-code: MCP repos (memoized → shared with the pipeline / MCP runtime services).
+  Layer.provide(McpRepositoriesLive),
 );

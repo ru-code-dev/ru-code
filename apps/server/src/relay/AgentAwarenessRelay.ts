@@ -349,16 +349,25 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
     if (!publishAgentActivity) {
-      yield* Effect.logDebug("agent activity publish skipped; publication disabled", {
-        threadId,
-      });
+      // ru-code: gated — fires per queued thread publish while relay publication is off.
+      if (!HIDE_USELESS_LOGS) {
+        yield* Effect.logDebug("agent activity publish skipped; publication disabled", {
+          threadId,
+        });
+      }
       return;
     }
     const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
     if (!relayConfig) {
-      yield* Effect.logDebug("agent activity publish skipped; relay link credentials unavailable", {
-        threadId,
-      });
+      // ru-code: gated — same no-signal spam when relay credentials are absent.
+      if (!HIDE_USELESS_LOGS) {
+        yield* Effect.logDebug(
+          "agent activity publish skipped; relay link credentials unavailable",
+          {
+            threadId,
+          },
+        );
+      }
       return;
     }
     const relayClient = yield* makeRelayClient(relayConfig);
@@ -622,11 +631,15 @@ export const make = Effect.gen(function* () {
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
           const threadId = eventThreadId(event);
           if (threadId === null) {
+            // ru-code: gated — per-domain-event spam, no signal in normal operation.
+            if (HIDE_USELESS_LOGS) return Effect.void;
             return Effect.logDebug("agent activity publishing ignored event without thread id", {
               eventType: event.type,
             });
           }
           if (!shouldPublishAgentAwarenessEvent(event)) {
+            // ru-code: gated — per-domain-event spam, no signal in normal operation.
+            if (HIDE_USELESS_LOGS) return Effect.void;
             return Effect.logDebug(
               "agent activity publishing ignored event without activity changes",
               {
@@ -635,6 +648,8 @@ export const make = Effect.gen(function* () {
               },
             );
           }
+          // ru-code: gated — the enqueue always runs; only the per-event trace is spam.
+          if (HIDE_USELESS_LOGS) return worker.enqueue(threadId);
           return Effect.logDebug("agent activity publishing queued thread publish", {
             eventType: event.type,
             threadId,

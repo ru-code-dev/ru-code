@@ -39,6 +39,10 @@ import * as Semaphore from "effect/Semaphore";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 
 import * as ProcessRunner from "../processRunner.ts";
+// ru-code: port scanning is opt-in (settings gate, default OFF) and the Windows probe method
+// is switchable — the recurring powershell spawns are heavy and setup-dependent (zone modules).
+import { PORT_SCAN_WINDOWS_METHOD } from "@ru-code/platform-compat/constants";
+import { capturePortScanGate } from "../ru-code/platform-compat/portScanGate.ts";
 
 export class PortDiscovery extends Context.Service<
   PortDiscovery,
@@ -294,6 +298,8 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const hostPlatform = yield* HostProcessPlatform;
   const httpClient = (yield* HttpClient.HttpClient).pipe(HttpClient.withScope);
+  // ru-code: settings captured at construction; the check re-reads the live value per scan.
+  const portScanEnabled = yield* capturePortScanGate;
   const stateRef = yield* Ref.make<ScannerState>({
     listeners: new Map(),
     terminalProcesses: new Map(),
@@ -480,6 +486,11 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   const scanUnlocked = Effect.fn("PortDiscovery.scanUnlocked")(function* (
     configuredUrls: ReadonlyArray<string>,
   ) {
+    // ru-code: opt-in gate BEFORE any child process spawns — `preview.portScanEnabled`
+    // (Settings, default OFF on every platform/install). Disabled ⇒ no probes, empty result.
+    if (!(yield* portScanEnabled)) {
+      return { discovered: [], configured: new Map() } satisfies WebProbeSnapshot;
+    }
     const state = yield* Ref.get(stateRef);
     const terminalByProcessId = new Map<number, TerminalProcessOwner>();
     for (const registration of state.terminalProcesses.values()) {
@@ -488,6 +499,11 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       }
     }
     if (hostPlatform === "win32") {
+      // ru-code: pure-Node loopback probes by default — zero child processes; the legacy
+      // powershell listener enumeration stays reachable via PORT_SCAN_WINDOWS_METHOD.
+      if (PORT_SCAN_WINDOWS_METHOD === "node") {
+        return yield* probeWebServers(yield* probeCommonPorts(), configuredUrls);
+      }
       const recoverWindowsProbeFailure = recoverProcessProbeFailure("windows-listeners");
       const command =
         'Get-NetTCPConnection -State Listen -ErrorAction Stop | ForEach-Object { $processName = (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName; Write-Output "$($_.LocalAddress)|$($_.LocalPort)|$($_.OwningProcess)|$processName" }';

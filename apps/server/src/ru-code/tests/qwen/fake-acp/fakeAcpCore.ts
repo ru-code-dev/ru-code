@@ -123,6 +123,16 @@ export interface FakeAcpScript {
    * absent/invalid cursor falls back to a fresh start).
    */
   readonly onCreateSession?: () => void;
+  /**
+   * ru-code: EFFECTFUL session/new observation — runs (awaited) inside the
+   * handler BEFORE the response, in the fake agent's fiber. Lets a test
+   * observe bind-time state that only exists during the handshake (e.g. the
+   * slot overlay file's live bytes) through Effect services it captured in
+   * its own context, with no synchronous fs escape hatch. Keep the effect
+   * INFALLIBLE (pipe `orDie`): a failing reader derails the fake handshake,
+   * which the host typically sees as a start timeout — not as your error.
+   */
+  readonly onCreateSessionEffect?: () => Effect.Effect<void>;
   readonly onLoadSession?: (sessionId: string) => void;
   /**
    * ru-code: history replay DURING `session/load`. Real qwen re-sends the whole
@@ -145,15 +155,64 @@ export interface FakeAcpScript {
    *   - "hang"         → never respond (simulates a wedged `cli --acp` boot; the
    *                      adapter's start timeout must convert this into an error).
    *   - "error"        → reply with a JSON-RPC error (start fails cleanly).
+   *   - "exit"         → the PROCESS DIES (exit 1) instead of responding — real
+   *                      qwen 0.13.1 does exactly this on `session/load` of a
+   *                      session file with a corrupt non-first line: jsonl.read
+   *                      returns [] for the whole file (jsonl-utils.ts:96-109),
+   *                      loadSession → undefined, and loadCliConfig calls
+   *                      process.exit(1) (config.ts:998-1002) — a process death
+   *                      mid-request, NOT a JSON-RPC error.
    */
-  readonly startBehavior?: "ok" | "hang" | "error";
+  readonly startBehavior?: "ok" | "hang" | "error" | "exit";
   /**
    * ru-code: overrides the START behaviour for `session/load` ONLY (`session/new`
    * keeps following `startBehavior`). Lets a resume test express "load fails but
    * a fresh create succeeds" — the fallback path. Omitted ⇒ `session/load`
    * follows `startBehavior`, exactly as before.
    */
-  readonly loadBehavior?: "ok" | "error";
+  readonly loadBehavior?: "ok" | "error" | "exit";
+  /**
+   * ru-code: how the fake answers `initialize` — the very first RPC, before any
+   * session exists. Real qwen only reaches its ACP loop at the END of main()
+   * (gemini.tsx:410); everything before it can kill or wedge the process with
+   * the host's initialize left pending:
+   *   - "ok" (default) → normal capabilities response.
+   *   - "hang"         → never respond (boot stalled — e.g. a network-stalled
+   *                      boot auth refresh, initializeApp → refreshAuth, runs
+   *                      BEFORE runAcpAgent creates the connection).
+   *   - "exit"         → process dies without responding (fatal boot error —
+   *                      e.g. malformed settings JSON throws FatalConfigError,
+   *                      exit code 52, settings.ts:726-733 + errors.ts:154).
+   * Drives the WARMUP failure paths of the warm pool (a prewarmed child that
+   * crashes or wedges before it ever answers initialize).
+   */
+  readonly initializeBehavior?: "ok" | "hang" | "exit";
+  /** Exit code for `initializeBehavior: "exit"`. Default 52 (FatalConfigError). */
+  readonly initializeExitCode?: number;
+  /**
+   * ru-code: how the parked prompt settles after a `session/cancel`.
+   *   - "cancelled" (default) → resolve with stopReason "cancelled" (qwen's
+   *     normal next-checkpoint cancel, Session.ts:293-295).
+   *   - "error" → FAIL the pending `session/prompt` with a JSON-RPC error —
+   *     real qwen has this race: when the abort fires as an AbortError thrown
+   *     by the underlying stream (instead of a yield), the catch at
+   *     Session.ts:330-339 rethrows non-429 errors, so the cancelled prompt
+   *     resolves as an ERROR response, not a cancelled stopReason. A host that
+   *     already settled the turn on Stop must not let this late error corrupt
+   *     its state.
+   */
+  readonly cancelResponse?: "cancelled" | "error";
+  /**
+   * ru-code: raw bytes the SHELL writes to the child's stdout BEFORE the agent
+   * serves its first frame — boot-time stdout pollution. Real qwen redirects
+   * console.log/info/debug to stderr only INSIDE runAcpAgent (acpAgent.ts:81-83);
+   * anything printed to real stdout before that line (or any direct
+   * process.stdout.write — never redirected) lands in front of the host's
+   * ndjson parser. Stock 0.13.1 is clean on the traced paths, but fork builds /
+   * wrappers can differ — the pool must survive a parser-poisoned child.
+   * Consumed by fakeAcpSpawner (transport-level; the agent never sees it).
+   */
+  readonly preludeStdout?: string;
   /**
    * ru-code: the model advertisement in the START responses. qwen 0.13.1 returns
    * `models: { currentModelId, availableModels[] }` on BOTH `session/new` and
@@ -268,16 +327,30 @@ export const runFakeAcpAgent = (
     // Per-prompt cancel hook: session/cancel resolves the in-flight prompt with
     // stopReason "cancelled" (matches qwen's wire behaviour). Stop in the adapter
     // currently force-kills, so this is exercised only by a graceful cancel path.
-    const activeCancelRef = yield* Ref.make<Deferred.Deferred<StopReason> | undefined>(undefined);
+    // ru-code: the error channel carries `cancelResponse: "error"` — the parked
+    // prompt then FAILS with a JSON-RPC error instead of resolving cancelled.
+    const activeCancelRef = yield* Ref.make<
+      Deferred.Deferred<StopReason, AcpErrors.AcpRequestError> | undefined
+    >(undefined);
+
+    // ru-code: process-death arm shared by initialize/new/load — the child dies
+    // without ever responding; the host's pending request fails on EOF + exit.
+    const dieWithoutResponse = (code: number) =>
+      controls.exit(code).pipe(Effect.andThen(Effect.never));
 
     yield* agent.handleInitialize(() =>
-      Effect.succeed({
-        protocolVersion: 1,
-        agentCapabilities: {
-          loadSession: true,
-          promptCapabilities: { image: true, embeddedContext: true },
-        },
-      }),
+      // ru-code: boot-failure behaviours (see `initializeBehavior` doc).
+      script.initializeBehavior === "hang"
+        ? Effect.never
+        : script.initializeBehavior === "exit"
+          ? dieWithoutResponse(script.initializeExitCode ?? 52)
+          : Effect.succeed({
+              protocolVersion: 1,
+              agentCapabilities: {
+                loadSession: true,
+                promptCapabilities: { image: true, embeddedContext: true },
+              },
+            }),
     );
     yield* agent.handleAuthenticate((request) => {
       script.onAuthenticate?.(request.methodId); // ru-code: capture the resolved methodId
@@ -298,11 +371,17 @@ export const runFakeAcpAgent = (
         ? Effect.never
         : script.startBehavior === "error"
           ? handshakeFailure()
-          : Effect.succeed({
-              sessionId: FAKE_SESSION_ID,
-              // ru-code: real qwen advertises its model catalog here.
-              ...(script.sessionModels ? { models: script.sessionModels } : {}),
-            });
+          : script.startBehavior === "exit"
+            ? dieWithoutResponse(1)
+            : (script.onCreateSessionEffect?.() ?? Effect.void).pipe(
+                Effect.andThen(
+                  Effect.succeed({
+                    sessionId: FAKE_SESSION_ID,
+                    // ru-code: real qwen advertises its model catalog here.
+                    ...(script.sessionModels ? { models: script.sessionModels } : {}),
+                  }),
+                ),
+              );
     });
     yield* agent.handleLoadSession((request) => {
       script.onLoadSession?.(request.sessionId); // ru-code: capture the reconnect path
@@ -310,6 +389,9 @@ export const runFakeAcpAgent = (
       const loadBehavior = script.loadBehavior ?? script.startBehavior;
       if (loadBehavior === "hang") return Effect.never;
       if (loadBehavior === "error") return handshakeFailure();
+      // ru-code: the corrupt-session-file shape — process.exit(1) mid-load
+      // (qwen-code config.ts:998-1002; see the `startBehavior` doc).
+      if (loadBehavior === "exit") return dieWithoutResponse(1);
       // ru-code: replay history DURING the load, awaited before the response —
       // exactly like real qwen (see the loadReplayChunks doc).
       return Effect.forEach(
@@ -352,7 +434,21 @@ export const runFakeAcpAgent = (
         Effect.andThen(
           Ref.get(activeCancelRef).pipe(
             Effect.flatMap((deferred) =>
-              deferred ? Deferred.succeed(deferred, "cancelled").pipe(Effect.asVoid) : Effect.void,
+              deferred
+                ? // ru-code: `cancelResponse: "error"` reproduces qwen's abort-vs-
+                  // error race — the cancelled prompt FAILS with a JSON-RPC error
+                  // instead of the clean cancelled stopReason (see the doc).
+                  (script.cancelResponse === "error"
+                    ? Deferred.fail(
+                        deferred,
+                        new AcpErrors.AcpRequestError({
+                          code: -32603,
+                          errorMessage: "The operation was aborted (fake abort-race error)",
+                        }),
+                      )
+                    : Deferred.succeed(deferred, "cancelled")
+                  ).pipe(Effect.asVoid)
+                : Effect.void,
             ),
           ),
         ),
@@ -384,7 +480,8 @@ export const runFakeAcpAgent = (
         script.onPromptText?.(firstBlock && firstBlock.type === "text" ? firstBlock.text : "");
         const recorder = new PromptStepsRecorder();
         script.onPrompt(recorder);
-        const cancelled = yield* Deferred.make<StopReason>();
+        // ru-code: error channel carries the cancelResponse:"error" abort-race.
+        const cancelled = yield* Deferred.make<StopReason, AcpErrors.AcpRequestError>();
         yield* Ref.set(activeCancelRef, cancelled);
 
         for (const step of recorder.steps) {

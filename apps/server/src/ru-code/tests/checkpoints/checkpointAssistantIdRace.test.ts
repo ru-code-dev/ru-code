@@ -64,6 +64,8 @@ import { ProjectionSnapshotQuery } from "../../../orchestration/Services/Project
 import { OrchestrationCommandReceiptRepositoryLive } from "../../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
+// ru-code: memory MCP secret store for the engine decider context.
+import { McpManagerSecretStoreMemory } from "../../mcp/mcpPorts.ts";
 import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
 import {
   ProviderService,
@@ -183,6 +185,8 @@ const harnessLayer = (cwd: string, runtimeEventPubSub: PubSub.PubSub<ProviderRun
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
     Layer.provide(SqlitePersistenceMemory),
+    // ru-code: the engine decider now carries the MCP secret-store port (not exercised here).
+    Layer.provide(McpManagerSecretStoreMemory),
   );
   const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
     Layer.provide(RepositoryIdentityResolver.layer),

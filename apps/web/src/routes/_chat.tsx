@@ -21,6 +21,8 @@ import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+// ru-code: MCP probing follows the active project (see McpActiveProjectSync).
+import { McpActiveProjectSync } from "../ru-code/mcp/McpActiveProjectSync";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 function ChatRouteGlobalShortcuts() {
@@ -179,6 +181,8 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
+      {/* ru-code: scope MCP auto-probing to the project the user is viewing. */}
+      <McpActiveProjectSync />
       <Outlet />
     </>
   );

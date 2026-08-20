@@ -36,6 +36,8 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+// ru-code: memory MCP secret store for the engine decider context.
+import { McpManagerSecretStoreMemory } from "../../ru-code/mcp/mcpPorts.ts";
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -2679,6 +2681,8 @@ const engineLayer = it.layer(
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
+    // ru-code: MCP secret-store port for the engine decider (not exercised here).
+    Layer.provide(McpManagerSecretStoreMemory),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), {

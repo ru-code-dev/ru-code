@@ -15,6 +15,7 @@ const NONE: ProviderRestartFlags = {
   shouldRestartForModelChange: false,
   shouldRestartForModelSelectionChange: false,
   catalogChanged: false,
+  overlayChanged: false,
 };
 
 describe("shouldRestartProviderSession", () => {

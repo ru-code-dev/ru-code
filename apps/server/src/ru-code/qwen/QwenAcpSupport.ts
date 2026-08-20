@@ -77,6 +77,10 @@ export function buildQwenAcpSpawnInput(
   settingsOverlay?: QwenAcpSettingsOverlay,
 ): AcpSpawnInput {
   const env: NodeJS.ProcessEnv = { ...environment };
+  // ru-code: qwen re-spawns itself as a child unless this is set (relaunch
+  // wrapper, qwen-code relaunch.ts). One process ⇒ half the boot cost/memory
+  // and our SIGKILL hits the real agent instead of the wrapper.
+  env.QWEN_CODE_NO_RELAUNCH = "true";
   const homePath = qwenSettings?.homePath?.trim();
   if (homePath) {
     env.CLI_HOME = homePath;

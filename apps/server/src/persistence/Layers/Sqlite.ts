@@ -6,6 +6,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { runMigrations } from "../Migrations.ts";
+// ru-code: fork-owned migrations (own id space + own `ru_code_migrations` table — see that module).
+import { runRuCodeMigrations } from "../../ru-code/persistence/Migrations.ts";
 import { ServerConfig } from "../../config.ts";
 
 type RuntimeSqliteLayerConfig = {
@@ -38,6 +40,9 @@ const setup = Layer.effectDiscard(
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
     yield* runMigrations();
+    // ru-code: fork migrations run AFTER upstream's, tracked separately so upstream renumbering
+    // during resyncs can never collide with (or be skipped because of) fork migration ids.
+    yield* runRuCodeMigrations();
   }),
 );
 

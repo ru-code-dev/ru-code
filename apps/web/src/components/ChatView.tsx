@@ -179,6 +179,8 @@ import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+// ru-code: terminal UI visibility switch (TERMINAL_UI_VISIBILITY).
+import { useTerminalUiEnabled } from "../ru-code/platform-compat/terminalUiGate";
 import {
   AlarmClockIcon,
   CheckCircle2Icon,
@@ -1235,6 +1237,9 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  // ru-code: Windows-server terminal UI kill-switch — gates the toggle button, the shortcut,
+  // and (in the drawer/panel hosts) the rendered surfaces.
+  const terminalUiEnabled = useTerminalUiEnabled(environmentId);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -6229,6 +6234,8 @@ function ChatViewContent(props: ChatViewProps) {
     // only. `|| globalPanelOpen` on AVAILABLE (not open) keeps it enabled while a global panel owns the
     // slot, so one press closes skills/agents and opens the thread.
     <PanelLayoutControls
+      // ru-code: TERMINAL_UI_VISIBILITY — the toolbar toggle is HIDDEN (not rendered) when off.
+      showTerminalControl={terminalUiEnabled}
       terminalAvailable={activeProject !== null}
       terminalOpen={terminalUiState.terminalOpen}
       terminalShortcutLabel={shortcutLabelForCommand(keybindings, "terminal.toggle")}

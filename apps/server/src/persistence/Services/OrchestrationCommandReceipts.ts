@@ -15,6 +15,8 @@ import {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+// ru-code: MCP catalog singleton aggregate id (receipt rows for mcp.* commands).
+import { McpCatalogAggregateId } from "@smart-tools/qwen-cli-mcp-manager/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
@@ -25,7 +27,8 @@ import type { OrchestrationCommandReceiptRepositoryError } from "../Errors.ts";
 export const OrchestrationCommandReceipt = Schema.Struct({
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  // ru-code: + the MCP catalog singleton aggregate id.
+  aggregateId: Schema.Union([ProjectId, ThreadId, McpCatalogAggregateId]),
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
   status: OrchestrationCommandReceiptStatus,

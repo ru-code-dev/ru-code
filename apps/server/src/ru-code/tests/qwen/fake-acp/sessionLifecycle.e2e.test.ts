@@ -6,7 +6,8 @@
 //   S2 stop / teardown — stopSession goes through the end-force SIGKILL path (the fake
 //      handle's kill() fires), the session ends, session.exited is emitted, no hang.
 //   S3 interrupt — a mid-turn interrupt labels the turn `cancelled` (not failed), tears
-//      the session down, and does NOT use graceful session/cancel (Stop is end-force).
+//      the session down, and sends the graceful session/cancel before the background
+//      SIGKILL (ru-code warm engine: instant-settle cancel-then-kill stop).
 //   S4 resume — a valid resume cursor reconnects via session/load; an invalid/absent
 //      cursor falls back to a fresh session/new (no crash).
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -176,7 +177,8 @@ it.effect("qwen S2 stopSession: tears the session down via the end-force SIGKILL
 // ── S3 — interrupt (Stop) labels the turn cancelled ──────────────────────────
 
 it.effect(
-  "qwen S3 interrupt: mid-turn Stop labels the turn cancelled (end-force, no session/cancel)",
+  // ru-code (warm engine): title updated — Stop is now instant-settle cancel-then-kill.
+  "qwen S3 interrupt: mid-turn Stop labels the turn cancelled (instant settle, cancel then kill)",
   () => {
     let cancelCount = 0;
     // A turn that streams a chunk then parks (no terminal response) — an in-flight
@@ -218,6 +220,20 @@ it.effect(
 
       // sendTurn recovers to success (a cancel is not a failure), so join returns.
       yield* Fiber.join(turnFiber).pipe(Effect.timeout("10 seconds"));
+      // ru-code (warm engine, acp-process-pool): the instant-settle Stop
+      // publishes turn.completed/session.exited and returns with almost no
+      // yields afterwards, and the fake agent processes the (now expected)
+      // graceful `session/cancel` asynchronously — await the delivered state
+      // instead of assuming the old teardown's scheduling slack.
+      const stopSettled = () =>
+        cancelCount === 1 &&
+        events.some((e) => e.type === "turn.completed") &&
+        events.some((e) => e.type === "session.exited");
+      yield* Effect.gen(function* () {
+        while (!stopSettled()) {
+          yield* Effect.sleep("10 millis");
+        }
+      }).pipe(Effect.timeout("5 seconds"));
       yield* Fiber.interrupt(eventsFiber);
 
       const completions = events.filter(
@@ -226,8 +242,10 @@ it.effect(
       );
       assert.lengthOf(completions, 1);
       assert.strictEqual(completions[0]!.payload.state, "cancelled");
-      // Stop is end-force SIGKILL — the graceful ACP session/cancel is NOT used.
-      assert.strictEqual(cancelCount, 0, "Stop force-kills; it never sends session/cancel");
+      // ru-code (warm engine): Stop now sends the graceful session/cancel
+      // BEFORE the background SIGKILL — that is what lets qwen reap detached
+      // shell process-groups (was: cancelCount === 0 under bare force-kill).
+      assert.strictEqual(cancelCount, 1, "Stop sends exactly one session/cancel");
       // The session was torn down.
       assert.isDefined(events.find((e) => e.type === "session.exited"));
       assert.strictEqual(yield* adapter.hasSession(THREAD_ID), false);

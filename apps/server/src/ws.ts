@@ -81,6 +81,19 @@ import {
   CommandCatalogHostLayer,
 } from "./ru-code/skills-agents/catalogLayers.ts";
 import { buildCatalogRpcHandlers } from "./ru-code/skills-agents/catalogRpcHandlers.ts";
+// ru-code: MCP manager services + handlers (extracted to ru-code/mcp).
+import {
+  McpProjectionQuery,
+  McpRuntime,
+  McpSupervisor,
+} from "@smart-tools/qwen-cli-mcp-manager/server";
+import { McpError } from "@smart-tools/qwen-cli-mcp-manager/contracts";
+import { McpManagerHostLayer } from "./ru-code/mcp/mcpPorts.ts";
+import {
+  buildMcpRpcHandlers,
+  type ObserveMcpRpc,
+  type ObserveMcpRpcStream,
+} from "./ru-code/mcp/mcpRpcHandlers.ts";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -443,6 +456,10 @@ const makeWsRpcLayer = (
       const skillCatalog = yield* SkillCatalog;
       const agentCatalog = yield* AgentCatalog;
       const commandCatalog = yield* CommandCatalog;
+      // ru-code: the MCP manager services (event-sourced catalog + live supervisor).
+      const mcpProjectionQuery = yield* McpProjectionQuery;
+      const mcpRuntime = yield* McpRuntime;
+      const mcpSupervisor = yield* McpSupervisor;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -514,6 +531,29 @@ const makeWsRpcLayer = (
             ),
           ),
           { "rpc.aggregate": aggregate },
+        );
+      // ru-code: same encoding for the MCP RPCs — they declare ONLY `McpError`, so an auth
+      // failure is folded into it (unary + stream variants; stream construction lives in the
+      // package services, this seam stays a thin delegation).
+      const observeMcpRpc: ObserveMcpRpc = (method, effect) =>
+        instrumentRpcEffect(
+          method,
+          authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
+            Effect.catchTag("EnvironmentAuthorizationError", (error) =>
+              Effect.fail(new McpError({ detail: error.message, cause: error })),
+            ),
+          ),
+          { "rpc.aggregate": "mcp" },
+        );
+      const observeMcpRpcStream: ObserveMcpRpcStream = (method, stream) =>
+        instrumentRpcStream(
+          method,
+          authorizeStream(requiredScopeForRpcMethod(method), stream).pipe(
+            Stream.catchTag("EnvironmentAuthorizationError", (error) =>
+              Stream.fail(new McpError({ detail: error.message, cause: error })),
+            ),
+          ),
+          { "rpc.aggregate": "mcp" },
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
         isOrchestrationDispatchCommandError(cause)
@@ -1495,6 +1535,14 @@ const makeWsRpcLayer = (
           commandCatalog,
           observeCatalogRpc,
         }),
+        // ru-code: MCP manager RPC handlers (extracted to ru-code/mcp).
+        ...buildMcpRpcHandlers({
+          mcpProjectionQuery,
+          mcpRuntime,
+          mcpSupervisor,
+          observeMcpRpc,
+          observeMcpRpcStream,
+        }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
@@ -2379,6 +2427,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provide(SkillCatalogHostLayer),
               Layer.provide(AgentCatalogHostLayer),
               Layer.provide(CommandCatalogHostLayer),
+              // ru-code: the MCP manager services (same memoized module-level layer the
+              // runtime graph provides, so ws sees the SAME supervisor instance).
+              Layer.provide(McpManagerHostLayer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS

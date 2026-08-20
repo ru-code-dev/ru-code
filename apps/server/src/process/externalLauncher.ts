@@ -20,6 +20,9 @@ import {
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
+// ru-code: Windows browser-launch strategy — explorer.exe instead of the Node-#51018-broken
+// powershell+detached+ignore combo (EXTERNAL_OPEN_WINDOWS switches; body in the ru-code zone).
+import { buildWindowsBrowserLaunchCompat } from "../ru-code/platform-compat/externalOpenWindows.ts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -248,11 +251,17 @@ function buildBrowserLaunch(
   }
 
   if (platform === "win32") {
-    return resolveWindowsBrowserLaunch(target, resolvePowerShellPath(env));
+    // ru-code: explorer.exe by default (Node #51018 breaks the PS launch below).
+    return buildWindowsBrowserLaunchCompat(target, () =>
+      resolveWindowsBrowserLaunch(target, resolvePowerShellPath(env)),
+    );
   }
 
   if (shouldUseWindowsBrowserFromWsl(platform, env)) {
-    return resolveWindowsBrowserLaunch(target, resolveWslPowerShellPath());
+    // ru-code: same compat switch for the WSL→Windows browser path.
+    return buildWindowsBrowserLaunchCompat(target, () =>
+      resolveWindowsBrowserLaunch(target, resolveWslPowerShellPath()),
+    );
   }
 
   return {

@@ -90,6 +90,17 @@ export interface AcpSessionRuntimeStartResult {
   readonly modelConfigId: string | undefined;
 }
 
+/**
+ * ru-code: session-setup parameters for the deferred-bind path. A warm
+ * (pre-spawned, initialized+authenticated) runtime is project-agnostic until
+ * bound — the thread's cwd and resume cursor arrive here instead of via the
+ * creation options.
+ */
+export interface AcpSessionBindParams {
+  readonly cwd: string;
+  readonly resumeSessionId?: string;
+}
+
 export interface AcpSessionRuntimeShape {
   readonly handleRequestPermission: AcpClientService["handleRequestPermission"];
   readonly handleElicitation: AcpClientService["handleElicitation"];
@@ -107,6 +118,20 @@ export interface AcpSessionRuntimeShape {
   readonly handleExtRequest: AcpClientService["handleExtRequest"];
   readonly handleExtNotification: AcpClientService["handleExtNotification"];
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
+  /**
+   * ru-code: warm-engine phase 1 of `start` — `initialize` + `authenticate`
+   * only, no session. Memoized like `start`; a warm pool calls this right
+   * after spawning so a later `bindAndStart` only pays session setup.
+   */
+  readonly warmup: () => Effect.Effect<void, EffectAcpErrors.AcpError>;
+  /**
+   * ru-code: warm-engine phase 2 — session setup (`session/load`-or-`new`)
+   * with the taken thread's cwd/resume cursor, awaiting a possibly-in-flight
+   * warmup first. `start()` ≡ `bindAndStart(options.{cwd,resumeSessionId})`.
+   */
+  readonly bindAndStart: (
+    params: AcpSessionBindParams,
+  ) => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
@@ -120,6 +145,12 @@ export interface AcpSessionRuntimeShape {
    * is stuck. Use only on tear-down paths where the session is being discarded.
    */
   readonly forceKill: Effect.Effect<void>;
+  /**
+   * ru-code (warm engine): the spawned child's OS pid — recorded into the
+   * write-only pid journal so a future leftover-cleanup can reap children a
+   * hard server crash orphaned.
+   */
+  readonly childPid: number;
   /**
    * Resolves when the spawned ACP child process has exited (for any reason).
    * Used by the adapter's child-exit watcher to detect "agent died on its own"
@@ -157,11 +188,26 @@ export interface AcpSessionRuntimeShape {
 
 interface AcpStartedState extends AcpSessionRuntimeStartResult {}
 
+// ru-code: what a completed warmup (initialize + authenticate) yields — carried
+// through Warmed/Binding so the final start result keeps the initialize response.
+interface AcpWarmedState {
+  readonly initializeResult: EffectAcpSchema.InitializeResponse;
+}
+
+// ru-code: warm-engine state machine. NotStarted → WarmingUp → Warmed →
+// Binding → Started; failure resets WarmingUp→NotStarted and Binding→Warmed
+// (both retryable, preserving the old Starting-failure reset semantics).
 type AcpStartState =
   | { readonly _tag: "NotStarted" }
   | {
-      readonly _tag: "Starting";
+      readonly _tag: "WarmingUp";
+      readonly deferred: Deferred.Deferred<AcpWarmedState, EffectAcpErrors.AcpError>;
+    }
+  | { readonly _tag: "Warmed"; readonly init: AcpWarmedState }
+  | {
+      readonly _tag: "Binding";
       readonly deferred: Deferred.Deferred<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
+      readonly init: AcpWarmedState;
     }
   | { readonly _tag: "Started"; readonly result: AcpStartedState };
 
@@ -424,7 +470,9 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    const startOnce = Effect.gen(function* () {
+    // ru-code: phase 1 of the old startOnce — initialize + authenticate. No
+    // session exists yet; the process is project/cwd-agnostic at this point.
+    const warmupOnce = Effect.gen(function* () {
       const initializePayload = {
         protocolVersion: 1,
         clientCapabilities: initializeClientCapabilities,
@@ -447,31 +495,52 @@ const makeAcpSessionRuntime = (
         acp.agent.authenticate(authenticatePayload),
       );
 
-      let sessionId: string;
-      let sessionSetupResult:
-        | EffectAcpSchema.LoadSessionResponse
-        | EffectAcpSchema.NewSessionResponse
-        | EffectAcpSchema.ResumeSessionResponse;
-      if (options.resumeSessionId) {
-        const loadPayload = {
-          sessionId: options.resumeSessionId,
-          cwd: options.cwd,
-          // ru-code: MCP servers come from the settings overlay
-          // (QWEN_CODE_SYSTEM_SETTINGS_PATH), not this ACP array.
-          mcpServers: [],
-        } satisfies EffectAcpSchema.LoadSessionRequest;
-        yield* Ref.set(suppressUpdatesRef, true);
-        const resumed = yield* runLoggedRequest(
-          "session/load",
-          loadPayload,
-          acp.agent.loadSession(loadPayload),
-        ).pipe(Effect.exit, Effect.ensuring(Ref.set(suppressUpdatesRef, false)));
-        if (Exit.isSuccess(resumed)) {
-          sessionId = options.resumeSessionId;
-          sessionSetupResult = resumed.value;
+      return { initializeResult } satisfies AcpWarmedState;
+    });
+
+    // ru-code: phase 2 — session setup (session/load-or-new) with the bind
+    // params' cwd/resume cursor. Body unchanged from the old startOnce apart
+    // from `options.*` → `params.*`.
+    const bindOnce = (init: AcpWarmedState, params: AcpSessionBindParams) =>
+      Effect.gen(function* () {
+        let sessionId: string;
+        let sessionSetupResult:
+          | EffectAcpSchema.LoadSessionResponse
+          | EffectAcpSchema.NewSessionResponse
+          | EffectAcpSchema.ResumeSessionResponse;
+        if (params.resumeSessionId) {
+          const loadPayload = {
+            sessionId: params.resumeSessionId,
+            cwd: params.cwd,
+            // ru-code: MCP servers come from the settings overlay
+            // (QWEN_CODE_SYSTEM_SETTINGS_PATH), not this ACP array.
+            mcpServers: [],
+          } satisfies EffectAcpSchema.LoadSessionRequest;
+          yield* Ref.set(suppressUpdatesRef, true);
+          const resumed = yield* runLoggedRequest(
+            "session/load",
+            loadPayload,
+            acp.agent.loadSession(loadPayload),
+          ).pipe(Effect.exit, Effect.ensuring(Ref.set(suppressUpdatesRef, false)));
+          if (Exit.isSuccess(resumed)) {
+            sessionId = params.resumeSessionId;
+            sessionSetupResult = resumed.value;
+          } else {
+            const createPayload = {
+              cwd: params.cwd,
+              mcpServers: [],
+            } satisfies EffectAcpSchema.NewSessionRequest;
+            const created = yield* runLoggedRequest(
+              "session/new",
+              createPayload,
+              acp.agent.createSession(createPayload),
+            );
+            sessionId = created.sessionId;
+            sessionSetupResult = created;
+          }
         } else {
           const createPayload = {
-            cwd: options.cwd,
+            cwd: params.cwd,
             mcpServers: [],
           } satisfies EffectAcpSchema.NewSessionRequest;
           const created = yield* runLoggedRequest(
@@ -482,62 +551,109 @@ const makeAcpSessionRuntime = (
           sessionId = created.sessionId;
           sessionSetupResult = created;
         }
-      } else {
-        const createPayload = {
-          cwd: options.cwd,
-          mcpServers: [],
-        } satisfies EffectAcpSchema.NewSessionRequest;
-        const created = yield* runLoggedRequest(
-          "session/new",
-          createPayload,
-          acp.agent.createSession(createPayload),
-        );
-        sessionId = created.sessionId;
-        sessionSetupResult = created;
-      }
 
-      yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
-      yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
+        yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
+        yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
 
-      const nextState = {
-        sessionId,
-        initializeResult,
-        sessionSetupResult,
-        modelConfigId: extractModelConfigId(sessionSetupResult),
-      } satisfies AcpStartedState;
-      return nextState;
-    });
-
-    const start = Effect.gen(function* () {
-      const deferred = yield* Deferred.make<
-        AcpSessionRuntimeStartResult,
-        EffectAcpErrors.AcpError
-      >();
-      const effect = yield* Ref.modify(startStateRef, (state) => {
-        switch (state._tag) {
-          case "Started":
-            return [Effect.succeed(state.result), state] as const;
-          case "Starting":
-            return [Deferred.await(state.deferred), state] as const;
-          case "NotStarted":
-            return [
-              startOnce.pipe(
-                Effect.tap((result) =>
-                  Ref.set(startStateRef, { _tag: "Started", result }).pipe(
-                    Effect.andThen(Deferred.succeed(deferred, result)),
-                  ),
-                ),
-                Effect.onError((cause) =>
-                  Deferred.failCause(deferred, cause).pipe(
-                    Effect.andThen(Ref.set(startStateRef, { _tag: "NotStarted" })),
-                  ),
-                ),
-              ),
-              { _tag: "Starting", deferred } satisfies AcpStartState,
-            ] as const;
-        }
+        const nextState = {
+          sessionId,
+          initializeResult: init.initializeResult,
+          sessionSetupResult,
+          modelConfigId: extractModelConfigId(sessionSetupResult),
+        } satisfies AcpStartedState;
+        return nextState;
       });
-      return yield* effect;
+
+    // ru-code: memoized warmup — same single-flight/reset discipline the old
+    // `start` had, applied to the initialize+authenticate half only.
+    const warmupInternal: Effect.Effect<AcpWarmedState, EffectAcpErrors.AcpError> = Effect.gen(
+      function* () {
+        const deferred = yield* Deferred.make<AcpWarmedState, EffectAcpErrors.AcpError>();
+        const effect = yield* Ref.modify(startStateRef, (state) => {
+          switch (state._tag) {
+            case "Started":
+              return [
+                Effect.succeed({
+                  initializeResult: state.result.initializeResult,
+                } satisfies AcpWarmedState),
+                state,
+              ] as const;
+            case "Binding":
+            case "Warmed":
+              return [Effect.succeed(state.init), state] as const;
+            case "WarmingUp":
+              return [Deferred.await(state.deferred), state] as const;
+            case "NotStarted":
+              return [
+                warmupOnce.pipe(
+                  Effect.tap((init) =>
+                    Ref.set(startStateRef, { _tag: "Warmed", init }).pipe(
+                      Effect.andThen(Deferred.succeed(deferred, init)),
+                    ),
+                  ),
+                  Effect.onError((cause) =>
+                    Deferred.failCause(deferred, cause).pipe(
+                      Effect.andThen(Ref.set(startStateRef, { _tag: "NotStarted" })),
+                    ),
+                  ),
+                ),
+                { _tag: "WarmingUp", deferred } satisfies AcpStartState,
+              ] as const;
+          }
+        });
+        return yield* effect;
+      },
+    );
+
+    // ru-code: memoized bind — awaits warmup, then single-flights session setup.
+    // A bind failure resets to Warmed (the process stays usable), mirroring the
+    // old Starting→NotStarted retryability.
+    const bindInternal = (
+      params: AcpSessionBindParams,
+    ): Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError> =>
+      Effect.gen(function* () {
+        yield* warmupInternal;
+        const deferred = yield* Deferred.make<
+          AcpSessionRuntimeStartResult,
+          EffectAcpErrors.AcpError
+        >();
+        const effect = yield* Ref.modify(startStateRef, (state) => {
+          switch (state._tag) {
+            case "Started":
+              return [Effect.succeed(state.result), state] as const;
+            case "Binding":
+              return [Deferred.await(state.deferred), state] as const;
+            case "Warmed":
+              return [
+                bindOnce(state.init, params).pipe(
+                  Effect.tap((result) =>
+                    Ref.set(startStateRef, { _tag: "Started", result }).pipe(
+                      Effect.andThen(Deferred.succeed(deferred, result)),
+                    ),
+                  ),
+                  Effect.onError((cause) =>
+                    Deferred.failCause(deferred, cause).pipe(
+                      Effect.andThen(Ref.set(startStateRef, { _tag: "Warmed", init: state.init })),
+                    ),
+                  ),
+                ),
+                { _tag: "Binding", deferred, init: state.init } satisfies AcpStartState,
+              ] as const;
+            // Unreachable after a successful warmup (nothing resets Warmed
+            // backwards); defensively re-run the whole sequence.
+            case "NotStarted":
+            case "WarmingUp":
+              return [Effect.suspend(() => bindInternal(params)), state] as const;
+          }
+        });
+        return yield* effect;
+      });
+
+    const start = bindInternal({
+      cwd: options.cwd,
+      ...(options.resumeSessionId !== undefined
+        ? { resumeSessionId: options.resumeSessionId }
+        : {}),
     });
 
     return {
@@ -557,6 +673,8 @@ const makeAcpSessionRuntime = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
+      warmup: () => Effect.asVoid(warmupInternal),
+      bindAndStart: (params) => bindInternal(params),
       getEvents: () => Stream.fromQueue(eventQueue),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
@@ -591,6 +709,7 @@ const makeAcpSessionRuntime = (
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
       forceKill: Effect.ignore(child.kill({ killSignal: "SIGKILL" })),
+      childPid: Number(child.pid), // ru-code: warm engine — pid journal source
       waitForExit: Effect.ignore(child.exitCode),
       // ru-code: bounded so a genuine transport break with the child still alive
       // (exitCode never resolves) falls back to `{ exited: false }` instead of

@@ -9,7 +9,10 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// ru-code: memory MCP secret store for the decider context.
+import { McpManagerSecretStoreMemory } from "../ru-code/mcp/mcpPorts.ts";
 import { expect, it } from "@effect/vitest";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -136,82 +139,86 @@ function normalizeDeleteEvent(event: PlannedEvent | ReadonlyArray<PlannedEvent>)
   });
 }
 
-it.layer(NodeServices.layer)("decider deletion flows", (it) => {
-  it.effect("rejects deleting a non-empty project without force", () =>
-    Effect.gen(function* () {
-      const readModel = yield* seedReadModel;
-      const error = yield* Effect.flip(
-        decideOrchestrationCommand({
-          command: {
+// ru-code: the decider now carries the MCP secret-store port in its context.
+it.layer(Layer.mergeAll(NodeServices.layer, McpManagerSecretStoreMemory))(
+  "decider deletion flows",
+  (it) => {
+    it.effect("rejects deleting a non-empty project without force", () =>
+      Effect.gen(function* () {
+        const readModel = yield* seedReadModel;
+        const error = yield* Effect.flip(
+          decideOrchestrationCommand({
+            command: {
+              type: "project.delete",
+              commandId: asCommandId("cmd-project-delete-no-force"),
+              projectId: asProjectId("project-delete"),
+            },
+            readModel,
+          }),
+        );
+        expect(error.message).toContain("cannot be deleted without force=true");
+      }),
+    );
+
+    it.effect("reuses thread.delete semantics when force-deleting a non-empty project", () =>
+      Effect.gen(function* () {
+        const readModel = yield* seedReadModel;
+        const projectDeleteCommand: Extract<OrchestrationCommand, { type: "project.delete" }> = {
+          type: "project.delete",
+          commandId: asCommandId("cmd-project-delete-force"),
+          projectId: asProjectId("project-delete"),
+          force: true,
+        };
+
+        const forcedResult = yield* decideOrchestrationCommand({
+          command: projectDeleteCommand,
+          readModel,
+        });
+        const forcedEvents = Array.isArray(forcedResult) ? forcedResult : [forcedResult];
+
+        expect(forcedEvents.map((event) => event.type)).toEqual([
+          "thread.deleted",
+          "thread.deleted",
+          "project.deleted",
+        ]);
+
+        let sequentialReadModel = readModel;
+        let nextSequence = readModel.snapshotSequence;
+        const sequentialEvents: PlannedEvent[] = [];
+        for (const nextCommand of [
+          {
+            type: "thread.delete",
+            commandId: projectDeleteCommand.commandId,
+            threadId: asThreadId("thread-delete-1"),
+          },
+          {
+            type: "thread.delete",
+            commandId: projectDeleteCommand.commandId,
+            threadId: asThreadId("thread-delete-2"),
+          },
+          {
             type: "project.delete",
-            commandId: asCommandId("cmd-project-delete-no-force"),
+            commandId: projectDeleteCommand.commandId,
             projectId: asProjectId("project-delete"),
           },
-          readModel,
-        }),
-      );
-      expect(error.message).toContain("cannot be deleted without force=true");
-    }),
-  );
-
-  it.effect("reuses thread.delete semantics when force-deleting a non-empty project", () =>
-    Effect.gen(function* () {
-      const readModel = yield* seedReadModel;
-      const projectDeleteCommand: Extract<OrchestrationCommand, { type: "project.delete" }> = {
-        type: "project.delete",
-        commandId: asCommandId("cmd-project-delete-force"),
-        projectId: asProjectId("project-delete"),
-        force: true,
-      };
-
-      const forcedResult = yield* decideOrchestrationCommand({
-        command: projectDeleteCommand,
-        readModel,
-      });
-      const forcedEvents = Array.isArray(forcedResult) ? forcedResult : [forcedResult];
-
-      expect(forcedEvents.map((event) => event.type)).toEqual([
-        "thread.deleted",
-        "thread.deleted",
-        "project.deleted",
-      ]);
-
-      let sequentialReadModel = readModel;
-      let nextSequence = readModel.snapshotSequence;
-      const sequentialEvents: PlannedEvent[] = [];
-      for (const nextCommand of [
-        {
-          type: "thread.delete",
-          commandId: projectDeleteCommand.commandId,
-          threadId: asThreadId("thread-delete-1"),
-        },
-        {
-          type: "thread.delete",
-          commandId: projectDeleteCommand.commandId,
-          threadId: asThreadId("thread-delete-2"),
-        },
-        {
-          type: "project.delete",
-          commandId: projectDeleteCommand.commandId,
-          projectId: asProjectId("project-delete"),
-        },
-      ] satisfies ReadonlyArray<OrchestrationCommand>) {
-        const decided = yield* decideOrchestrationCommand({
-          command: nextCommand,
-          readModel: sequentialReadModel,
-        });
-        const nextEvents = Array.isArray(decided) ? decided : [decided];
-        sequentialEvents.push(...nextEvents);
-        for (const nextEvent of nextEvents) {
-          nextSequence += 1;
-          sequentialReadModel = yield* projectEvent(sequentialReadModel, {
-            ...nextEvent,
-            sequence: nextSequence,
+        ] satisfies ReadonlyArray<OrchestrationCommand>) {
+          const decided = yield* decideOrchestrationCommand({
+            command: nextCommand,
+            readModel: sequentialReadModel,
           });
+          const nextEvents = Array.isArray(decided) ? decided : [decided];
+          sequentialEvents.push(...nextEvents);
+          for (const nextEvent of nextEvents) {
+            nextSequence += 1;
+            sequentialReadModel = yield* projectEvent(sequentialReadModel, {
+              ...nextEvent,
+              sequence: nextSequence,
+            });
+          }
         }
-      }
 
-      expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
-    }),
-  );
-});
+        expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
+      }),
+    );
+  },
+);

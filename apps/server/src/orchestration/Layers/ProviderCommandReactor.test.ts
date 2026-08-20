@@ -38,6 +38,8 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+// ru-code: memory/no-op MCP ports for the engine decider context.
+import { McpManagerSecretStoreMemory, McpSessionOverlayNoop } from "../../ru-code/mcp/mcpPorts.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -360,12 +362,16 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
     );
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provide(ThreadPlanProgress.layer),
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
     );
     let titleRegenerationCompletionDispatchAttempts = 0;
     const reactorOrchestrationLayer = Layer.effect(
@@ -423,6 +429,9 @@ describe("ProviderCommandReactor", () => {
       // ru-code: satisfy the reactor's SessionRespawnGate dependency with the no-op gate (these
       // tests cover the other restart triggers; the provision→spawn ordering is tested in ru-code).
       Layer.provideMerge(SessionRespawnGateNoop),
+      // ru-code: satisfy the reactor's MCP session-overlay dependency with the no-op gate
+      // (spawns behave exactly as a no-MCP app; the overlay trigger is covered in ru-code tests).
+      Layer.provideMerge(McpSessionOverlayNoop),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);

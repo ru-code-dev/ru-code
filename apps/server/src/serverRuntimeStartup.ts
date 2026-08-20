@@ -32,6 +32,8 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
+// ru-code: MCP manager runtime services (supervisor sweep + reactor + overlay hygiene).
+import { McpOverlay, McpReactor, McpSupervisor } from "@smart-tools/qwen-cli-mcp-manager/server";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -317,6 +319,10 @@ export const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+    // ru-code: MCP manager runtime services.
+    const mcpSupervisor = yield* McpSupervisor;
+    const mcpReactor = yield* McpReactor;
+    const mcpOverlay = yield* McpOverlay;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -360,12 +366,23 @@ export const make = (options?: StartupOptions) =>
         ),
       );
 
+      // ru-code: wipe stale per-project overlay files (plaintext secrets) left by a
+      // prior run that exited hard (SIGKILL / power-loss) before its ensuring/shutdown
+      // sweep could run. Done before reactors so nothing reads a stale file. Best-effort.
+      yield* Effect.logDebug("startup phase: sweeping stale MCP overlays");
+      yield* runStartupPhase("mcp.overlay.sweep", mcpOverlay.removeAllOverlays);
+
       yield* Effect.logDebug("startup phase: parking orchestration roots at activation");
       yield* runStartupPhase(
         "reactors.start",
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+          // ru-code: MCP monitoring + desired-set reconciliation. The supervisor
+          // owns the health-sweep loop; the reactor seeds builtins on first run
+          // and keeps the supervisor reconciled to authored catalog/bindings.
+          yield* mcpSupervisor.start().pipe(Scope.provide(reactorScope));
+          yield* mcpReactor.start().pipe(Scope.provide(reactorScope));
         }),
       );
 

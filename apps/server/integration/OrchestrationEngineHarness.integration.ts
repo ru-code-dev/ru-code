@@ -6,6 +6,7 @@ import {
   ApprovalRequestId,
   CodexSettings,
   ProviderDriverKind,
+  type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -57,6 +58,8 @@ import { OrchestrationReactorLive } from "../src/orchestration/Layers/Orchestrat
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 // ru-code: no-op respawn gate for the reactor dependency (see SessionRespawnGate).
 import { SessionRespawnGateNoop } from "../src/ru-code/skills-agents/SessionRespawnGate.ts";
+// ru-code: memory/no-op MCP ports for the engine + reactor dependencies (see mcpPorts).
+import { McpManagerSecretStoreMemory, McpSessionOverlayNoop } from "../src/ru-code/mcp/mcpPorts.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { CheckpointReactor } from "../src/orchestration/Services/CheckpointReactor.ts";
 import { ProviderRuntimeIngestionService } from "../src/orchestration/Services/ProviderRuntimeIngestion.ts";
@@ -253,6 +256,14 @@ interface MakeOrchestrationIntegrationHarnessOptions {
   // SQLite event store / projections / provider-session directory, fresh
   // in-memory runtime. The caller owns the directory's lifecycle.
   readonly rootDir?: string;
+  // ru-code: additive command-observation seam. When set, every command the
+  // REAL reactors/ingestion dispatch through the engine is reported here, at
+  // dispatch-CALL time (with concurrent dispatchers, observation order may
+  // differ from the engine's serialized execution order) — the only place
+  // command-level fields that are resolved away in events (e.g. the
+  // preserve-modes flags) are observable. The callback must not throw (it
+  // runs inside dispatch). Purely additive: omitted ⇒ engine untouched.
+  readonly onEngineCommand?: (command: OrchestrationCommand) => void;
 }
 
 export const makeOrchestrationIntegrationHarness = (
@@ -293,11 +304,37 @@ export const makeOrchestrationIntegrationHarness = (
     yield* initializeGitWorkspace(workspaceDir);
 
     const persistenceLayer = makeSqlitePersistenceLive(dbPath);
-    const orchestrationLayer = OrchestrationEngineLive.pipe(
+    const baseOrchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     );
+    // ru-code: the command-observation seam wraps the real engine's dispatch.
+    const onEngineCommand = options?.onEngineCommand;
+    const orchestrationLayer =
+      onEngineCommand === undefined
+        ? baseOrchestrationLayer
+        : Layer.effect(
+            OrchestrationEngineService,
+            Effect.gen(function* () {
+              const real = yield* OrchestrationEngineService;
+              const wrapped: OrchestrationEngineShape = {
+                readEvents: (fromSequenceExclusive, limit) =>
+                  real.readEvents(fromSequenceExclusive, limit),
+                // ru-code: t3 added `latestSequence` to OrchestrationEngineShape (A15).
+                latestSequence: real.latestSequence,
+                dispatch: (command) =>
+                  Effect.suspend(() => {
+                    onEngineCommand(command);
+                    return real.dispatch(command);
+                  }),
+                get streamDomainEvents() {
+                  return real.streamDomainEvents;
+                },
+              };
+              return wrapped;
+            }),
+          ).pipe(Layer.provide(baseOrchestrationLayer));
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );
@@ -431,6 +468,10 @@ export const makeOrchestrationIntegrationHarness = (
       // ru-code: the reactor now depends on SessionRespawnGate; this harness doesn't exercise the
       // catalog-change respawn path, so provide the no-op gate.
       Layer.provideMerge(SessionRespawnGateNoop),
+      // ru-code: the engine decider + reactor now depend on the MCP ports; this harness doesn't
+      // exercise MCP, so provide the memory secret store + no-op overlay gate.
+      Layer.provideMerge(McpManagerSecretStoreMemory),
+      Layer.provideMerge(McpSessionOverlayNoop),
       Layer.provideMerge(providerRegistryLayer),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),

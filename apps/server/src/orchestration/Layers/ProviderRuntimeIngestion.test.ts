@@ -37,6 +37,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+// ru-code: memory/no-op MCP ports for the engine decider context.
+import { McpManagerSecretStoreMemory } from "../../ru-code/mcp/mcpPorts.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -238,10 +240,14 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
     );
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),

@@ -129,8 +129,12 @@ it.effect(
       const collected: Array<ProviderRuntimeEvent> = [];
       let outOfBand: { agentMessageChunk: (text: string) => Effect.Effect<void> } | undefined;
       const script: FakeAcpScript = {
+        // ru-code (warm engine): capture the FIRST agent's emitter only — the
+        // pool's refill spawn creates a second fake agent whose emitter would
+        // otherwise overwrite this one, sending the late chunk to a warm slot
+        // nobody drains instead of the session child under test.
         onOutOfBandEmitter: (emit) => {
-          outOfBand = emit;
+          outOfBand ??= emit;
         },
         onPrompt: (steps) => {
           steps.emitText("ответ").respondOk();

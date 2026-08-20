@@ -19,6 +19,29 @@ describe("buildQwenAcpSpawnInput", () => {
     expect(spawn.env?.QWEN_CODE_SYSTEM_SETTINGS_PATH).toBeUndefined();
   });
 
+  // ru-code (warm engine R0): qwen's relaunch wrapper must be disabled on EVERY
+  // ACP spawn, unconditionally (not behind ACP_WARM_ENGINE) — one process, so
+  // teardown signals hit the real agent, not a wrapper.
+  it("always disables qwen's self-relaunch wrapper (QWEN_CODE_NO_RELAUNCH)", () => {
+    const bare = buildQwenAcpSpawnInput("/opt/cli.js", null, "/work");
+    expect(bare.env?.QWEN_CODE_NO_RELAUNCH).toBe("true");
+
+    // Present regardless of overlay/allowlist/environment composition.
+    const composed = buildQwenAcpSpawnInput(
+      "/opt/cli.js",
+      { launchArgs: "--verbose", homePath: "/home/me/.qwen" },
+      "/work",
+      { MY_VAR: "42" },
+      { settingsOverlayPath: "/tmp/overlay.json", allowedMcpServers: ["alpha"] },
+    );
+    expect(composed.env?.QWEN_CODE_NO_RELAUNCH).toBe("true");
+    // A caller-provided value must not override the hard-off.
+    const attemptedOverride = buildQwenAcpSpawnInput("/opt/cli.js", null, "/work", {
+      QWEN_CODE_NO_RELAUNCH: "false",
+    });
+    expect(attemptedOverride.env?.QWEN_CODE_NO_RELAUNCH).toBe("true");
+  });
+
   it("splits launchArgs on whitespace and inserts them before --acp", () => {
     const spawn = buildQwenAcpSpawnInput(
       "/opt/cli.js",

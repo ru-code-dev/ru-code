@@ -62,6 +62,16 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
+  // ru-code: generic — overlay this settings file onto the spawned CLI's own
+  // config at highest precedence (qwen reads it via QWEN_CODE_SYSTEM_SETTINGS_PATH).
+  // Any feature that needs to inject CLI settings can reuse this; the producer
+  // owns the file's meaning. Independent of `allowedMcpServers`.
+  settingsOverlayPath: Schema.optional(TrimmedNonEmptyString),
+  // ru-code: MCP server allowlist forwarded to the CLI (qwen
+  // `--allowed-mcp-server-names`). Named for what it is rather than masked under
+  // a generic key. Independent of `settingsOverlayPath`. Plain strings — these
+  // are opaque server names the producer owns, not validated identifiers here.
+  allowedMcpServers: Schema.optional(Schema.Array(Schema.String)),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

@@ -23,6 +23,8 @@ import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+// ru-code: memory/no-op MCP ports for the engine decider context.
+import { McpManagerSecretStoreMemory } from "../../ru-code/mcp/mcpPorts.ts";
 import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
@@ -63,6 +65,8 @@ async function createOrchestrationSystem() {
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
     Layer.provide(SqlitePersistenceMemory),
+    // ru-code: MCP secret-store port for the engine decider (not exercised here).
+    Layer.provide(McpManagerSecretStoreMemory),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -118,6 +122,9 @@ describe("OrchestrationEngine", () => {
     const projectionSnapshot = {
       snapshotSequence: 7,
       updatedAt: "2026-03-03T00:00:04.000Z",
+      // ru-code: the read model now folds MCP catalog/bindings (empty — not exercised here).
+      mcpCatalog: [],
+      mcpBindings: [],
       projects: [
         {
           id: asProjectId("project-bootstrap"),
@@ -219,6 +226,8 @@ describe("OrchestrationEngine", () => {
       Layer.provide(Layer.succeed(OrchestrationEventStore, eventStore)),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
+      // ru-code: MCP secret-store port for the engine decider (not exercised here).
+      Layer.provide(McpManagerSecretStoreMemory),
       Layer.provideMerge(NodeServices.layer),
     );
 
@@ -828,6 +837,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
+        // ru-code: MCP secret-store port for the engine decider (not exercised here).
+        Layer.provide(McpManagerSecretStoreMemory),
         Layer.provideMerge(ServerConfigLayer),
         Layer.provideMerge(NodeServices.layer),
       ),
@@ -935,6 +946,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
+        // ru-code: MCP secret-store port for the engine decider (not exercised here).
+        Layer.provide(McpManagerSecretStoreMemory),
         Layer.provide(NodeServices.layer),
       ),
     );
@@ -1080,6 +1093,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
+        // ru-code: MCP secret-store port for the engine decider (not exercised here).
+        Layer.provide(McpManagerSecretStoreMemory),
         Layer.provide(NodeServices.layer),
       ),
     );

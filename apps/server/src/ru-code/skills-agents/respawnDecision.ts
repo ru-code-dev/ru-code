@@ -21,6 +21,13 @@ export interface ProviderRestartFlags {
   readonly shouldRestartForModelSelectionChange: boolean;
   /** ru-code: the effective skill/agent set changed vs. what the live session spawned with. */
   readonly catalogChanged: boolean;
+  /**
+   * ru-code: the project's MCP overlay fingerprint changed vs. what the live session
+   * spawned with (server edited / bound / unbound / extraArgs / tool policy / trust).
+   * qwen only reads the overlay at spawn, so the change re-spawns on this turn
+   * (resume preserves history). Tracked by McpSessionOverlay.
+   */
+  readonly overlayChanged: boolean;
 }
 
 /** True ⇒ tear down and re-spawn the provider session this turn; false ⇒ keep resuming it. */
@@ -30,4 +37,5 @@ export const shouldRestartProviderSession = (flags: ProviderRestartFlags): boole
   flags.instanceChanged ||
   flags.shouldRestartForModelChange ||
   flags.shouldRestartForModelSelectionChange ||
-  flags.catalogChanged;
+  flags.catalogChanged ||
+  flags.overlayChanged;

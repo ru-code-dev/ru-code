@@ -1,15 +1,21 @@
 // ru-code: the boot sweep — the pure per-thread plan AND the real write path
 // (engine dispatch → event store → projection) via the orchestration
 // integration harness. Proves the restart contract: dangling compaction tasks
-// and parked requests on qwen threads are closed with honest rows, while
-// non-qwen threads keep upstream's lazy-heal behavior byte-identical.
+// and parked requests on qwen threads are closed with honest rows, a stale
+// live-claiming session row is reset to "stopped" (which the projector turns
+// into settling the running turn — restart ≡ Stop), while non-qwen threads
+// keep upstream's lazy-heal behavior byte-identical.
 import { CONTEXT_COMPACTION_TASK_PREFIX } from "@ru-code/branding";
 import { assert, describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
+  type OrchestrationMessage,
+  type OrchestrationSession,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { defaultInstanceIdForDriver, ProviderDriverKind } from "@t3tools/contracts";
@@ -26,6 +32,8 @@ import {
   CANCELLED_USER_INPUT_TEXT,
   INTERRUPTED_COMPACTION_TEXT,
   planQwenBootSweepRows,
+  planQwenBootSweepSessionStop,
+  planQwenBootSweepStreamingFinalizes,
   runQwenBootSweepWith,
 } from "../../startup/qwenBootSweep.ts";
 
@@ -97,6 +105,88 @@ describe("planQwenBootSweepRows", () => {
   });
 });
 
+describe("planQwenBootSweepStreamingFinalizes", () => {
+  const makeMessage = (over: Partial<OrchestrationMessage>): OrchestrationMessage => ({
+    id: MessageId.make("m-1"),
+    role: "assistant",
+    text: "partial answer",
+    turnId: TurnId.make("turn-1"),
+    streaming: false,
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:01.000Z",
+    ...over,
+  });
+
+  it("finalizes only mid-stream ASSISTANT messages, carrying their turn binding", () => {
+    expect(
+      planQwenBootSweepStreamingFinalizes([
+        makeMessage({ id: MessageId.make("m-done") }),
+        makeMessage({ id: MessageId.make("m-live"), streaming: true }),
+        makeMessage({ id: MessageId.make("m-user"), role: "user", streaming: true }),
+        makeMessage({ id: MessageId.make("m-turnless"), streaming: true, turnId: null }),
+      ]),
+    ).toEqual([
+      {
+        messageId: MessageId.make("m-live"),
+        turnId: TurnId.make("turn-1"),
+        updatedAt: "2026-03-01T00:00:01.000Z",
+      },
+      {
+        messageId: MessageId.make("m-turnless"),
+        turnId: null,
+        updatedAt: "2026-03-01T00:00:01.000Z",
+      },
+    ]);
+  });
+
+  it("a fully finalized history needs nothing", () => {
+    expect(planQwenBootSweepStreamingFinalizes([makeMessage({})])).toEqual([]);
+  });
+});
+
+describe("planQwenBootSweepSessionStop", () => {
+  const NOW = "2026-03-01T00:00:05.000Z";
+  const runningSession: OrchestrationSession = {
+    threadId: THREAD_QWEN,
+    status: "running",
+    providerName: "qwen",
+    providerInstanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("qwen")),
+    runtimeMode: "approval-required",
+    activeTurnId: TurnId.make("turn-1"),
+    lastError: null,
+    updatedAt: "2026-03-01T00:00:00.000Z",
+  };
+
+  it("resets a running session to the Stop handler's exact shape (activeTurnId cleared)", () => {
+    expect(planQwenBootSweepSessionStop(runningSession, NOW)).toEqual({
+      threadId: THREAD_QWEN,
+      status: "stopped",
+      providerName: "qwen",
+      providerInstanceId: runningSession.providerInstanceId,
+      runtimeMode: "approval-required",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: NOW,
+    });
+  });
+
+  it("resets every non-stopped status; an error banner is carried, not erased", () => {
+    for (const status of ["starting", "ready", "error"] as const) {
+      const reset = planQwenBootSweepSessionStop(
+        { ...runningSession, status, lastError: "boom" },
+        NOW,
+      );
+      expect(reset?.status).toBe("stopped");
+      expect(reset?.lastError).toBe("boom");
+    }
+  });
+
+  it("an honest row needs no dispatch: stopped session and missing session plan null", () => {
+    expect(planQwenBootSweepSessionStop({ ...runningSession, status: "stopped" }, NOW)).toBeNull();
+    expect(planQwenBootSweepSessionStop(null, NOW)).toBeNull();
+  });
+});
+
 const QWEN = ProviderDriverKind.make("qwen");
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 
@@ -149,6 +239,33 @@ it.live(
                 createdAt,
               });
             }
+            // A mid-stream assistant message the dead process never finalized.
+            yield* harness.engine.dispatch({
+              type: "thread.message.assistant.delta",
+              commandId: CommandId.make(`sweep-seed-stream-${index}`),
+              threadId,
+              messageId: MessageId.make(`sweep-stream-${index}`),
+              delta: "partial answer…",
+              turnId: TurnId.make(`sweep-turn-${index}`),
+              createdAt,
+            });
+            // A stale live claim: the previous process died mid-turn, leaving
+            // status "running" + an active turn in the projection.
+            yield* harness.engine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.make(`sweep-seed-session-${index}`),
+              threadId,
+              session: {
+                threadId,
+                status: "running",
+                providerName: index === 0 ? "qwen" : "claudeAgent",
+                runtimeMode: "approval-required",
+                activeTurnId: TurnId.make(`sweep-turn-${index}`),
+                lastError: null,
+                updatedAt: createdAt,
+              },
+              createdAt,
+            });
           }
 
           let uuidCounter = 0;
@@ -192,12 +309,49 @@ it.live(
           assert.isDefined(cancelledApproval, "no approval closing row");
           assert.strictEqual(cancelledApproval!.summary, CANCELLED_APPROVAL_TEXT);
 
+          // The stale live claim is reset with the Stop handler's exact write:
+          // the web derives phase "disconnected" (spinner/timer/Stop button
+          // gone), and the projector settles the running turn — that fan-out
+          // is the projector's own pinned contract (projector.test.ts
+          // "Leaving the running session status settles the running turn").
+          // Upstream 7aad7911f (#5553): a terminal session no longer erases
+          // history — latestTurn STAYS, settled. The phantom-run guarantee is
+          // the settled state.
+          const sweptSession = yield* harness.waitForThread(
+            THREAD_QWEN,
+            (thread) => thread.session?.status === "stopped",
+          );
+          assert.strictEqual(sweptSession.session?.activeTurnId, null);
+          assert.strictEqual(sweptSession.session?.lastError, null);
+          assert.strictEqual(sweptSession.latestTurn?.state, "interrupted");
+          assert.strictEqual(sweptSession.latestTurn?.turnId, TurnId.make("sweep-turn-0"));
+          assert.isNotNull(sweptSession.latestTurn?.completedAt);
+
+          // The mid-stream message is finalized with its text kept — the
+          // timeline's turn fold (blocked by streaming:true) can now form.
+          const finalized = sweptSession.messages.find(
+            (message) => message.id === MessageId.make("sweep-stream-0"),
+          );
+          assert.isDefined(finalized, "streamed message missing");
+          assert.strictEqual(finalized!.streaming, false);
+          assert.strictEqual(finalized!.text, "partial answer…");
+          assert.strictEqual(finalized!.turnId, TurnId.make("sweep-turn-0"));
+          // Back-dated finalize: the "Worked for …" fold must end at the last
+          // real delta, not at boot — updatedAt stays the seed's timestamp.
+          assert.strictEqual(finalized!.updatedAt, createdAt);
+
           // The non-qwen thread is untouched — upstream lazy-heal preserved.
           const otherThread = yield* harness.waitForThread(THREAD_OTHER, () => true);
           assert.deepStrictEqual(findDanglingCompactionTaskIds(otherThread.activities), [TASK_ID]);
           assert.deepStrictEqual(findDanglingParkedRequests(otherThread.activities), [
             { requestId: "req-a", kind: "approval" },
           ]);
+          assert.strictEqual(otherThread.session?.status, "running");
+          assert.strictEqual(otherThread.session?.activeTurnId, TurnId.make("sweep-turn-1"));
+          const otherStreaming = otherThread.messages.find(
+            (message) => message.id === MessageId.make("sweep-stream-1"),
+          );
+          assert.strictEqual(otherStreaming?.streaming, true);
         }),
       (harness) => harness.dispose,
     ).pipe(Effect.provide(NodeServices.layer)),

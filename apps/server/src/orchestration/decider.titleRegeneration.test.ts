@@ -10,12 +10,18 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import * as Layer from "effect/Layer";
+// ru-code: memory MCP secret store for the decider context.
+import { McpManagerSecretStoreMemory } from "../ru-code/mcp/mcpPorts.ts";
 
 const UPDATED_AT = "2026-01-01T00:00:00.000Z";
 
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 0,
   projects: [],
+  // ru-code: MCP read-model folds (defaults keep old snapshots decodable).
+  mcpCatalog: [],
+  mcpBindings: [],
   threads: [
     {
       id: ThreadId.make("thread-1"),
@@ -45,28 +51,32 @@ const readModel: OrchestrationReadModel = {
   updatedAt: UPDATED_AT,
 };
 
-it.layer(NodeServices.layer)("title regeneration decider", (it) => {
-  it.effect("preserves updatedAt for a stale completion", () =>
-    Effect.gen(function* () {
-      const result = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.title.regeneration.complete",
-          commandId: CommandId.make("cmd-regeneration-complete"),
-          threadId: ThreadId.make("thread-1"),
-          requestId: CommandId.make("cmd-old-regeneration-request"),
-          title: "Generated title",
-        },
-        readModel,
-      });
-      const event = Array.isArray(result) ? result[0] : result;
-
-      expect(event.type).toBe("thread.meta-updated");
-      if (event.type === "thread.meta-updated") {
-        expect(event.payload).toEqual({
-          threadId: ThreadId.make("thread-1"),
-          updatedAt: UPDATED_AT,
+// ru-code: the decider now carries the MCP secret-store port in its context.
+it.layer(Layer.mergeAll(NodeServices.layer, McpManagerSecretStoreMemory))(
+  "title regeneration decider",
+  (it) => {
+    it.effect("preserves updatedAt for a stale completion", () =>
+      Effect.gen(function* () {
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.title.regeneration.complete",
+            commandId: CommandId.make("cmd-regeneration-complete"),
+            threadId: ThreadId.make("thread-1"),
+            requestId: CommandId.make("cmd-old-regeneration-request"),
+            title: "Generated title",
+          },
+          readModel,
         });
-      }
-    }),
-  );
-});
+        const event = Array.isArray(result) ? result[0] : result;
+
+        expect(event.type).toBe("thread.meta-updated");
+        if (event.type === "thread.meta-updated") {
+          expect(event.payload).toEqual({
+            threadId: ThreadId.make("thread-1"),
+            updatedAt: UPDATED_AT,
+          });
+        }
+      }),
+    );
+  },
+);

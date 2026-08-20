@@ -203,6 +203,9 @@ const makeDefaultOrchestrationReadModel = () => {
   return {
     snapshotSequence: 0,
     updatedAt: now,
+    // ru-code: the read model now folds MCP catalog/bindings (empty — not exercised here).
+    mcpCatalog: [],
+    mcpBindings: [],
     projects: [
       {
         id: defaultProjectId,
@@ -5832,6 +5835,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const snapshot = {
         snapshotSequence: 1,
         updatedAt: now,
+        // ru-code: the read model now folds MCP catalog/bindings (empty — not exercised here).
+        mcpCatalog: [],
+        mcpBindings: [],
         projects: [
           {
             id: ProjectId.make("project-a"),

@@ -11,6 +11,8 @@ import {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+// ru-code: MCP catalog singleton aggregate id (event rows for mcp.* events).
+import { McpCatalogAggregateId } from "@smart-tools/qwen-cli-mcp-manager/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -35,7 +37,8 @@ const EventMetadataFromJsonString = Schema.fromJsonString(OrchestrationEventMeta
 const AppendEventRequestSchema = Schema.Struct({
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  streamId: Schema.Union([ProjectId, ThreadId]),
+  // ru-code: + the MCP catalog singleton aggregate id.
+  streamId: Schema.Union([ProjectId, ThreadId, McpCatalogAggregateId]),
   type: OrchestrationEventType,
   causationEventId: Schema.NullOr(EventId),
   correlationId: Schema.NullOr(CommandId),
@@ -51,7 +54,8 @@ const OrchestrationEventPersistedRowSchema = Schema.Struct({
   eventId: EventId,
   type: OrchestrationEventType,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  // ru-code: + the MCP catalog singleton aggregate id.
+  aggregateId: Schema.Union([ProjectId, ThreadId, McpCatalogAggregateId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),

@@ -77,6 +77,12 @@ export default mergeConfig(
   defineConfig({
     // ru-code: inject Russian translations into server display strings at build time.
     plugins: [ruCodeLocalizationPlugin()],
+    resolve: {
+      // ru-code: the dev-link (`ru-code-packages` symlink + .pnpmfile.cjs → `link:` deps)
+      // makes linked @smart-tools packages resolve `effect` from THEIR repo's node_modules —
+      // dedupe forces the host's single (patched) copy in dev/test/bundle alike.
+      dedupe: ["effect"],
+    },
     run: {
       tasks: {
         build: {

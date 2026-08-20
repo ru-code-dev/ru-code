@@ -21,6 +21,13 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+// ru-code: MCP manager decider branches (bodies live in the ru-code zone; the secret-store
+// port + its error ride the decider's context/error channels).
+import { decideMcpCommand } from "../ru-code/mcp/mcpDecider.ts";
+import type {
+  McpManagerSecretStore,
+  McpSecretStoreError,
+} from "@smart-tools/qwen-cli-mcp-manager/server";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -186,8 +193,9 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   readonly readModel: OrchestrationReadModel;
 }): Effect.fn.Return<
   ReadonlyArray<PlannedOrchestrationEvent>,
-  OrchestrationCommandInvariantError | PlatformError.PlatformError,
-  Crypto.Crypto
+  // ru-code: + McpSecretStoreError / McpManagerSecretStore (the mcp.* branches split secrets).
+  OrchestrationCommandInvariantError | McpSecretStoreError | PlatformError.PlatformError,
+  Crypto.Crypto | McpManagerSecretStore
 > {
   let nextReadModel = readModel;
   let nextSequence = readModel.snapshotSequence;
@@ -220,8 +228,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   readonly readModel: OrchestrationReadModel;
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
-  OrchestrationCommandInvariantError | PlatformError.PlatformError,
-  Crypto.Crypto
+  // ru-code: + McpSecretStoreError / McpManagerSecretStore (the mcp.* branches split secrets).
+  OrchestrationCommandInvariantError | McpSecretStoreError | PlatformError.PlatformError,
+  Crypto.Crypto | McpManagerSecretStore
 > {
   switch (command.type) {
     case "project.create": {
@@ -1203,6 +1212,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // ru-code: preserve-modes seam (see ThreadSessionSetCommand). Resolve the
+      // preserved fields HERE — the decider runs serialized against the current
+      // read model, so this is the single point where "keep whatever is there
+      // right now" is race-free. The emitted event carries the fully-resolved
+      // session (no projector/replay changes; persisted events stay literal).
+      // With no current session the command's own values stand (nothing to
+      // preserve). Flags absent ⇒ byte-identical to the old behavior.
+      const currentSession = thread.session;
+      const session =
+        (command.preserveLastError === true || command.preserveActiveTurnId === true) &&
+        currentSession !== null
+          ? {
+              ...command.session,
+              ...(command.preserveLastError === true
+                ? { lastError: currentSession.lastError }
+                : {}),
+              ...(command.preserveActiveTurnId === true
+                ? { activeTurnId: currentSession.activeTurnId }
+                : {}),
+            }
+          : command.session;
       const sessionSetEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1214,7 +1244,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.session-set",
         payload: {
           threadId: command.threadId,
-          session: command.session,
+          session,
           // ru-code: explicit user-stop settle rides through untouched.
           ...(command.settledTurnState !== undefined
             ? { settledTurnState: command.settledTurnState }
@@ -1428,6 +1458,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, activityAppendedEvent];
+    }
+
+    // ru-code: MCP manager commands — branch bodies live in ru-code/mcp/mcpDecider.ts
+    // (validate → split secrets → build → emit); the envelope builder is injected.
+    case "mcp.server-add":
+    case "mcp.server-update":
+    case "mcp.builtin-sync":
+    case "mcp.server-remove":
+    case "mcp.binding-set":
+    case "mcp.binding-remove": {
+      return yield* decideMcpCommand({ command, readModel, withEventBase });
     }
 
     default: {

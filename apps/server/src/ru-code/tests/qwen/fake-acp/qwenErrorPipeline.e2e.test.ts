@@ -84,6 +84,7 @@ import * as Stream from "effect/Stream";
 // injects it into the upstream harness via its `registryOverride` seam — so the
 // upstream `OrchestrationEngineHarness` stays free of qwen specifics.
 import { APP_HOME_SLUG, CLI_DISPLAY_NAME } from "@ru-code/branding";
+import { ACP_WARM_ENGINE } from "@ru-code/qwen/constants";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { ServerConfig } from "../../../../config.ts";
 import { ProviderAdapterRegistry } from "../../../../provider/Services/ProviderAdapterRegistry.ts";
@@ -599,9 +600,17 @@ it.live(
           yield* startTurn(harness);
 
           // Settle: the active turn is cleared AND the start-failure row + banner
-          // are written.
+          // are written. With the warm engine on, also wait for the FINAL
+          // status: the adapter's compensating {stopped} event (emitted after
+          // its 0ms {starting}) is the last session write in every interleaving
+          // with the reactor's banner, so a failed start deterministically ends
+          // "stopped" — with `preserveLastError` carrying the banner across it.
+          const expectedFinalStatus = ACP_WARM_ENGINE ? "stopped" : "ready";
           const thread = yield* harness.waitForThread(THREAD_ID, (entry) => {
             if (entry.session?.activeTurnId != null) {
+              return false;
+            }
+            if (entry.session?.status !== expectedFinalStatus) {
               return false;
             }
             const startFailure = entry.activities.find(
@@ -610,6 +619,15 @@ it.live(
             );
             return startFailure !== undefined && entry.session?.lastError != null;
           });
+
+          // ── (0) FINAL STATUS is pinned: a failed start must never leave the
+          // thread looking live ("starting"/"running") or, warm-engine on,
+          // idle-ready — the session does not exist. ──
+          assert.strictEqual(
+            thread.session?.status,
+            expectedFinalStatus,
+            "failed start settles on the pinned final session status",
+          );
 
           // ── (1) Banner: lastError is the EXACT B3 text, not a Cause.pretty dump ──
           assert.strictEqual(

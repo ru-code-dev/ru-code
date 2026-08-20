@@ -154,6 +154,10 @@ import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useAtomCommand } from "../../state/use-atom-command"; // ru-code: language toggle persistence
 import { L } from "@ru-code/localization"; // ru-code: bilingual label seam
+// ru-code: MCP manager settings section (auto-recheck cadence).
+import { McpSettingsSection } from "../../ru-code/mcp/McpSettingsSection";
+// ru-code: preview port-scanning opt-in.
+import { PreviewSettingsSection } from "../../ru-code/platform-compat/PreviewSettingsSection";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -2454,6 +2458,12 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      {/* ru-code: MCP manager settings (auto-recheck cadence; body in ru-code/mcp). */}
+      <McpSettingsSection />
+
+      {/* ru-code: preview port-scanning opt-in (default OFF; body in ru-code/platform-compat). */}
+      <PreviewSettingsSection />
 
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (

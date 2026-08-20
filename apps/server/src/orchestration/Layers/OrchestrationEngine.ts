@@ -39,6 +39,14 @@ import {
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
+// ru-code: MCP secret-store port (consumed by the decider's mcp.* branches) + the
+// singleton catalog aggregate id for command routing.
+import {
+  MCP_CATALOG_AGGREGATE_ID,
+  McpManagerSecretStore,
+  McpSecretStoreError,
+  type McpCatalogAggregateId,
+} from "@smart-tools/qwen-cli-mcp-manager/server";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -59,13 +67,30 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  // ru-code: + the MCP catalog singleton aggregate.
+  readonly aggregateKind: "project" | "thread" | "mcp-catalog";
+  readonly aggregateId: ProjectId | ThreadId | McpCatalogAggregateId;
 } {
   switch (command.type) {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+      return {
+        aggregateKind: "project",
+        aggregateId: command.projectId,
+      };
+    // ru-code: MCP catalog commands target the singleton catalog aggregate.
+    case "mcp.server-add":
+    case "mcp.server-update":
+    case "mcp.server-remove":
+    case "mcp.builtin-sync":
+      return {
+        aggregateKind: "mcp-catalog",
+        aggregateId: MCP_CATALOG_AGGREGATE_ID,
+      };
+    // ru-code: MCP binding commands are project-scoped (cascade with project.deleted).
+    case "mcp.binding-set":
+    case "mcp.binding-remove":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
@@ -85,6 +110,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const crypto = yield* Crypto.Crypto;
+  // ru-code: the MCP secret-store port — the decider's mcp.* branches split inbound
+  // plaintext secrets into it.
+  const mcpSecretStore = yield* McpManagerSecretStore;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
@@ -172,12 +200,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           readModel: commandReadModel,
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
+          // ru-code: the mcp.* branches read the secret-store port from context.
+          Effect.provideService(McpManagerSecretStore, mcpSecretStore),
           Effect.mapError((cause) =>
             isOrchestrationCommandInvariantError(cause)
               ? cause
               : new OrchestrationCommandInvariantError({
                   commandType: envelope.command.type,
-                  detail: "Failed to generate an event identifier.",
+                  // ru-code: an MCP secret-store failure carries its own readable message.
+                  detail:
+                    cause instanceof McpSecretStoreError
+                      ? cause.message
+                      : "Failed to generate an event identifier.",
                   cause,
                 }),
           ),

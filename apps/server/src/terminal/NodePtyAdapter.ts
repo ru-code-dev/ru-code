@@ -8,6 +8,9 @@ import * as Schema from "effect/Schema";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as PtyAdapter from "./PtyAdapter.ts";
+// ru-code: node-pty throws on ANY signal argument on Windows — the compat kill drops it there
+// (bare kill() = ConPTY process-tree kill; VS Code does the same). Body in the ru-code zone.
+import { killPtyProcessCompat } from "../ru-code/platform-compat/terminalKillCompat.ts";
 
 export class NodePtyModuleLoadError extends Schema.TaggedErrorClass<NodePtyModuleLoadError>()(
   "NodePtyModuleLoadError",
@@ -69,9 +72,12 @@ const ensureNodePtySpawnHelperExecutable = Effect.fn(function* () {
 
 class NodePtyProcess implements PtyAdapter.PtyProcess {
   private readonly process: import("node-pty").IPty;
+  // ru-code: injected (from HostProcessPlatform) for the signal-safe Windows kill below.
+  private readonly platform: NodeJS.Platform;
 
-  constructor(process: import("node-pty").IPty) {
+  constructor(process: import("node-pty").IPty, platform: NodeJS.Platform) {
     this.process = process;
+    this.platform = platform;
   }
 
   get pid(): number {
@@ -87,7 +93,8 @@ class NodePtyProcess implements PtyAdapter.PtyProcess {
   }
 
   kill(signal?: string): void {
-    this.process.kill(signal);
+    // ru-code: signal-safe on Windows (see the import note).
+    killPtyProcessCompat((resolved) => this.process.kill(resolved), signal, this.platform);
   }
 
   onData(callback: (data: string) => void): () => void {
@@ -164,7 +171,8 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* (
             cause,
           }),
       });
-      return new NodePtyProcess(ptyProcess);
+      // ru-code: platform threaded in for the signal-safe kill.
+      return new NodePtyProcess(ptyProcess, platform);
     }),
   });
 });

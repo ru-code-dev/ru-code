@@ -779,6 +779,29 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // ru-code: MCP management settings. `autobindDefaults` auto-attaches built-in
+  // servers to new projects. Auto-recheck cadence is driven entirely by the two
+  // interval fields (0 = that transport never auto re-checks), so there is no
+  // separate on/off toggle — set both to 0 to disable recurring probing entirely
+  // (the first probe then comes only from a manual recheck or a config change).
+  mcp: Schema.Struct({
+    autobindDefaults: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+    // Auto-recheck intervals (minutes; 0 = that transport never auto re-checks).
+    // Per transport — local stdio re-spawns are heavier than remote calls.
+    recheckLocalMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+      Schema.withDecodingDefault(Effect.succeed(30)),
+    ),
+    recheckRemoteMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+      Schema.withDecodingDefault(Effect.succeed(30)),
+    ),
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // ru-code: preview toggles. Port scanning spawns child processes on a poll loop, which
+  // needless background churn — OFF by default on EVERY platform and every install (the decode
+  // default guarantees existing settings.json files without the field stay off); the server
+  // gates the scanner AND the terminal foreground-inspection poll on this before any spawn.
+  preview: Schema.Struct({
+    portScanEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -940,6 +963,20 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // ru-code: MCP management toggles.
+  mcp: Schema.optionalKey(
+    Schema.Struct({
+      autobindDefaults: Schema.optionalKey(Schema.Boolean),
+      recheckLocalMinutes: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+      recheckRemoteMinutes: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    }),
+  ),
+  // ru-code: preview toggles (port scanning opt-in).
+  preview: Schema.optionalKey(
+    Schema.Struct({
+      portScanEnabled: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

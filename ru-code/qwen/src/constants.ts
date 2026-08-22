@@ -26,6 +26,21 @@ export const ACP_SERVER_NO_SSL = true;
 export const MCP_ENGINE_USE_OVERLAY = true;
 
 /**
+ * NO_MCP_SERVER_SENTINEL — the allowlist entry that means "connect NOTHING".
+ *
+ * The CLI decides by the PRESENCE of `--allowed-mcp-server-names`, not its content: with the
+ * flag it builds an allow-set and keeps only servers whose name is in it; WITHOUT the flag there
+ * is no filter at all and it connects every MCP server the user has configured, awaiting each
+ * one during startup. Omitting the flag for "we want no MCP" therefore did the exact opposite —
+ * a machine with slow/unreachable servers spent minutes in startup, which is longer than the
+ * warm-slot warmup budget, so every pooled slot was killed before it could answer `initialize`.
+ *
+ * Passing a name no server can have keeps the filter active and empties it. Any non-colliding
+ * token works; this one is explicit in a process list.
+ */
+export const NO_MCP_SERVER_SENTINEL = "__none__";
+
+/**
  * STOP_BUTTON_METHOD — what the Stop button does. "end-force" because CLI builds
  * can ignore both `acp.cancel` and SIGTERM, hanging `Scope.close`. SIGKILL is
  * kernel-unmaskable and cannot hang. Context is preserved via session/load.
@@ -172,8 +187,17 @@ export const ACP_SESSION_START_TIMEOUT_MS = 60_000;
  */
 export const WARM_SLOT_WARMUP_TIMEOUT_MS = 60_000;
 
-/** CLI_VERSION_PROBE_TIMEOUT_MS — budget for `node cli.js --version`. */
-export const CLI_VERSION_PROBE_TIMEOUT_MS = 3_000;
+/**
+ * CLI_VERSION_PROBE_TIMEOUT_MS — budget for `node cli.js --version`.
+ *
+ * Generous on purpose: the probe result is cached per CLI path for the lifetime of the server
+ * process (QwenProvider), so this is paid at most once per path per launch instead of on every
+ * snapshot refresh. The CLI does real work before yargs prints the version (settings load +
+ * a recursive checkpoint-directory delete + Node's ESM cold start), which on a slow disk can
+ * take tens of seconds; a short budget only produced "version unknown" on exactly those
+ * machines. The probe runs in the background and never blocks a request.
+ */
+export const CLI_VERSION_PROBE_TIMEOUT_MS = 60_000;
 
 /** CLI_TEXT_GENERATION_TIMEOUT_MS — budget for one-shot `-p` text generation. */
 export const CLI_TEXT_GENERATION_TIMEOUT_MS = 180_000;

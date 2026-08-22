@@ -417,8 +417,11 @@ describe("serverSettings helpers", () => {
     const custom = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       automaticGitFetchInterval: Duration.seconds(15),
     });
+    // ru-code: Balanced's automaticGitFetchInterval is 0 (background fetch off by
+    // default, boot-performance.md / decisions row for auto-update); the value that
+    // now "matches the preset" is 0, not the pre-fork 30s default.
     const next = applyServerSettingsPatch(custom, {
-      automaticGitFetchInterval: Duration.seconds(30),
+      automaticGitFetchInterval: Duration.seconds(0),
     });
 
     expect(next.backgroundActivity).toEqual({
@@ -427,17 +430,18 @@ describe("serverSettings helpers", () => {
       overrides: {},
     });
     expect(next.backgroundActivityProfile).toBe("balanced");
-    expect(Duration.toMillis(next.automaticGitFetchInterval)).toBe(30_000);
+    expect(Duration.toMillis(next.automaticGitFetchInterval)).toBe(0);
   });
 
   it("drops custom overrides that duplicate the base profile", () => {
+    // ru-code: Balanced's automaticGitFetchInterval is 0 (see the case above).
     const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       backgroundActivity: {
         schemaVersion: 1,
         profile: "custom",
         baseProfile: "balanced",
         overrides: {
-          automaticGitFetchInterval: Duration.seconds(30),
+          automaticGitFetchInterval: Duration.seconds(0),
         },
       },
     });

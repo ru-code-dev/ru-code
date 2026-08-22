@@ -11,6 +11,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useThread, useThreadRefs } from "../state/entities";
+import { useDraftEnvironmentRetired } from "../ru-code/drafts/draftEnvironmentLiveness"; // ru-code: dead-environment draft retirement
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
@@ -29,6 +30,10 @@ function DraftChatThreadRouteView() {
   const serverThread = useThread(serverThreadRef);
   const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
+  // ru-code: a draft pinned to a PROVABLY dead environmentId (app data wiped →
+  // new server identity) is retired like a missing draft — see
+  // ru-code/drafts/draftEnvironmentLiveness.ts for the strict liveness rule.
+  const draftEnvironmentRetired = useDraftEnvironmentRetired(draftSession);
 
   useEffect(() => {
     if (!inferredThreadRef || draftSession?.promotedTo) {
@@ -60,13 +65,15 @@ function DraftChatThreadRouteView() {
   }, [canonicalThreadRef, navigate]);
 
   useEffect(() => {
-    if (draftSession || canonicalThreadRef) {
+    // ru-code: dead-environment drafts fall through to "/" like missing ones.
+    if ((draftSession && !draftEnvironmentRetired) || canonicalThreadRef) {
       return;
     }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate]);
+  }, [canonicalThreadRef, draftEnvironmentRetired, draftSession, navigate]);
 
-  if (!draftSession) {
+  // ru-code: retired drafts render nothing while the redirect above fires.
+  if (!draftSession || draftEnvironmentRetired) {
     return null;
   }
 

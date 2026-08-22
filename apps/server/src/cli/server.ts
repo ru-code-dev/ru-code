@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option"; // ru-code: read the launcher-only --json flag
 import { Command, GlobalFlag } from "effect/unstable/cli";
 
 import { APP_NAME } from "@ru-code/branding";
@@ -29,8 +30,14 @@ export const runServerCommand = (
         statePath: config.serverRuntimeStatePath,
         baseDir: config.baseDir,
         version: packageJson.version,
+        // ru-code: --json is a launcher-parent-only contract for the installer.
+        jsonOutput: Option.getOrElse(flags.json ?? Option.none(), () => false),
       });
     }
+    // ru-code: record what the daemon child booted with, into daemon.log. No-op in
+    // every other launch mode. Makes "works under --fg, fails as a daemon" reports
+    // answerable from the log instead of by inference.
+    yield* Daemon.reportBootEnvironment();
     // ru-code: single-instance guard — `serve`/`--foreground`/desktop bypass the
     // daemon's reuse gate and would otherwise start NEXT TO a running daemon on a
     // free port, clobbering the shared state file + pid journals. Refuses (with

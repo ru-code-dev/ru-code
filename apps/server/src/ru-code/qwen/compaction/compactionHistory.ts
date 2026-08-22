@@ -35,13 +35,23 @@ export interface DanglingParkedRequest {
   readonly kind: "approval" | "user-input";
 }
 
+/**
+ * The two columns the dangling derivations actually read. Full
+ * `OrchestrationThreadActivity` rows remain assignable; the boot sweep's lean
+ * SQL read (kind + extracted taskId/requestId only) produces exactly this.
+ */
+export interface SweepActivityInput {
+  readonly kind: string;
+  readonly payload: unknown;
+}
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 
 const asPositiveNumber = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 
-const compactionTaskId = (activity: OrchestrationThreadActivity): string | null => {
+const compactionTaskId = (activity: SweepActivityInput): string | null => {
   if (activity.kind !== "task.progress" && activity.kind !== "task.completed") return null;
   const taskId = asRecord(activity.payload)?.["taskId"];
   if (typeof taskId !== "string" || !taskId.startsWith(CONTEXT_COMPACTION_TASK_PREFIX)) return null;
@@ -103,7 +113,7 @@ export function isAutoCompactDisarmed(
 
 /** Compaction tasks with a `task.progress` but no `task.completed`. */
 export function findDanglingCompactionTaskIds(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activities: ReadonlyArray<SweepActivityInput>,
 ): ReadonlyArray<string> {
   const openTaskIds = new Set<string>();
   for (const activity of activities) {
@@ -133,12 +143,24 @@ const PARKED_REQUEST_LIFECYCLE: ReadonlyArray<{
 ];
 
 /**
+ * Every activity kind the dangling derivations above can react to — the boot
+ * sweep's lean SQL filters on exactly this list, so it lives HERE, next to the
+ * functions that define it (single source). `compactionTaskId` is kind-gated
+ * to the first two entries; the rest are the parked-request open/close pairs.
+ */
+export const SWEEP_ACTIVITY_KINDS: ReadonlyArray<string> = [
+  "task.progress",
+  "task.completed",
+  ...PARKED_REQUEST_LIFECYCLE.flatMap((lifecycle) => [lifecycle.opened, ...lifecycle.closed]),
+];
+
+/**
  * Requests still parked in history (opened, never resolved / never failed a
  * respond). After a server restart these are unanswerable — the held Deferred
  * and the CLI process both died with the previous process.
  */
 export function findDanglingParkedRequests(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activities: ReadonlyArray<SweepActivityInput>,
 ): ReadonlyArray<DanglingParkedRequest> {
   const open = new Map<string, DanglingParkedRequest>();
   for (const activity of activities) {

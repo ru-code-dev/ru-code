@@ -49,7 +49,11 @@
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
     "build:preflight": "vp run --filter t3 build:preflight",
     "prepare-release": "node scripts/prepare-release.ts",
-    "test:e2e": "pnpm --filter @ru-code/e2e test:e2e"
+    "test:e2e": "pnpm --filter @ru-code/e2e test:e2e",
+    "build:installer": "node scripts/build-installer.ts",
+    "test:integration:auto-update": "node ru-code/e2e/features/auto-update/liveCycle.ts",
+    "test:e2e:auto-update-cycle": "node ru-code/e2e/features/auto-update/browserRun.ts",
+    "test:e2e:pins": "pnpm --filter @ru-code/e2e test:pins"
   },
   "devDependencies": {
     "@babel/plugin-transform-react-jsx": "7.28.6",

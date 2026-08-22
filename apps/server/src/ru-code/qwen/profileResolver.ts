@@ -2,7 +2,7 @@
 // profile (@ru-code/branding), its per-instance settings and the boot preflight.
 // Profile supplies defaults; `binaryPath`/`homePath` override; a null profile
 // default falls back to the preflight-detected value. One resolver so the spawn,
-// version probe, text-gen, CLI_HOME and error classifier all agree on bin+dir+
+// version probe, text-gen and error classifier all agree on bin+dir+
 // name+artifact. See specs/cli-profiles.md.
 
 import {

@@ -26,14 +26,15 @@ import { TextGenerationError } from "@t3tools/contracts";
 // ru-code: spawn helper — launches the CLI as `node <cliJs> …` directly. See
 // ./spawn.ts buildCliSpawn.
 import { buildCliSpawn } from "@ru-code/qwen/spawn";
-import { CLI_TEXT_GENERATION_TIMEOUT_MS } from "@ru-code/qwen/constants";
+import { CLI_TEXT_GENERATION_TIMEOUT_MS, MCP_ENGINE_USE_OVERLAY } from "@ru-code/qwen/constants";
+// ru-code: same allowlist argument the ACP spawns use — one definition, one behaviour.
+import { buildAllowedMcpServerArgs } from "./QwenAcpSupport.ts";
 import { haltOnExit } from "@ru-code/qwen/haltOnExit";
 // ru-code: resolve the auth method a given model dispatches with (built-in →
 // profile default, custom → its stored method, else instance default).
 import { asAuthMethodId } from "@ru-code/branding";
 import { resolveServedModelAuthMethod } from "./discovery/serveQwenModels.ts";
 import { resolveDefaultAuthMethod } from "./profileResolver.ts";
-import { expandHomePath } from "../../pathExpansion.ts";
 import { type TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
 import {
   BRANCH_NAME_INSTRUCTION,
@@ -144,7 +145,6 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
 
   const qwenEnvironment: NodeJS.ProcessEnv = {
     ...environment,
-    ...(qwenSettings.homePath ? { CLI_HOME: expandHomePath(qwenSettings.homePath) } : {}),
   };
 
   // ru-code: the CLI flags selecting the model + its auth for a `-p` run. Without
@@ -152,7 +152,7 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
   // mismatch the model the user actually picked → `[API Error 404]`. The clean
   // slug goes to `--model`; the resolved auth method (built-in → profile, custom →
   // its stored method, else instance default) goes to `--auth-type`. Creds
-  // themselves live in the CLI_HOME config qwen authenticated into. An empty /
+  // themselves live in the CLI's own config dir qwen authenticated into. An empty /
   // absent slug adds no flags (qwen keeps its own defaults).
   const buildModelArgs = (
     model: string | null | undefined,
@@ -243,6 +243,11 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
       "-p",
       input.prompt,
       ...buildModelArgs(dispatch.slug, dispatch.servedModels),
+      // ru-code: a one-shot `-p` run has no use for MCP tools, and without this flag the CLI
+      // connects (and awaits) every MCP server the user configured before answering — minutes
+      // on a machine with slow/unreachable servers, paid on every commit message / branch name.
+      // Gated like the ACP path so the kill-switch leaves qwen's own configuration alone.
+      ...(MCP_ENGINE_USE_OVERLAY ? buildAllowedMcpServerArgs(undefined) : []),
       "--output-format",
       "json",
     ]);

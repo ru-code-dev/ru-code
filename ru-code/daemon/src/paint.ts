@@ -3,6 +3,8 @@
 // output, or the daemon child whose stdout is the log file) so logs never fill
 // with escape sequences. `process.stdout` is a global — no node import needed.
 
+import { BRAND_GRADIENT_FROM, BRAND_GRADIENT_TO } from "@ru-code/branding";
+
 const TTY = Boolean(process.stdout.isTTY);
 const ESC = "\x1b[";
 const RESET = TTY ? `${ESC}0m` : "";
@@ -34,8 +36,8 @@ export const gradient = (text: string): string => {
   if (!TTY) {
     return text;
   }
-  const [fromR, fromG, fromB] = [56, 217, 238]; // cyan
-  const [toR, toG, toB] = [167, 139, 250]; // violet
+  const [fromR, fromG, fromB] = BRAND_GRADIENT_FROM; // cyan
+  const [toR, toG, toB] = BRAND_GRADIENT_TO; // violet
   const chars = [...text];
   const span = Math.max(1, chars.length - 1);
   return chars

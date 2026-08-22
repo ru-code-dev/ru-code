@@ -12,6 +12,12 @@ export const APP_BIN = APP_COMMAND;
 /** Linux-only path segment under /home. When /home/<LINUX_SAFE_DIR>/<user> exists,
  *  OUR_ROOT is placed there; otherwise it stays in the home dir. */
 export const LINUX_SAFE_DIR = "work";
+/**
+ * Whether the CLI (qwen) profile dir co-locates with a relocated OUR_ROOT on Linux. Default `false`:
+ * even when the app root relocates to `/home/<LINUX_SAFE_DIR>/<user>`, the CLI profile dir stays under
+ * the home dir (`<home>/<CLI_DIR>`) — the pre-existing behavior. `true` moves it alongside the app root.
+ */
+export const LINUX_USE_SAFE_DIR_FOR_CLI = false;
 
 export const NODE_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
 /** Minimum CLI version; "" disables the version check (presence only). */

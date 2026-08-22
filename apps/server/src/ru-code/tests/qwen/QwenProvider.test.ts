@@ -27,15 +27,17 @@ describe("parseQwenVersionOutput", () => {
     expect(parsed.status).toBe("ready");
   });
 
-  it("non-zero exit WITH a parseable version → warning, version-aware message", () => {
+  // ru-code: a parsed version proves the CLI ran and identified itself, so a non-zero exit
+  // beside it (shutdown noise from an MCP server, a credential check, a node-pty race — all of
+  // which print on stderr and exit non-zero) must NOT degrade the provider: a `warning` would
+  // grey the instance out in the model picker, which requires `status === "ready"`.
+  it("non-zero exit WITH a parseable version → ready, no message", () => {
     const result: CommandResult = { stdout: "qwen 1.2.3\n", stderr: "boom", code: 1 };
     const parsed = parseQwenVersionOutput(result, LABEL);
     expect(parsed.version).toBe("1.2.3");
-    expect(parsed.status).toBe("warning");
+    expect(parsed.status).toBe("ready");
     expect(parsed.auth).toEqual({ status: "unknown" });
-    expect(parsed.message).toContain("1.2.3");
-    expect(parsed.message).toContain(LABEL);
-    expect(parsed.message).toContain("1"); // the exit code
+    expect(parsed.message).toBeUndefined();
   });
 
   it("non-zero exit WITHOUT a version → warning, generic message", () => {

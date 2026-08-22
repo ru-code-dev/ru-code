@@ -89,6 +89,11 @@ import {
 } from "@smart-tools/qwen-cli-mcp-manager/server";
 import { McpError } from "@smart-tools/qwen-cli-mcp-manager/contracts";
 import { McpManagerHostLayer } from "./ru-code/mcp/mcpPorts.ts";
+// ru-code: auto-update RPC handlers (logic in ru-code/auto-update; scopes live in
+// auth/RpcAuthorization.ts).
+import { buildAutoUpdateRpcHandlers } from "./ru-code/auto-update/rpcHandlers.ts";
+import { AutoUpdateHostLayer } from "./ru-code/auto-update/autoUpdateWiring.ts";
+import { UpdateEngine } from "./ru-code/auto-update/UpdateEngine.ts";
 import {
   buildMcpRpcHandlers,
   type ObserveMcpRpc,
@@ -101,6 +106,13 @@ import {
   QwenTranscriptService,
 } from "@smart-tools/qwen-cli-extended-chat/server";
 import { QwenTranscriptHostLive } from "./ru-code/qwen/transcript/transcriptHost.ts";
+// ru-code: boot-performance.md Fix D — slow snapshot serves leave a debug trace.
+import {
+  summarizeShellSnapshotForServeLog,
+  summarizeThreadForServeLog,
+  withSlowServeLog,
+} from "./ru-code/reconnect/slowServeLog.ts";
+import { signalFirstClientConnected } from "./ru-code/startup/firstClientConnected.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -164,6 +176,7 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import { logWebSocketUpgradeAuthReject } from "./ru-code/auth/wsUpgradeRejectLog.ts"; // ru-code: A2 upgrade-reject log
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -470,6 +483,8 @@ const makeWsRpcLayer = (
       const mcpSupervisor = yield* McpSupervisor;
       // ru-code: extended-chat transcript reader (read-only tail of qwen's JSONL).
       const qwenTranscript = yield* QwenTranscriptService;
+      // ru-code: the auto-update engine (same memoized instance the runtime graph provides).
+      const updateEngine = yield* UpdateEngine;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1305,6 +1320,11 @@ const makeWsRpcLayer = (
               const bufferedLiveStream = coalesceShellLiveStream(Stream.fromQueue(liveBuffer));
 
               const loadSnapshot = projectionSnapshotQuery.getShellSnapshot().pipe(
+                // ru-code: boot-performance.md Fix D — trace serves over 1 s.
+                withSlowServeLog(
+                  ORCHESTRATION_WS_METHODS.subscribeShell,
+                  summarizeShellSnapshotForServeLog,
+                ),
                 Effect.tapError((cause) =>
                   Effect.logError("orchestration shell snapshot load failed", { cause }),
                 ),
@@ -1341,7 +1361,17 @@ const makeWsRpcLayer = (
               // replay (see below).
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                const headSequence = yield* orchestrationEngine.latestSequence;
+                // ru-code: boot-performance.md S1 — the store tail, not the in-process counter: the
+                // command read model can lag what is on disk, and a lagging head reads the gap as 0.
+                const headSequence = yield* orchestrationEngine.readLatestEventSequence().pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: "Failed to read the shell catch-up cursor",
+                        cause,
+                      }),
+                  ),
+                );
                 const replayGap = headSequence - afterSequence;
                 // Gap too large: replaying every intervening event (each a shell
                 // refetch) is far more expensive than a single O(active-threads)
@@ -1451,11 +1481,23 @@ const makeWsRpcLayer = (
               // thread snapshot instead, exactly like subscribeShell above.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                const headSequence = yield* orchestrationEngine.latestSequence;
+                // ru-code: boot-performance.md S1 — the store tail, not the in-process counter: the
+                // command read model can lag what is on disk, and a lagging head reads the gap as 0.
+                const headSequence = yield* orchestrationEngine.readLatestEventSequence().pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: `Failed to read the catch-up cursor for thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                );
                 const replayGap = headSequence - afterSequence;
                 if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+                  // ru-code: boot-performance.md S1 — read only THIS thread's stream
+                  // (index-served) instead of the global log, keeping upstream's replayGap bound.
                   const catchUpStream = orchestrationEngine
-                    .readEvents(afterSequence, replayGap)
+                    .readStreamEvents("thread", input.threadId, afterSequence, replayGap)
                     .pipe(
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.map((event) => ({
@@ -1496,6 +1538,12 @@ const makeWsRpcLayer = (
                   input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
                 )
                 .pipe(
+                  // ru-code: boot-performance.md Fix D — trace serves over 1 s.
+                  withSlowServeLog(ORCHESTRATION_WS_METHODS.subscribeThread, (option) =>
+                    Option.isSome(option)
+                      ? summarizeThreadForServeLog(option.value.thread)
+                      : { threadId: input.threadId, found: false },
+                  ),
                   Effect.mapError(
                     (cause) =>
                       new OrchestrationGetSnapshotError({
@@ -1559,6 +1607,12 @@ const makeWsRpcLayer = (
           qwenTranscript,
           observeRpcEffect,
           observeRpcStream,
+        }),
+        // ru-code: auto-update RPC handlers (ru-code/auto-update/rpcHandlers).
+        ...buildAutoUpdateRpcHandlers({
+          updateEngine,
+          observeRpcEffect,
+          observeRpcStreamEffect,
         }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
@@ -2427,7 +2481,13 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const sessions = yield* SessionStore.SessionStore;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-            failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
+            // ru-code: A2 — an auth-rejected upgrade was previously silent server-side;
+            // log the reason before failing (never logs the credential itself).
+            logWebSocketUpgradeAuthReject(request, error).pipe(
+              Effect.andThen(
+                failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
+              ),
+            ),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("internal_error", error),
@@ -2447,6 +2507,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // ru-code: the MCP manager services (same memoized module-level layer the
               // runtime graph provides, so ws sees the SAME supervisor instance).
               Layer.provide(McpManagerHostLayer),
+              // ru-code: the auto-update engine (same memoized module-level layer).
+              Layer.provide(AutoUpdateHostLayer),
               // ru-code: transcript reader. The session directory is a stateless
               // read facade over the runtime-binding repository, so we build our own
               // instance here (SqlClient/ProjectionSnapshotQuery/ServerConfig/
@@ -2490,7 +2552,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           ),
         );
         return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
+          // ru-code: boot-performance.md Fix W — the first successful attach releases the
+          // deferred warm-pool prewarm (no-op without the layer, idempotent afterwards).
+          sessions
+            .markConnected(session.sessionId)
+            .pipe(Effect.tap(() => signalFirstClientConnected)),
           () => rpcWebSocketHttpEffect,
           () => sessions.markDisconnected(session.sessionId),
         );

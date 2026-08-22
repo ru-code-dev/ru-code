@@ -9,11 +9,17 @@
 
 /**
  * How the server opens a URL in the default browser on Windows (and Windows-from-WSL).
- * - `"explorer"` (default): `explorer.exe <url>` — no PowerShell, immune to Node #51018.
+ * - `"cmd-start"` (default): `cmd.exe /d /s /c start "" <url>` — cmd's `start` builtin does a
+ *   true ShellExecute, so the FULL url (including the `#token=…` pairing fragment) reaches the
+ *   default browser. Immune to Node #51018 (PowerShell-specific). Hidden via the spawner's
+ *   windowsHide, so no console flashes.
+ * - `"explorer"`: `explorer.exe <url>` — BROKEN for our pairing URLs: explorer parses its
+ *   argument as a shell-namespace item and mishandles urls with a fragment/query (silently
+ *   refuses, or strips everything after `#`, losing the token); kept for comparison only.
  * - `"powershell"`: legacy `powershell.exe -EncodedCommand Start …` with detached+ignore
  *   stdio — BROKEN on Windows by Node #51018 (`spawn UNKNOWN`); kept for comparison only.
  */
-export const EXTERNAL_OPEN_WINDOWS: "explorer" | "powershell" = "explorer";
+export const EXTERNAL_OPEN_WINDOWS: "cmd-start" | "explorer" | "powershell" = "cmd-start";
 
 /**
  * How the preview port scanner enumerates listening ports on Windows (only relevant when

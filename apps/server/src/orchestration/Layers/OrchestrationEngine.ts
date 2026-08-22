@@ -363,6 +363,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
     eventStore.readFromSequence(fromSequenceExclusive, limit);
 
+  // ru-code: per-stream catch-up delegate (boot-performance.md S1).
+  const readStreamEvents: OrchestrationEngineShape["readStreamEvents"] = (
+    aggregateKind,
+    streamId,
+    fromSequenceExclusive,
+    limit,
+  ) => eventStore.readStreamFromSequence(aggregateKind, streamId, fromSequenceExclusive, limit);
+
+  // ru-code: store-tail cursor delegate (boot-performance.md S1).
+  const readLatestEventSequence: OrchestrationEngineShape["readLatestEventSequence"] = () =>
+    eventStore.readLatestSequence();
+
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
@@ -376,6 +388,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   return {
     readEvents,
+    readStreamEvents, // ru-code: boot-performance.md S1
+    readLatestEventSequence, // ru-code: boot-performance.md S1
     dispatch,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)

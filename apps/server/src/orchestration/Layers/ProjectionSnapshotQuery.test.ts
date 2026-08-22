@@ -12,6 +12,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+// ru-code: boot-performance.md Fix G — the dedup test below crosses the cache-first fill.
+import * as TestClock from "effect/testing/TestClock";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
@@ -1919,16 +1921,36 @@ it.effect(
           )
       `;
 
-      const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      // ru-code: boot-performance.md Fix G — snapshot identity resolution is cache-first:
+      // the FIRST serve answers null immediately (never waits on git) and forks ONE
+      // deduped background fill per unique root; the NEXT serve returns the filled
+      // identity. Dedup-by-root is what this test pins, and it still holds — one
+      // resolver call for the two projects sharing a root.
+      const firstShellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.equal(firstShellSnapshot.projects.length, 2);
+      assert.equal(firstShellSnapshot.projects[0]?.repositoryIdentity, null);
+      assert.equal(firstShellSnapshot.projects[1]?.repositoryIdentity, null);
+      yield* TestClock.adjust("1 millis"); // the background fill lands
       assert.deepStrictEqual(resolveCalls.toSorted(), ["/tmp/shared-root"]);
+
+      const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.projects.length, 2);
       assert.equal(shellSnapshot.projects[0]?.repositoryIdentity?.rootPath, "/tmp/shared-root");
       assert.equal(shellSnapshot.projects[1]?.repositoryIdentity?.rootPath, "/tmp/shared-root");
 
       resolveCalls.length = 0;
 
+      // The full snapshot includes the deleted project: its root is unknown → null on
+      // this serve + one fill; the shared root is already cached (inside its TTL), so
+      // NO second resolver call for it.
+      const firstFullSnapshot = yield* snapshotQuery.getSnapshot();
+      assert.equal(firstFullSnapshot.projects.length, 3);
+      assert.equal(firstFullSnapshot.projects[0]?.repositoryIdentity?.rootPath, "/tmp/shared-root");
+      assert.equal(firstFullSnapshot.projects[2]?.repositoryIdentity, null);
+      yield* TestClock.adjust("1 millis");
+      assert.deepStrictEqual(resolveCalls.toSorted(), ["/tmp/deleted-root"]);
+
       const fullSnapshot = yield* snapshotQuery.getSnapshot();
-      assert.deepStrictEqual(resolveCalls.toSorted(), ["/tmp/deleted-root", "/tmp/shared-root"]);
       assert.equal(fullSnapshot.projects.length, 3);
       assert.equal(fullSnapshot.projects[2]?.repositoryIdentity?.rootPath, "/tmp/deleted-root");
     }).pipe(Effect.provide(layer));

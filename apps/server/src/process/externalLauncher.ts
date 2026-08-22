@@ -19,10 +19,12 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
-import * as Clock from "effect/Clock";
-// ru-code: Windows browser-launch strategy — explorer.exe instead of the Node-#51018-broken
-// powershell+detached+ignore combo (EXTERNAL_OPEN_WINDOWS switches; body in the ru-code zone).
+// ru-code: Windows browser-launch strategy — `cmd /c start` (ShellExecute keeps the #token
+// fragment; explorer.exe drops it) instead of the Node-#51018-broken powershell+detached+ignore
+// combo (EXTERNAL_OPEN_WINDOWS switches; body in the ru-code zone).
 import { buildWindowsBrowserLaunchCompat } from "../ru-code/platform-compat/externalOpenWindows.ts";
+// ru-code: background-scanned + cached editor availability (USE_NON_BLOCKIN_EDITORS_SCAN).
+import { makeAvailableEditorsCompat } from "../ru-code/process/availableEditors.ts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -31,7 +33,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
+// ru-code: the browser opener tries a chain of candidates, so it needs per-attempt results.
+import * as Result from "effect/Result";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -309,28 +312,6 @@ const resolveAvailableEditors = Effect.fn("externalLauncher.resolveAvailableEdit
   return yield* buildAvailableEditors(platform, env);
 });
 
-// Editor discovery walks PATH for every known editor and runs for every
-// client connect (the server config embeds the available editors). Memoize
-// the discovered set for a bounded window so repeat connects skip even the
-// per-command cache lookups in @t3tools/shared/shell.
-//
-// This deliberately does not use `Effect.cachedWithTTL`: that memoizes the
-// first caller's Exit whatever it is, including an interrupt. Callers run this
-// on the connection fiber under a timeout (`resolveAvailableEditorsForConfig`),
-// so one client disconnecting mid-scan would cache the interrupt and replay it
-// to every later connect for the whole TTL, breaking `server.getConfig`
-// permanently. Storing only on success means an interrupted scan leaves the
-// cache untouched and the next connect simply rescans.
-// Expiry uses the monotonic clock (Clock.currentTimeNanos), matching the
-// command-resolution cache in @t3tools/shared/shell, so a backward wall-clock
-// adjustment cannot keep an expired entry alive.
-const EDITOR_DISCOVERY_CACHE_TTL_NANOS = 60_000_000_000n;
-
-interface EditorDiscoveryCacheEntry {
-  readonly editors: ReadonlyArray<EditorId>;
-  readonly expiresAtNanos: bigint;
-}
-
 /**
  * ExternalLauncher - Service tag for browser/editor launch operations.
  */
@@ -408,19 +389,72 @@ const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
   );
 });
 
+// ru-code: on Linux there is no single reliable opener. `xdg-open` is missing on minimal installs
+// and is a shell→D-Bus chain that quietly does nothing without a desktop session; `$BROWSER` is the
+// user's explicit choice and must win; `gio open` covers GNOME/portal setups where xdg-utils is
+// absent. One attempt that silently loses is exactly why "the browser never opened after install"
+// was unexplainable — so try them in order and report which ones were tried.
+export const linuxBrowserLaunches = (
+  target: string,
+  env: NodeJS.ProcessEnv,
+): ReadonlyArray<ProcessLaunch> => {
+  const explicit =
+    typeof env["BROWSER"] === "string" && env["BROWSER"].trim() !== ""
+      ? [env["BROWSER"].trim()]
+      : [];
+  return [...explicit, "xdg-open", "gio"].map((command) => ({
+    command,
+    args: command === "gio" ? ["open", target] : [target],
+    options: DETACHED_IGNORE_STDIO_OPTIONS,
+  }));
+};
+
 const launchBrowser = Effect.fn("externalLauncher.launchBrowser")(function* (
   target: string,
-): Effect.fn.Return<void, ExternalLauncherError, ChildProcessSpawner.ChildProcessSpawner> {
-  const launch = yield* resolveBrowserLaunch(target);
-  return yield* launchAndUnref(
-    launch,
-    (cause) =>
+): Effect.fn.Return<
+  void,
+  ExternalLauncherError,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> {
+  const primary = yield* resolveBrowserLaunch(target);
+  // ru-code: the fallback chain applies exactly where the primary resolver lands on xdg-open —
+  // macOS `open` and the Windows/WSL strategies hand off to a system service and need no chain.
+  const env = yield* readBrowserLaunchEnv;
+  const candidates = primary.command === "xdg-open" ? linuxBrowserLaunches(target, env) : [primary];
+
+  // Availability decides the ORDER, not whether we try at all: a missing binary surfaces as an
+  // async spawn error that a fire-and-forget launch never sees, so probing is the only way the
+  // chain can advance. When nothing is probeable (no PATH to scan), fall back to the platform
+  // default and let it speak for itself — best-effort, exactly as before the chain existed.
+  const available: Array<ProcessLaunch> = [];
+  for (const launch of candidates) {
+    if (yield* isCommandAvailable(launch.command, { env })) available.push(launch);
+  }
+  const attempts = available.length > 0 ? available : [candidates[0] ?? primary];
+
+  let lastError: ExternalLauncherError | null = null;
+  for (const launch of attempts) {
+    const attempt = yield* launchAndUnref(
+      launch,
+      (cause) =>
+        new ExternalLauncherBrowserSpawnError({
+          target,
+          command: launch.command,
+          args: launch.args,
+          cause,
+        }),
+    ).pipe(Effect.result);
+    if (Result.isSuccess(attempt)) return;
+    lastError = attempt.failure;
+  }
+  return yield* (
+    lastError ??
       new ExternalLauncherBrowserSpawnError({
         target,
-        command: launch.command,
-        args: launch.args,
-        cause,
-      }),
+        command: primary.command,
+        args: primary.args,
+        cause: new Error("no browser opener available"),
+      })
   );
 });
 
@@ -476,31 +510,24 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
 
-  const editorDiscoveryCache = yield* Ref.make<Option.Option<EditorDiscoveryCacheEntry>>(
-    Option.none(),
+  // ru-code: the editor list is served from a background-scanned cache instead of walking PATH
+  // inside `server.getConfig` (the client's connection gate). USE_NON_BLOCKIN_EDITORS_SCAN
+  // switches the behaviours; body in the ru-code zone.
+  const availableEditors = yield* provideCommandResolutionServices(
+    makeAvailableEditorsCompat({
+      legacy: () => provideCommandResolutionServices(resolveAvailableEditors()),
+    }),
   );
-  const cachedAvailableEditors = Effect.gen(function* () {
-    const nowNanos = yield* Clock.currentTimeNanos;
-    const entry = yield* Ref.get(editorDiscoveryCache);
-    if (Option.isSome(entry) && entry.value.expiresAtNanos > nowNanos) {
-      return entry.value.editors;
-    }
-    const editors = yield* provideCommandResolutionServices(resolveAvailableEditors());
-    yield* Ref.set(
-      editorDiscoveryCache,
-      Option.some({
-        editors,
-        expiresAtNanos: nowNanos + EDITOR_DISCOVERY_CACHE_TTL_NANOS,
-      }),
-    );
-    return editors;
-  });
 
   return ExternalLauncher.of({
-    resolveAvailableEditors: () => cachedAvailableEditors,
+    resolveAvailableEditors: () => availableEditors.resolve,
     launchBrowser: (target) =>
-      launchBrowser(target).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      // ru-code: the opener chain resolves command availability, so it needs the same
+      // FileSystem/Path services the editor path already gets.
+      provideCommandResolutionServices(
+        launchBrowser(target).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
       ),
     launchEditor: (input) =>
       provideCommandResolutionServices(

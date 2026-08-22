@@ -1,0 +1,183 @@
+ration
+  migration_name: OrchestrationThreadCreatedRuntimeMode
+  migration_id: 11
+[16:26:28.347] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadsInteractionMode
+  migration_id: 12
+[16:26:28.347] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadProposedPlans
+  migration_id: 13
+[16:26:28.348] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadProposedPlanImplementation
+  migration_id: 14
+[16:26:28.348] DEBUG (#1): Running migration
+  migration_name: ProjectionTurnsSourceProposedPlan
+  migration_id: 15
+[16:26:28.349] DEBUG (#1): Running migration
+  migration_name: CanonicalizeModelSelections
+  migration_id: 16
+[16:26:28.351] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadsArchivedAt
+  migration_id: 17
+[16:26:28.351] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadsArchivedAtIndex
+  migration_id: 18
+[16:26:28.352] DEBUG (#1): Running migration
+  migration_name: ProjectionSnapshotLookupIndexes
+  migration_id: 19
+[16:26:28.352] DEBUG (#1): Running migration
+  migration_name: AuthAccessManagement
+  migration_id: 20
+[16:26:28.352] DEBUG (#1): Running migration
+  migration_name: AuthSessionClientMetadata
+  migration_id: 21
+[16:26:28.353] DEBUG (#1): Running migration
+  migration_name: AuthSessionLastConnectedAt
+  migration_id: 22
+[16:26:28.354] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadShellSummary
+  migration_id: 23
+[16:26:28.355] DEBUG (#1): Running migration
+  migration_name: BackfillProjectionThreadShellSummary
+  migration_id: 24
+[16:26:28.356] DEBUG (#1): Running migration
+  migration_name: CleanupInvalidProjectionPendingApprovals
+  migration_id: 25
+[16:26:28.357] DEBUG (#1): Running migration
+  migration_name: CanonicalizeModelSelectionOptions
+  migration_id: 26
+[16:26:28.357] DEBUG (#1): Running migration
+  migration_name: ProviderSessionRuntimeInstanceId
+  migration_id: 27
+[16:26:28.357] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadSessionInstanceId
+  migration_id: 28
+[16:26:28.358] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadDetailOrderingIndexes
+  migration_id: 29
+[16:26:28.358] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadShellArchiveIndexes
+  migration_id: 30
+[16:26:28.358] DEBUG (#1): Running migration
+  migration_name: AuthAuthorizationScopes
+  migration_id: 31
+[16:26:28.361] DEBUG (#1): Running migration
+  migration_name: AuthPairingProofKeyThumbprint
+  migration_id: 32
+[16:26:28.362] DEBUG (#1): Migrations complete
+  latest_migration_name: AuthPairingProofKeyThumbprint
+  latest_migration_id: 32
+[16:26:28.362] DEBUG (#1): Migrations ran successfully
+  migrations: [
+    [32m'1_OrchestrationEvents'[39m,
+    [32m'2_OrchestrationCommandReceipts'[39m,
+    [32m'3_CheckpointDiffBlobs'[39m,
+    [32m'4_ProviderSessionRuntime'[39m,
+    [32m'5_Projections'[39m,
+    [32m'6_ProjectionThreadSessionRuntimeModeColumns'[39m,
+    [32m'7_ProjectionThreadMessageAttachments'[39m,
+    [32m'8_ProjectionThreadActivitySequence'[39m,
+    [32m'9_ProviderSessionRuntimeMode'[39m,
+    [32m'10_ProjectionThreadsRuntimeMode'[39m,
+    [32m'11_OrchestrationThreadCreatedRuntimeMode'[39m,
+    [32m'12_ProjectionThreadsInteractionMode'[39m,
+    [32m'13_ProjectionThreadProposedPlans'[39m,
+    [32m'14_ProjectionThreadProposedPlanImplementation'[39m,
+    [32m'15_ProjectionTurnsSourceProposedPlan'[39m,
+    [32m'16_CanonicalizeModelSelections'[39m,
+    [32m'17_ProjectionThreadsArchivedAt'[39m,
+    [32m'18_ProjectionThreadsArchivedAtIndex'[39m,
+    [32m'19_ProjectionSnapshotLookupIndexes'[39m,
+    [32m'20_AuthAccessManagement'[39m,
+    [32m'21_AuthSessionClientMetadata'[39m,
+    [32m'22_AuthSessionLastConnectedAt'[39m,
+    [32m'23_ProjectionThreadShellSummary'[39m,
+    [32m'24_BackfillProjectionThreadShellSummary'[39m,
+    [32m'25_CleanupInvalidProjectionPendingApprovals'[39m,
+    [32m'26_CanonicalizeModelSelectionOptions'[39m,
+    [32m'27_ProviderSessionRuntimeInstanceId'[39m,
+    [32m'28_ProjectionThreadSessionInstanceId'[39m,
+    [32m'29_ProjectionThreadDetailOrderingIndexes'[39m,
+    [32m'30_ProjectionThreadShellArchiveIndexes'[39m,
+    [32m'31_AuthAuthorizationScopes'[39m,
+    [32m'32_AuthPairingProofKeyThumbprint'[39m
+  ]
+[16:26:28.363] DEBUG (#1): Running migration
+  migration_name: Mcp
+  migration_id: 1
+[16:26:28.363] DEBUG (#1): Running migration
+  migration_name: ProjectionThreadsChatViewMode
+  migration_id: 2
+[16:26:28.364] DEBUG (#1): Migrations complete
+  latest_migration_name: ProjectionThreadsChatViewMode
+  latest_migration_id: 2
+[16:26:28.364] DEBUG (#1): ru-code migrations ran successfully
+  migrations: [ [32m'1_Mcp'[39m, [32m'2_ProjectionThreadsChatViewMode'[39m ]
+[16:26:28.384] DEBUG (#59): orchestration projection pipeline bootstrapped
+  projectors: [33m11[39m
+[16:26:28.385] DEBUG (#59): orchestration engine started
+  sequence: [33m0[39m
+[16:26:28.408] DEBUG (#1): [acp-pool] slot spawned
+  {
+    poolName: [32m'generic'[39m,
+    slotId: [32m'8b39a5a0-14cd-41fb-adc0-e71e995afd27'[39m,
+    key: [32m'overlay|'[39m,
+    pool: { generic: [33m1[39m, projects: {}, total: [33m1[39m }
+  }
+[16:26:28.414] DEBUG (#1): [acp-pool] slot spawned
+  {
+    poolName: [32m'generic'[39m,
+    slotId: [32m'b0018086-0de1-4283-99c6-00897de2c1c4'[39m,
+    key: [32m'overlay|'[39m,
+    pool: { generic: [33m2[39m, projects: {}, total: [33m2[39m }
+  }
+[16:26:28.414] DEBUG (#1): [acp-pool] generic prewarmed
+  { target: [33m2[39m, pool: { generic: [33m2[39m, projects: {}, total: [33m2[39m } }
+[16:26:28.459] DEBUG (#163): startup phase: starting keybindings runtime
+[16:26:28.459] DEBUG (#163): startup phase: starting server settings runtime
+[16:26:28.459] DEBUG (#163): startup phase: sweeping stale MCP overlays
+[16:26:28.460] DEBUG (#163): startup phase: starting orchestration reactors
+[16:26:28.478] DEBUG (#163): agent activity publishing standby; waiting for T3 Connect link reconciliation
+[16:26:28.478] DEBUG (#163): provider.session.reaper.started
+  { inactivityThresholdMs: [33m1800000[39m, sweepIntervalMs: [33m300000[39m }
+[16:26:28.479] DEBUG (#163): [mcp] reactor starting
+[16:26:28.509] DEBUG (#163): startup phase: preparing welcome payload
+[16:26:28.509] DEBUG (#163): startup phase: publishing welcome event
+  {
+    environmentId: [32m'bf1bd607-61a9-455b-8e37-e4cf9bc0f851'[39m,
+    cwd: [32m'/tmp/ru-au-base-KmgnFZ/Project'[39m,
+    projectName: [32m'Project'[39m
+  }
+[16:26:28.509] DEBUG (#163): Accepting commands
+[16:26:28.509] DEBUG (#163): startup phase: waiting for http listener
+[16:26:28.509] DEBUG (#163): startup phase: publishing ready event
+[16:26:28.509] DEBUG (#163): startup phase: recording startup heartbeat
+[16:26:28.509] DEBUG (#163): startup phase: browser open check
+[16:26:28.525] DEBUG (#41): [mcp] reconcile
+  { instances: [33m3[39m, refs: [33m3[39m }
+[16:26:28.530] DEBUG (#193): [auto-update] boot journal reconciled
+  { outcome: [1mnull[22m, targetVersion: [1mnull[22m }
+[16:26:28.532] DEBUG (#193): [auto-update] boot facts
+  {
+    updatable: [33mtrue[39m,
+    appRoot: [32m'/tmp/ru-au-app-ibF3GG'[39m,
+    currentVersion: [32m'0.0.33'[39m,
+    autoCheck: [33mtrue[39m
+  }
+[16:26:28.539] DEBUG (#231): [auto-update] facts refreshed
+  { port: [33m35427[39m }
+[16:26:28.540] INFO (#163): Требуется аутентификация. Откройте Ru Code по ссылке для сопряжения.
+  pairingUrl: http://127.0.0.1:35427/pair#token=WQ2UPA394DB5
+[16:26:28.541] DEBUG (#163): startup phase: complete
+[16:26:28.762] DEBUG (#19): [acp-pool] slot warmed
+  {
+    poolName: [32m'generic'[39m,
+    slotId: [32m'b0018086-0de1-4283-99c6-00897de2c1c4'[39m,
+    pool: { generic: [33m2[39m, projects: {}, total: [33m2[39m }
+  }
+[16:26:28.786] DEBUG (#14): [acp-pool] slot warmed
+  {
+    poolName: [32m'generic'[39m,
+    slotId: [32m'8b39a5a0-14cd-41fb-adc0-e71e995afd27'[39m,
+    pool: { generic: [33m2[39m, projects: {}, total: [33m2[39m }
+  }

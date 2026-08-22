@@ -16,6 +16,8 @@ import {
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
+  // ru-code: auto-update nav icon
+  RefreshCwIcon,
   SearchIcon,
   Settings2Icon,
   XIcon,
@@ -53,6 +55,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/integrations": BlocksIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,
+  // ru-code: auto-update settings section
+  "/settings/auto-update": RefreshCwIcon,
   "/settings/archived": ArchiveIcon,
 };
 

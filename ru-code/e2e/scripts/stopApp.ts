@@ -10,7 +10,20 @@ export default async function stopApp(): Promise<void> {
   const state = JSON.parse(NodeFS.readFileSync(STATE_FILE, "utf8")) as {
     runnerPid: number;
     tmpRoot: string;
+    mockServerPid?: number;
   };
+  // ru-code: stop the detached mock update server (its own process group).
+  if (state.mockServerPid !== undefined && state.mockServerPid > 0) {
+    try {
+      process.kill(-state.mockServerPid, "SIGKILL");
+    } catch {
+      try {
+        process.kill(state.mockServerPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  }
   if (state.runnerPid > 0) {
     for (const signal of ["SIGTERM", "SIGKILL"] as const) {
       try {
@@ -28,7 +41,11 @@ export default async function stopApp(): Promise<void> {
   // never touched.
   const { execSync } = await import("node:child_process");
   const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
-  for (const pattern of [`${repoRoot}/.*fake-acp-server.ts`, `${repoRoot}/.*dev-runner.ts`]) {
+  for (const pattern of [
+    `${repoRoot}/.*fake-acp-server.ts`,
+    `${repoRoot}/.*dev-runner.ts`,
+    `${repoRoot}/.*mockUpdateServer.ts`,
+  ]) {
     try {
       execSync(`pkill -f ${JSON.stringify(pattern)}`, { stdio: "ignore" });
     } catch {

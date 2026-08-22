@@ -1,30 +1,42 @@
 // @effect-diagnostics nodeBuiltinImport:off -- vite build plugin runs in Node, not an Effect runtime
 // ru-code: build plugin for the PWA service worker.
 //
-// Compiles `sw.ts` (TypeScript, self-contained, import-free) into a single ES
-// module served at the ROOT path `/sw.js` — unhashed and root-scoped so the
-// worker controls the whole origin and the registration URL is stable. It is
-// deliberately its OWN standalone output, never part of the app's module graph:
-// a service worker must be a self-contained script, not an app chunk.
+// Compiles `sw.ts` into a single ES module served at the ROOT path `/sw.js` —
+// unhashed and root-scoped so the worker controls the whole origin and the
+// registration URL is stable. It is deliberately its OWN standalone output,
+// never part of the app's module graph: a service worker must be a
+// self-contained script, not an app chunk.
 //
-// Uses vite-plus's bundled `transformWithOxc` (no extra dependency — unlike the
-// deprecated `transformWithEsbuild`, which now needs a separately-installed
-// `esbuild`). Oxc is a transpiler: it strips the TS types and leaves the ESM
-// `export {}` marker, so the output is an ES module — hence it is registered with
-// `{ type: "module" }` in main.tsx. The worker has no imports; if it ever needs
-// to import helpers, swap this for a bundling build.
-import * as NodeFS from "node:fs";
+// The worker imports the sw-kit page emitters (auto-update status pages), so
+// this is a BUNDLING build now: a nested single-entry Vite lib build with
+// inlined imports produces one self-contained file (the previous
+// transformWithOxc transpile-only pass could not resolve imports). The nested
+// build is tiny (a handful of pure template modules) and runs once per build /
+// on demand in dev.
 import * as NodeURL from "node:url";
-import type { Plugin } from "vite";
-import { transformWithOxc } from "vite-plus";
+import { build, type Plugin, type Rollup } from "vite";
 
 const SW_SOURCE = NodeURL.fileURLToPath(new URL("./sw.ts", import.meta.url));
 const SW_URL = "sw.js";
 
 const compileServiceWorker = async (): Promise<string> => {
-  const source = NodeFS.readFileSync(SW_SOURCE, "utf8");
-  const result = await transformWithOxc(source, SW_SOURCE, { lang: "ts" });
-  return result.code;
+  const result = (await build({
+    configFile: false,
+    logLevel: "error",
+    build: {
+      write: false,
+      minify: false,
+      target: "es2020",
+      lib: { entry: SW_SOURCE, formats: ["es"], fileName: () => SW_URL },
+      rollupOptions: { output: { inlineDynamicImports: true } },
+    },
+  })) as Rollup.RollupOutput | Rollup.RollupOutput[];
+  const outputs = Array.isArray(result) ? result : [result];
+  const chunk = outputs[0]?.output.find(
+    (item): item is Rollup.OutputChunk => item.type === "chunk",
+  );
+  if (chunk === undefined) throw new Error("service worker build produced no chunk");
+  return chunk.code;
 };
 
 export const serviceWorkerPlugin = (): Plugin => {
@@ -45,6 +57,7 @@ export const serviceWorkerPlugin = (): Plugin => {
           .then((code) => {
             res.setHeader("Content-Type", "text/javascript");
             res.setHeader("Service-Worker-Allowed", "/");
+            res.setHeader("Cache-Control", "no-cache");
             res.end(code);
           })
           .catch(next);

@@ -55,6 +55,14 @@ export const noBrowserFlag = Flag.boolean("no-browser").pipe(
   Flag.withDescription("Disable automatic browser opening."),
   Flag.optional,
 );
+// ru-code: `--json` — machine-readable launch outcome for the installer. Hidden:
+// it is a contract for a script, not a user-facing option. Consumed by the daemon
+// launcher PARENT only and never forwarded to the spawned child (see childArgs.ts).
+export const jsonOutputFlag = Flag.boolean("json").pipe(
+  Flag.withDescription("Print the launch outcome as a single JSON line instead of the banner."),
+  Flag.withHidden,
+  Flag.optional,
+);
 export const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
   Flag.withSchema(Schema.Int),
   Flag.withDescription("Read one-time bootstrap secrets from the given file descriptor."),
@@ -180,6 +188,10 @@ export interface CliServerFlags {
   // ru-code: --foreground opts out of daemon-by-default (routing only; unused by
   // config resolution, hence optional so existing flag literals still satisfy it).
   readonly foreground?: Option.Option<boolean>;
+  // ru-code: --json switches the launcher's output to one machine-readable line
+  // (launcher-only, same reason as --foreground: optional so the existing flag
+  // literals keep satisfying this interface).
+  readonly json?: Option.Option<boolean>;
 }
 
 export interface CliAuthLocationFlags {
@@ -217,6 +229,7 @@ export const sharedServerCommandFlags = {
   tailscaleServePort: tailscaleServePortFlag,
   language: languageFlag,
   foreground: foregroundFlag, // ru-code: daemon opt-out
+  json: jsonOutputFlag, // ru-code: machine-readable launch outcome (installer)
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;
@@ -409,7 +422,7 @@ export const resolveServerConfig = (
           cliConfigDir: qwenCli.cliConfigDir,
         })
       : Effect.logError(
-          "ru-code: qwen CLI NOT detected — qwen provider disabled. Install/configure qwen, or set TRY_TO_FIND_CLI + a real path in apps/server/src/ru-code/preflight/paths.ts.",
+          "ru-code: qwen CLI NOT detected — qwen provider disabled. Install/configure qwen, or add a real cli.js path in apps/server/src/ru-code/preflight/paths.ts (CLI_BIN_PATHS).",
           { cliConfigDir: qwenCli.cliConfigDir },
         );
 

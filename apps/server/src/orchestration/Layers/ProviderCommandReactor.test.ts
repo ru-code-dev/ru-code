@@ -396,6 +396,10 @@ describe("ProviderCommandReactor", () => {
             return engine.streamDomainEvents;
           },
           latestSequence: engine.latestSequence,
+          // ru-code: boot-performance.md S1 seam
+          readStreamEvents: (aggregateKind, streamId, fromSequenceExclusive, limit) =>
+            engine.readStreamEvents(aggregateKind, streamId, fromSequenceExclusive, limit),
+          readLatestEventSequence: () => engine.readLatestEventSequence(), // ru-code: boot-performance.md S1 seam
         } satisfies OrchestrationEngineService["Service"];
       }),
     ).pipe(Layer.provide(orchestrationLayer));

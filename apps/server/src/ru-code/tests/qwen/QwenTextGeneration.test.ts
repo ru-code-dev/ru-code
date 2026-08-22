@@ -7,6 +7,7 @@
 // (extractQwenResultText, buildQwenSingleStringPrompt) are not exported, so they
 // are covered here through the public generate* surface.
 import { describe, expect, it } from "@effect/vitest";
+import { NO_MCP_SERVER_SENTINEL } from "@ru-code/qwen/constants";
 import { ModelSelection, QwenSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -235,6 +236,16 @@ describe("makeQwenTextGeneration model + auth flags (ru-code)", () => {
       expect(flagValue(argv, "--model")).toBe("qwen3-coder-plus");
       expect(flagValue(argv, "--auth-type")).toBe("openai");
       expect(flagValue(argv, "--output-format")).toBe("json");
+    }),
+  );
+
+  // ru-code: a one-shot `-p` run has no use for MCP tools, and WITHOUT this flag the CLI
+  // connects (and awaits) every MCP server the user configured before answering — minutes on a
+  // machine with slow/unreachable servers, paid on every commit message and branch name.
+  it.effect("blocks MCP discovery with the sentinel allowlist", () =>
+    Effect.gen(function* () {
+      const argv = yield* captureTitleArgv(SETTINGS, "qwen3-coder-plus");
+      expect(flagValue(argv, "--allowed-mcp-server-names")).toBe(NO_MCP_SERVER_SENTINEL);
     }),
   );
 

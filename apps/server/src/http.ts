@@ -303,9 +303,14 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       }
       // ru-code: SPA fallback (deep links) — stamp the effective locale + theme so the
       // client boots in the right language/appearance regardless of which port it loaded on.
+      // ru-code: never cache the shell — a stale index.html after an update would load dead assets.
       return HttpServerResponse.text(
         injectAppearanceBootstrap(injectLocaleBootstrap(new TextDecoder().decode(indexData))),
-        { status: 200, contentType: "text/html; charset=utf-8" },
+        {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          headers: { "Cache-Control": "no-cache" },
+        },
       );
     }
 
@@ -319,13 +324,21 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     if (path.basename(filePath) === "index.html") {
       return HttpServerResponse.text(
         injectAppearanceBootstrap(injectLocaleBootstrap(new TextDecoder().decode(data))),
-        { status: 200, contentType: "text/html; charset=utf-8" },
+        {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          // ru-code: never cache the shell (stale index.html after an update = dead asset links).
+          headers: { "Cache-Control": "no-cache" },
+        },
       );
     }
 
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType,
+      // ru-code: the service worker script must always revalidate — a cached sw.js would keep
+      // serving the pre-update page logic after a version swap.
+      ...(path.basename(filePath) === "sw.js" ? { headers: { "Cache-Control": "no-cache" } } : {}),
     });
   }),
 );

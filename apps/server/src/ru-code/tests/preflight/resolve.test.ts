@@ -1,21 +1,23 @@
-// ru-code: focused coverage of the pure `resolveQwenCli` state machine. The
-// resolver reads the real filesystem via `node:fs`, so to stay deterministic we
-// pin `os.homedir()` at an ISOLATED temp dir (homedir() honours $HOME on POSIX)
-// and only assert the `ok:false` STOP shapes that are reachable without any real
-// CLI install:
-//   - config dir missing                       → MESSAGES.CONFIG_NOT_FOUND
-//   - config present, no cli.js, fallback off   → MESSAGES.CLI_NOT_FOUND
-// We never touch the developer's real ~/.qwen — each test owns a throwaway home.
+// ru-code: CHARACTERIZATION tests for the ONE resolver `resolveQwenCli`. They lock the EXACT output
+// formulas of INSTALLER/cli-resolution.md so the resolver can never silently drift from the behavior
+// the installer + running app depend on. This file covers the non-Linux branches + cli.js detection
+// with the REAL filesystem against a throwaway $HOME (Linux relocation is mocked in a sibling file,
+// resolveLinuxReloc.test.ts, because it hinges on /home/<safe>/<user> existing).
+//
+// It NEVER fails: `ourRoot` (app home) and `configDir` (qwen profile dir) always resolve from the
+// parent rules — the CLI profile is NOT required to exist; `cliJs` is the qwen bin found by probing
+// the per-platform config paths (CLI_BIN_PATHS), or "" when qwen isn't installed.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { MESSAGES } from "../../preflight/common/messages.ts";
-import { resolveQwenCli } from "../../preflight/common/resolve.ts";
+import { APP_HOME_DIRNAME, PREFLIGHT_CLI_PROBE_DIRNAME } from "@ru-code/branding";
 
-const CONFIG_DIRNAME = ".qwen"; // CLI_DIR = PREFLIGHT_CLI_PROBE_DIRNAME = ".qwen"
+import { CLI_BIN_PATHS } from "../../preflight/paths.ts";
+import { expand } from "../../preflight/common/expand.ts";
+import { resolveQwenCli } from "../../preflight/common/resolve.ts";
 
 let tempHome = "";
 let savedHome: string | undefined;
@@ -23,40 +25,62 @@ let savedHome: string | undefined;
 beforeEach(() => {
   tempHome = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ru-resolve-"));
   savedHome = process.env.HOME;
-  // os.homedir() reads $HOME first on POSIX — this redirects every `{home}`
-  // expansion at the throwaway dir for the duration of the test.
-  process.env.HOME = tempHome;
+  process.env.HOME = tempHome; // os.homedir() honours $HOME on POSIX
 });
 
 afterEach(() => {
-  if (savedHome === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = savedHome;
-  }
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
   NodeFS.rmSync(tempHome, { recursive: true, force: true });
 });
 
-describe("resolveQwenCli — ok:false STOP shapes", () => {
-  it("config dir missing → CONFIG_NOT_FOUND with probed paths", () => {
-    // tempHome has no `.qwen` subdir → CONFIG[platformKey] never matches.
-    const result = resolveQwenCli({ platform: "linux", env: {} });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.reason).toBe(MESSAGES.CONFIG_NOT_FOUND);
-    expect(result.details.length).toBeGreaterThan(0);
-    expect(result.details[0]).toContain(CONFIG_DIRNAME);
+describe("resolveQwenCli — roots on mac/Windows (home parent, no relocation)", () => {
+  it("darwin: ourRoot=H/APP_DIR, configDir=H/CLI_DIR, configDirAlt='', no legacyRoot", () => {
+    const r = resolveQwenCli({ platform: "darwin", env: { HOME: tempHome } });
+    expect(r.ourRoot).toBe(NodePath.join(tempHome, APP_HOME_DIRNAME));
+    expect(r.configDir).toBe(NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME));
+    expect(r.configDirAlt).toBe(""); // off-Linux → no alternative candidate
+    expect(r.legacyRoot).toBeUndefined();
+    // the profile dir does NOT exist on disk, yet it still resolves (never a failure)
+    expect(NodeFS.existsSync(r.configDir)).toBe(false);
   });
 
-  it("config present, no cli.js, TRY_TO_FIND_CLI off → CLI_NOT_FOUND fallback STOP", () => {
-    // Create only the config dir: no bin/cli.js, no .install-dir record.
-    NodeFS.mkdirSync(NodePath.join(tempHome, CONFIG_DIRNAME), { recursive: true });
-    const result = resolveQwenCli({ platform: "linux", env: {}, tryFindCli: false });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.reason).toBe(MESSAGES.CLI_NOT_FOUND);
-    // fallback off → the resolver STOPs with the disabled-flag breadcrumb.
-    expect(result.details).toEqual(["TRY_TO_FIND_CLI выключен"]);
-    expect(result.configDir).toBe(NodePath.join(tempHome, CONFIG_DIRNAME));
+  it("win32: uses os.homedir(), NOT env.HOME/env.USERPROFILE — the parity fix", () => {
+    // os.homedir() === tempHome here (POSIX honours $HOME). Pass DIVERGENT env.HOME/USERPROFILE:
+    // the resolver must ignore them and derive both roots from os.homedir() (=tempHome), or the
+    // cli.js probe (expand's {home}=os.homedir()) and the roots would desync on Windows.
+    const r = resolveQwenCli({
+      platform: "win32",
+      env: { HOME: "/divergent-home", USERPROFILE: "/divergent-profile" },
+    });
+    expect(r.ourRoot).toBe(NodePath.join(tempHome, APP_HOME_DIRNAME));
+    expect(r.configDir).toBe(NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME));
+    expect(r.ourRoot).not.toContain("divergent");
+    expect(r.configDir).not.toContain("divergent");
+  });
+});
+
+describe("resolveQwenCli — cli.js detection (independent of the config folder)", () => {
+  it("no qwen installed → cliJs empty, cliDetected false, source 'none' (never a failure)", () => {
+    const r = resolveQwenCli({ platform: "darwin", env: { HOME: tempHome } });
+    expect(r.cliJs).toBe("");
+    expect(r.cliDetected).toBe(false);
+    expect(r.source).toBe("none");
+  });
+
+  it("detects qwen from a CLI_BIN_PATHS entry — WITHOUT the config dir existing", () => {
+    // Plant a cli.js at the first darwin config path (resolved against the throwaway home).
+    const target = expand(CLI_BIN_PATHS.darwin[0]!, { HOME: tempHome });
+    NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
+    NodeFS.writeFileSync(target, "process.stdout.write('9.9.9')");
+
+    const r = resolveQwenCli({ platform: "darwin", env: { HOME: tempHome } });
+    expect(r.cliJs).toBe(target);
+    expect(r.cliDetected).toBe(true); // FILE FOUND is the whole gate — no profile-dir requirement
+    expect(r.source).toBe("config-path");
+    // proof of independence: cliDetected is true even though the profile dir is absent
+    expect(NodeFS.existsSync(r.configDir)).toBe(false);
+    // roots are unchanged by CLI presence
+    expect(r.ourRoot).toBe(NodePath.join(tempHome, APP_HOME_DIRNAME));
   });
 });

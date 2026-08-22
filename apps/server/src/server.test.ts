@@ -778,13 +778,27 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          latestSequence: Effect.succeed(0),
-          ...options?.layers?.orchestrationEngine,
-        }),
+        (() => {
+          // ru-code: production's subscribe branches now read
+          // `readLatestEventSequence()` instead of `latestSequence` (row 55 / C-12-032-A).
+          // Derive the mock's default from the SAME head each test already establishes
+          // via `latestSequence`, so all 27 override sites inherit a consistent answer
+          // without each one having to add the new member itself.
+          const orchestrationEngineOverrides = options?.layers?.orchestrationEngine;
+          const resolvedLatestSequence =
+            orchestrationEngineOverrides?.latestSequence ?? Effect.succeed(0);
+          return Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.succeed({ sequence: 0 }),
+            streamDomainEvents: Stream.empty,
+            latestSequence: resolvedLatestSequence,
+            readLatestEventSequence: () => resolvedLatestSequence,
+            // ru-code: same shape completion as above — the thread catch-up branch
+            // now reads this instead of `readEvents` (row 55 / C-12-032-A).
+            readStreamEvents: () => Stream.empty,
+            ...orchestrationEngineOverrides,
+          });
+        })(),
       ),
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
@@ -6278,7 +6292,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           orchestrationEngine: {
             latestSequence: Effect.succeed(50),
-            readEvents: (_afterSequence, limit) => {
+            // ru-code: subscribeThread's bounded catch-up now reads through
+            // `readStreamEvents` (thread-indexed), not `readEvents` (row 55 / C-12-032-A).
+            readStreamEvents: (_aggregateKind, _streamId, _afterSequence, limit) => {
               replayLimit = limit;
               return Stream.make(messageEvent);
             },

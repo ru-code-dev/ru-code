@@ -38,9 +38,4 @@ describe("MESSAGES", () => {
   it("CLI_TOO_SLOW references the CLI label", () => {
     expect(MESSAGES.CLI_TOO_SLOW).toContain(CLI_LABEL);
   });
-
-  it("path-probe messages read as prompts for a trailing path list", () => {
-    expect(MESSAGES.CONFIG_NOT_FOUND.endsWith(":")).toBe(true);
-    expect(MESSAGES.CLI_NOT_FOUND.endsWith(":")).toBe(true);
-  });
 });

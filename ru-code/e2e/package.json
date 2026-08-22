@@ -5,7 +5,8 @@
   "description": "Real-Chrome Playwright harness: the real app driven against the fake ACP CLI. Deliberately has NO `test` script — `vp run -r test` (the gates) must never require a browser; run via `pnpm --filter @ru-code/e2e test:e2e`.",
   "type": "module",
   "scripts": {
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:pins": "playwright test -c playwright.pins.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0"

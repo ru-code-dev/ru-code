@@ -1,7 +1,9 @@
-// ru-code: pins the Windows browser-launch compat (EXTERNAL_OPEN_WINDOWS). Default "explorer"
-// must produce an explorer.exe spawn with NONE of the Node-#51018 trigger combo (detached +
-// all-ignore stdio + powershell); the legacy PowerShell launch stays reachable only when the
-// constant is flipped, so the test asserts RELATIVE to the constant.
+// ru-code: pins the Windows browser-launch compat (EXTERNAL_OPEN_WINDOWS). Default "cmd-start"
+// must produce a `cmd.exe /d /s /c start "" <url>` spawn (start = true ShellExecute, so the
+// pairing `#token=…` fragment reaches the browser — explorer.exe drops it) with NONE of the
+// Node-#51018 trigger combo (detached + all-ignore stdio + powershell); the explorer and legacy
+// PowerShell launches stay reachable only when the constant is flipped, so the test asserts
+// RELATIVE to the constant.
 
 import { EXTERNAL_OPEN_WINDOWS } from "@ru-code/platform-compat/constants";
 import { describe, expect, it } from "vite-plus/test";
@@ -15,16 +17,19 @@ const LEGACY_LAUNCH = {
 } as const;
 
 describe("buildWindowsBrowserLaunchCompat", () => {
-  it("default method opens via explorer.exe, NOT PowerShell, NOT detached", () => {
-    const launch = buildWindowsBrowserLaunchCompat(
-      "https://example.com/a?b=1",
-      () => LEGACY_LAUNCH,
-    );
-    if (EXTERNAL_OPEN_WINDOWS === "explorer") {
-      expect(launch.command).toBe("explorer.exe");
-      expect(launch.args).toEqual(["https://example.com/a?b=1"]);
-      // The #51018 trigger is detached:true + stdio ignore + powershell — explorer avoids the
+  it("default method opens via cmd start, NOT PowerShell, NOT detached", () => {
+    const target = "https://example.com/a?b=1";
+    const launch = buildWindowsBrowserLaunchCompat(target, () => LEGACY_LAUNCH);
+    if (EXTERNAL_OPEN_WINDOWS === "cmd-start") {
+      expect(launch.command).toBe("cmd.exe");
+      // The empty "" arg is start's window-title slot — a quoted url must not be eaten as title.
+      expect(launch.args).toEqual(["/d", "/s", "/c", "start", "", target]);
+      // The #51018 trigger is detached:true + stdio ignore + powershell — cmd avoids the
       // engine entirely AND stays non-detached.
+      expect(launch.options.detached).toBe(false);
+    } else if (EXTERNAL_OPEN_WINDOWS === "explorer") {
+      expect(launch.command).toBe("explorer.exe");
+      expect(launch.args).toEqual([target]);
       expect(launch.options.detached).toBe(false);
     } else {
       expect(launch).toBe(LEGACY_LAUNCH);
@@ -34,7 +39,9 @@ describe("buildWindowsBrowserLaunchCompat", () => {
   it("passes the target through verbatim (URLs with query/fragment survive)", () => {
     const target = "http://localhost:5173/path#frag?x=%20y";
     const launch = buildWindowsBrowserLaunchCompat(target, () => LEGACY_LAUNCH);
-    if (EXTERNAL_OPEN_WINDOWS === "explorer") {
+    if (EXTERNAL_OPEN_WINDOWS === "cmd-start") {
+      expect(launch.args[launch.args.length - 1]).toBe(target);
+    } else if (EXTERNAL_OPEN_WINDOWS === "explorer") {
       expect(launch.args).toEqual([target]);
     }
   });

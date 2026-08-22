@@ -86,3 +86,16 @@ selection: `RU_CODE_FAKE_ACP=FLOW` (this harness), other built-ins live in
 | case 7          | landing response never moves the viewport while reading above  |
 | case 8          | 10× CPU throttle: same terminal correctness on a slow machine  |
 | case 5          | F5 → next send still animates and pins                         |
+
+## Auto-update suites
+
+These live under `features/auto-update/` and boot their own REAL installed app (their own
+Playwright config, no shared globalSetup), which is why they are separate root scripts.
+
+| Suite                                                  | Script                              | Guards                                                                                                                                    |
+| ------------------------------------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `liveCycle.ts` (integration, headless)                 | `pnpm test:integration:auto-update` | a real install → check → press → download → verify → pointer flip → relaunch → GC, on disk                                                |
+| `browserCycle.e2e.test.ts`                             | `pnpm test:e2e:auto-update-cycle`   | the restart as a USER sees it: fast restart finishes in place · slow restart hands over to the SW page and returns · the session survives |
+| `autoUpdate.e2e.test.ts` + `updateInstall.e2e.test.ts` | `pnpm test:e2e`                     | the settings surface: sources, wizard, refusals, the press, the SW navigate-fallback                                                      |
+
+Never run two browser suites at once — they bind real ports and drive real daemons.

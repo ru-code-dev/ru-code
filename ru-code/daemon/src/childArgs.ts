@@ -17,6 +17,12 @@ export interface ForwardableServerFlags {
   readonly devUrl: Option.Option<URL>;
   readonly language: Option.Option<"en" | "ru">;
   readonly logWebSocketEvents: Option.Option<boolean>;
+  /**
+   * Forwarded ONLY when explicitly true (the auto-update relaunch: the SW
+   * updating page owns the browser, a new tab would fight it). Normal daemon
+   * starts keep today's behavior — the child opens the pairing URL itself.
+   */
+  readonly noBrowser?: Option.Option<boolean>;
 }
 
 export const resolveDaemonPort = (flags: ForwardableServerFlags, defaultPort: number): number =>
@@ -54,6 +60,10 @@ export const buildChildArgs = (params: {
   }
   if (Option.getOrElse(params.flags.logWebSocketEvents, () => false)) {
     args.push("--log-websocket-events");
+  }
+  // ru-code: auto-update relaunch only — see ForwardableServerFlags.noBrowser.
+  if (Option.getOrElse(params.flags.noBrowser ?? Option.none(), () => false)) {
+    args.push("--no-browser");
   }
   // Positional working directory goes last.
   if (Option.isSome(params.flags.cwd)) {

@@ -12,48 +12,30 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { APP_HOME_DIRNAME, PREFLIGHT_CLI_PROBE_DIRNAME } from "@ru-code/branding";
 
+import { expand } from "../../preflight/common/expand.ts";
+import { CLI_BIN_PATHS } from "../../preflight/paths.ts";
 import { resolveStartupQwenCli } from "../../startup/resolveStartupQwenCli.ts";
 
 let tempHome = "";
 let savedHome: string | undefined;
-let savedTryFind: string | undefined;
 
 beforeEach(() => {
   tempHome = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ru-startup-cli-"));
   savedHome = process.env.HOME;
-  savedTryFind = process.env.TRY_TO_FIND_CLI;
   // os.homedir() reads $HOME first on POSIX — redirect every home lookup at the
   // throwaway dir (which has no CLI config) for the duration of the test.
   process.env.HOME = tempHome;
 });
 
 afterEach(() => {
-  const restore = (key: "HOME" | "TRY_TO_FIND_CLI", value: string | undefined) => {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  };
-  restore("HOME", savedHome);
-  restore("TRY_TO_FIND_CLI", savedTryFind);
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
   NodeFS.rmSync(tempHome, { recursive: true, force: true });
 });
 
 describe("resolveStartupQwenCli — base dir", () => {
-  it("falls back to <home>/.ru-code when no CLI install is found", () => {
-    // No ~/.qwen config dir → resolveQwenCli STOPs → fallback branch.
-    const result = resolveStartupQwenCli({
-      platform: "darwin",
-      env: { HOME: tempHome, TRY_TO_FIND_CLI: "0" },
-    });
-    expect(result.defaultBaseDir).toBe(NodePath.join(tempHome, APP_HOME_DIRNAME));
-  });
-
-  it("returns the resolver ourRoot for a standard install (config dir + bin/cli.js)", () => {
-    const binDir = NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME, "bin");
-    NodeFS.mkdirSync(binDir, { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(binDir, "cli.js"), "process.stdout.write('9.9.9')");
+  it("defaultBaseDir = resolver ourRoot (<home>/.ru-code) regardless of CLI presence", () => {
+    // No qwen bin under the throwaway home → cliJs "" → defaultBaseDir still resolves to ourRoot.
     const result = resolveStartupQwenCli({ platform: "darwin", env: { HOME: tempHome } });
     expect(result.defaultBaseDir).toBe(NodePath.join(tempHome, APP_HOME_DIRNAME));
   });
@@ -61,37 +43,23 @@ describe("resolveStartupQwenCli — base dir", () => {
 
 describe("resolveStartupQwenCli — qwen CLI detection", () => {
   it("NOT detected (no install) → disabled, empty cliJs, home config fallback", () => {
-    const result = resolveStartupQwenCli({
-      platform: "darwin",
-      env: { HOME: tempHome, TRY_TO_FIND_CLI: "0" },
-    });
+    const result = resolveStartupQwenCli({ platform: "darwin", env: { HOME: tempHome } });
     expect(result.cliDetected).toBe(false);
     // Empty cliJs is the gate that keeps the qwen provider disabled.
     expect(result.cliJs).toBe("");
-    // No config dir found ⇒ fallback is join(home, PREFLIGHT_CLI_PROBE_DIRNAME).
+    // configDir always resolves to join(home, PREFLIGHT_CLI_PROBE_DIRNAME).
     expect(result.cliConfigDir).toBe(NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME));
   });
 
-  it("defaults tryFindCli on when TRY_TO_FIND_CLI is unset (still not detected here)", () => {
-    // env without TRY_TO_FIND_CLI → tryFindCli defaults on; no real CLI under the
-    // throwaway home, so detection still fails but a fallback config dir is produced.
-    const result = resolveStartupQwenCli({ platform: "darwin", env: { HOME: tempHome } });
-    expect(result.cliDetected).toBe(false);
-    expect(result.cliJs).toBe("");
-    expect(result.cliConfigDir).toBe(NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME));
-  });
-
-  it("detected ⇒ enabled, cliJs points at the found cli.js", () => {
-    const binDir = NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME, "bin");
-    NodeFS.mkdirSync(binDir, { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(binDir, "cli.js"), "// stub cli\n");
+  it("detected ⇒ enabled, cliJs points at the found cli.js (per-platform config path)", () => {
+    // qwen is found by probing CLI_BIN_PATHS — plant a cli.js at the first darwin entry.
+    const target = expand(CLI_BIN_PATHS.darwin[0]!, { HOME: tempHome });
+    NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
+    NodeFS.writeFileSync(target, "// stub cli\n");
     const result = resolveStartupQwenCli({ platform: "darwin", env: { HOME: tempHome } });
     expect(result.cliDetected).toBe(true);
+    expect(result.cliJs).toBe(target); // the gate that enables the qwen provider
+    // config dir rides the parent (home here) regardless of where the bin lives
     expect(result.cliConfigDir).toBe(NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME));
-    // Non-empty cliJs is the gate that enables the qwen provider.
-    expect(result.cliJs).toBe(
-      NodePath.join(tempHome, PREFLIGHT_CLI_PROBE_DIRNAME, "bin", "cli.js"),
-    );
-    expect(result.cliJs).not.toBe("");
   });
 });

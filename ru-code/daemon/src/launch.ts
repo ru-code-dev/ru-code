@@ -16,9 +16,10 @@ import { type ForwardableServerFlags, resolveDaemonHost, resolveDaemonPort } fro
 import { DEFAULT_DAEMON_PORT, MAX_LAUNCH_ATTEMPTS } from "./constants.ts";
 import { inspectExistingDaemon } from "./daemonStatus.ts";
 import { formatDuration } from "./duration.ts";
-import { findFreePort } from "./net.ts";
+import { formatLaunchSuccessJson } from "./launchReport.ts";
+import { findFreePort, isPortInUse } from "./net.ts";
 import { daemonLogPath, ensureParentDir } from "./paths.ts";
-import { failWith } from "./report.ts";
+import { failWith, failWithJson } from "./report.ts";
 import { spawnServerChild } from "./spawnServerChild.ts";
 import { reapOrphanedChildren, terminateInstance } from "./terminate.ts";
 import { awaitDaemonReady } from "./waitForReady.ts";
@@ -32,6 +33,20 @@ export interface DaemonLaunchInput {
   readonly baseDir: string;
   /** The app version (`apps/server/package.json`), shown in the banner. */
   readonly version: string;
+  /**
+   * ru-code auto-update relaunch: the child must bind EXACTLY the desired port
+   * (the SW updating page polls that origin — a drifted port is invisible to
+   * the browser). True ⇒ no free-port fallback: busy = fail. Normal launches
+   * omit this and keep today's prefer-then-fallback policy.
+   */
+  readonly pinnedPort?: boolean;
+  /**
+   * ru-code `--json`: the installer launches the app and needs the outcome, not a
+   * banner. True ⇒ no banner at all and exactly ONE line on stdout — the success
+   * record for every branch where the app is up, the failure record for every
+   * hard stop (nothing on stderr). Parent-only: never forwarded to the child.
+   */
+  readonly jsonOutput?: boolean;
 }
 
 /** Human "running for" string from the recorded ISO start time to `nowMs`. */
@@ -49,17 +64,40 @@ export const launchDaemon = (input: DaemonLaunchInput): Effect.Effect<void> =>
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     yield* ensureParentDir(logPath);
 
+    // ru-code: --json — ONE shared success/failure line for every branch below, so
+    // "the app is up" and "the app is not" look identical whichever way we got there.
+    const jsonOutput = input.jsonOutput === true;
+    const emitSuccess = (params: {
+      readonly url: string;
+      readonly pid: number;
+      readonly banner: () => string;
+    }): Effect.Effect<void> =>
+      Console.log(
+        jsonOutput
+          ? formatLaunchSuccessJson({
+              url: params.url,
+              version: input.version,
+              pid: params.pid,
+            })
+          : params.banner(),
+      );
+    const fail = (message: string): Effect.Effect<never> =>
+      jsonOutput ? failWithJson(message, logPath) : failWith(message);
+
     // Reuse a healthy instance (D1); reclaim our own wedged one.
     const existing = yield* inspectExistingDaemon(input.statePath, host);
     if (Option.isSome(existing) && existing.value.listening) {
-      yield* Console.log(
-        formatAlreadyRunningBanner({
-          url: existing.value.origin, // plain origin — persisted token is stale
-          version: input.version,
-          runningFor: runningFor(existing.value.startedAt, nowMs),
-          pid: existing.value.pid,
-        }),
-      );
+      yield* emitSuccess({
+        url: existing.value.origin, // plain origin — persisted token is stale
+        pid: existing.value.pid,
+        banner: () =>
+          formatAlreadyRunningBanner({
+            url: existing.value.origin,
+            version: input.version,
+            runningFor: runningFor(existing.value.startedAt, nowMs),
+            pid: existing.value.pid,
+          }),
+      });
       return;
     }
     if (Option.isSome(existing) && existing.value.alive) {
@@ -76,13 +114,21 @@ export const launchDaemon = (input: DaemonLaunchInput): Effect.Effect<void> =>
     // Spawn on a free port (prefer desiredPort). If the child dies during startup,
     // re-pick a free port and retry — this closes the EADDRINUSE race.
     for (let attempt = 0; attempt < MAX_LAUNCH_ATTEMPTS; attempt += 1) {
-      const port = yield* findFreePort(host, desiredPort);
+      // ru-code: pinned mode (auto-update relaunch) never falls back to another port.
+      const port =
+        input.pinnedPort === true
+          ? (yield* isPortInUse(host, desiredPort))
+            ? Option.none<number>()
+            : Option.some(desiredPort)
+          : yield* findFreePort(host, desiredPort);
       if (Option.isNone(port)) {
-        return yield* failWith(
-          L(
-            `No free port found starting at ${desiredPort}.`,
-            `Свободный порт не найден начиная с ${desiredPort}.`,
-          ),
+        return yield* fail(
+          input.pinnedPort === true
+            ? L(`Port ${desiredPort} is busy.`, `Порт ${desiredPort} занят.`)
+            : L(
+                `No free port found starting at ${desiredPort}.`,
+                `Свободный порт не найден начиная с ${desiredPort}.`,
+              ),
         );
       }
 
@@ -92,9 +138,12 @@ export const launchDaemon = (input: DaemonLaunchInput): Effect.Effect<void> =>
         host,
         port: port.value,
         logPath,
+        // Only the FIRST attempt starts a fresh log; a retry appends, so the attempt that actually
+        // explains the failure is not overwritten by the one that follows it.
+        appendLog: attempt > 0,
       }).pipe(
         Effect.catch((error) =>
-          failWith(
+          fail(
             L(
               `Failed to spawn the daemon: ${String(error.cause)}`,
               `Не удалось запустить демон: ${String(error.cause)}`,
@@ -105,34 +154,43 @@ export const launchDaemon = (input: DaemonLaunchInput): Effect.Effect<void> =>
 
       const outcome = yield* awaitDaemonReady({ statePath: input.statePath, childPid });
       if (outcome._tag === "ready") {
-        yield* Console.log(
-          formatReadyBanner({
-            url: outcome.url,
-            version: input.version,
-            runningFor: runningFor(outcome.startedAt, nowMs),
-            pid: childPid,
-            logPath,
-          }),
-        );
-        return;
-      }
-      if (outcome._tag === "timeout") {
-        if (Option.isSome(outcome.url)) {
-          yield* Console.log(
+        yield* emitSuccess({
+          url: outcome.url,
+          pid: childPid,
+          banner: () =>
             formatReadyBanner({
-              url: outcome.url.value,
+              url: outcome.url,
               version: input.version,
-              runningFor: runningFor(
-                Option.getOrElse(outcome.startedAt, () => ""),
-                nowMs,
-              ),
+              runningFor: runningFor(outcome.startedAt, nowMs),
               pid: childPid,
               logPath,
             }),
-          );
+        });
+        return;
+      }
+      if (outcome._tag === "timeout") {
+        // ru-code: a url means the child DID bind — the app is up, so this is a
+        // success on both surfaces (banner and --json), not a timeout failure.
+        if (Option.isSome(outcome.url)) {
+          const readyUrl = outcome.url.value;
+          yield* emitSuccess({
+            url: readyUrl,
+            pid: childPid,
+            banner: () =>
+              formatReadyBanner({
+                url: readyUrl,
+                version: input.version,
+                runningFor: runningFor(
+                  Option.getOrElse(outcome.startedAt, () => ""),
+                  nowMs,
+                ),
+                pid: childPid,
+                logPath,
+              }),
+          });
           return;
         }
-        return yield* failWith(
+        return yield* fail(
           L(
             `The daemon did not become ready in time. See the log: ${logPath}`,
             `Демон не запустился вовремя. Смотрите журнал: ${logPath}`,
@@ -142,7 +200,7 @@ export const launchDaemon = (input: DaemonLaunchInput): Effect.Effect<void> =>
       // outcome._tag === "exited" → likely lost the port to a racer; loop re-picks.
     }
 
-    return yield* failWith(
+    return yield* fail(
       L(
         `Could not start the daemon after ${MAX_LAUNCH_ATTEMPTS} attempts. See the log: ${logPath}`,
         `Не удалось запустить демон после ${MAX_LAUNCH_ATTEMPTS} попыток. Смотрите журнал: ${logPath}`,

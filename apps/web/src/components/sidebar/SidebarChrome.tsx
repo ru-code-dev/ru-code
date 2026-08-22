@@ -31,6 +31,8 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
+// ru-code: auto-update availability pill.
+import { SidebarAutoUpdatePill } from "../../ru-code/auto-update-ui/notify/SidebarAutoUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -149,6 +151,8 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
+      {/* ru-code: auto-update availability pill (mirrors the provider pill). */}
+      <SidebarAutoUpdatePill />
       <SidebarMenu className="flex-row items-center">
         {currentFooterPage ? (
           <SidebarMenuItem className="min-w-0 flex-1">

@@ -1,4 +1,5 @@
 import {
+  AUTO_UPDATE_METHODS, // ru-code: auto-update live state subscription
   MCP_MANAGER_METHODS,
   ORCHESTRATION_WS_METHODS,
   TRANSCRIPT_WS_METHODS, // ru-code: extended-chat transcript subscription
@@ -6,7 +7,8 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import type * as Duration from "effect/Duration";
+// ru-code: value import — the capped resubscribe backoff computes delays (was type-only).
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -62,7 +64,9 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof MCP_MANAGER_METHODS.subscribeMcpProjection
   | typeof MCP_MANAGER_METHODS.subscribeMcpRuntime
   // ru-code: the extended-chat transcript subscription.
-  | typeof TRANSCRIPT_WS_METHODS.subscribeTranscript;
+  | typeof TRANSCRIPT_WS_METHODS.subscribeTranscript
+  // ru-code: the auto-update live state subscription.
+  | typeof AUTO_UPDATE_METHODS.subscribeAutoUpdate;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient
@@ -182,6 +186,10 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
+  // ru-code: optional cap turns the fixed resubscribe delay into exponential
+  // backoff (base = retryExpectedFailureAfter, factor 2, capped). Without it
+  // the delay stays fixed — existing call sites are unchanged.
+  readonly retryExpectedFailureCap?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
 }
 
@@ -194,6 +202,14 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
   EnvironmentRpcStreamFailure<TTag>,
   EnvironmentSupervisor
 > {
+  // ru-code: live-cursor backoff — fixed delay when no cap is configured.
+  const retryDelay = (attempt: number): Duration.Input => {
+    if (options?.retryExpectedFailureAfter === undefined) return 0;
+    const baseMs = Duration.toMillis(Duration.fromInputUnsafe(options.retryExpectedFailureAfter));
+    if (options.retryExpectedFailureCap === undefined) return baseMs;
+    const capMs = Duration.toMillis(Duration.fromInputUnsafe(options.retryExpectedFailureCap));
+    return Math.min(baseMs * 2 ** attempt, capMs);
+  };
   return Stream.unwrap(
     Effect.gen(function* () {
       const supervisor = yield* EnvironmentSupervisor;
@@ -219,7 +235,9 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               >;
-              const subscribeToSession = (): Stream.Stream<
+              const subscribeToSession = (
+                attempt: number, // ru-code: backoff attempt within this session
+              ): Stream.Stream<
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               > =>
@@ -265,10 +283,12 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                             return handled.pipe(
                               Stream.concat(
                                 Stream.fromEffect(
-                                  Effect.sleep(options.retryExpectedFailureAfter),
+                                  // ru-code: capped exponential backoff (fixed delay
+                                  // when no cap is configured).
+                                  Effect.sleep(retryDelay(attempt)),
                                 ).pipe(Stream.drain),
                               ),
-                              Stream.concat(subscribeToSession()),
+                              Stream.concat(subscribeToSession(attempt + 1)),
                             );
                           }
                           return Stream.failCause(cause);
@@ -277,7 +297,7 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                     }),
                   ),
                 );
-              return subscribeToSession();
+              return subscribeToSession(0);
             },
           }),
         ),

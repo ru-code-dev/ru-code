@@ -76,6 +76,19 @@ describe("daemon childArgs", () => {
     expect(args).not.toContain("--foreground");
   });
 
+  // ru-code: --json is the INSTALLER's contract with the launcher parent. The child
+  // is the plain server and knows nothing about it; forwarding it would hand the
+  // child a flag it cannot act on. The parent's flag literal carries it — the child
+  // argv must not, even when it is explicitly on.
+  it("never forwards --json, even when the parent flag literal sets it", () => {
+    const parentFlags = { ...noFlags, json: Option.some(true), cwd: Option.some("/work") };
+    const args = argsFor(parentFlags);
+    expect(args).not.toContain("--json");
+    expect(args.join(" ")).not.toContain("json");
+    // …and the rest of the argv is exactly what it would be without the flag.
+    expect(args).toEqual(argsFor({ ...noFlags, cwd: Option.some("/work") }));
+  });
+
   it("forwards --log-websocket-events only when enabled", () => {
     expect(argsFor({ ...noFlags, logWebSocketEvents: Option.some(true) })).toContain(
       "--log-websocket-events",

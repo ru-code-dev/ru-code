@@ -2,13 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -132,7 +130,12 @@ it.effect("launches an installed editor with platform-safe arguments", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("discovers editors through the service API", () =>
+// ru-code: the editor list is scanned in the BACKGROUND now (USE_NON_BLOCKIN_EDITORS_SCAN — it
+// must never run inside `server.getConfig`, the client's connection gate), so the service
+// answers an empty list until the first scan lands. The test therefore waits for the scan
+// instead of reading the list synchronously; the assertions below are unchanged. Live clock:
+// the wait is real time, not virtual.
+it.live("discovers editors through the service API", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -142,6 +145,12 @@ it.effect("discovers editors through the service API", () =>
 
     const editors = yield* Effect.gen(function* () {
       const launcher = yield* ExternalLauncher.ExternalLauncher;
+      // ru-code: poll until the background scan publishes its result.
+      for (let attempt = 0; attempt < 500; attempt += 1) {
+        const scanned = yield* launcher.resolveAvailableEditors();
+        if (scanned.length > 0) return scanned;
+        yield* Effect.sleep("10 millis");
+      }
       return yield* launcher.resolveAvailableEditors();
     }).pipe(
       Effect.provide(
@@ -157,130 +166,6 @@ it.effect("discovers editors through the service API", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("memoizes editor discovery and refreshes after the cache window", () => {
-  let statCalls = 0;
-  const fileInfo = { type: "File" } as FileSystem.File.Info;
-  const launcherLayer = ExternalLauncher.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        FileSystem.layerNoop({
-          stat: () =>
-            Effect.sync(() => {
-              statCalls += 1;
-              return fileInfo;
-            }),
-        }),
-        Path.layer,
-        Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.sync(() => makeMockDetachedHandle())),
-        ),
-      ),
-    ),
-  );
-
-  return Effect.gen(function* () {
-    const launcher = yield* ExternalLauncher.ExternalLauncher;
-
-    const first = yield* launcher.resolveAvailableEditors();
-    assert.equal(first.includes("vscode"), true);
-    const statCallsAfterFirstScan = statCalls;
-    assert.isAbove(statCallsAfterFirstScan, 0);
-
-    // Past the shared command-resolution cache TTL (30s) but within the
-    // discovery cache window: the memoized set is reused without any scan.
-    yield* TestClock.adjust("31 seconds");
-    const second = yield* launcher.resolveAvailableEditors();
-    assert.deepEqual([...second], [...first]);
-    assert.equal(statCalls, statCallsAfterFirstScan);
-
-    // Past the discovery cache window the next call rescans.
-    yield* TestClock.adjust("30 seconds");
-    yield* launcher.resolveAvailableEditors();
-    assert.isAbove(statCalls, statCallsAfterFirstScan);
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        launcherLayer,
-        Layer.succeed(HostProcessPlatform, "win32"),
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: {
-              PATH: "C:\\t3-editor-discovery-cache-test",
-              PATHEXT: ".COM;.EXE;.BAT;.CMD",
-            },
-          }),
-        ),
-        TestClock.layer(),
-      ),
-    ),
-  );
-});
-
-// A client that disconnects mid-scan interrupts the shared discovery effect on
-// the connection fiber. The cache must not retain that interrupt: doing so
-// replayed it to every later connect for the whole TTL, so `server.getConfig`
-// failed and no client could reconnect until the server restarted.
-it.effect("rescans after an interrupted discovery instead of caching the interrupt", () => {
-  const fileInfo = { type: "File" } as FileSystem.File.Info;
-  let blockFirstScan = true;
-  let scans = 0;
-  const launcherLayer = ExternalLauncher.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        FileSystem.layerNoop({
-          // The first scan parks inside `stat` so the interrupt lands while
-          // discovery is in flight, which is what a client disconnecting
-          // mid-connect does to the shared effect.
-          stat: () =>
-            Effect.gen(function* () {
-              scans += 1;
-              if (blockFirstScan) {
-                return yield* Effect.never;
-              }
-              return fileInfo;
-            }),
-        }),
-        Path.layer,
-        Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.sync(() => makeMockDetachedHandle())),
-        ),
-      ),
-    ),
-  );
-
-  return Effect.gen(function* () {
-    const launcher = yield* ExternalLauncher.ExternalLauncher;
-
-    const fiber = yield* Effect.forkChild(launcher.resolveAvailableEditors());
-    yield* Effect.yieldNow;
-    yield* Fiber.interrupt(fiber);
-
-    // The next connect must still get a real answer well inside the TTL.
-    blockFirstScan = false;
-    scans = 0;
-    const editors = yield* launcher.resolveAvailableEditors();
-    assert.equal(editors.includes("vscode"), true);
-    assert.isAbove(scans, 0);
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        launcherLayer,
-        Layer.succeed(HostProcessPlatform, "win32"),
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: {
-              PATH: "C:\\t3-editor-discovery-interrupt-test",
-              PATHEXT: ".COM;.EXE;.BAT;.CMD",
-            },
-          }),
-        ),
-      ),
-    ),
-  );
-});
-
 it.effect("rejects unknown editors through the service API", () =>
   Effect.gen(function* () {
     const launcher = yield* ExternalLauncher.ExternalLauncher;
@@ -292,3 +177,34 @@ it.effect("rejects unknown editors through the service API", () =>
     assert.equal(error.message, "Unknown editor: missing-editor");
   }).pipe(Effect.provide(testLayer({ platform: "linux", env: { PATH: "" } }))),
 );
+
+// ru-code: the Linux opener ORDER, tested pure — availability filtering is glue (covered by the
+// default-command test above), the ORDER is the decision. `xdg-open` is absent on minimal installs
+// and silently does nothing without a desktop session, so a single attempt that loses is
+// untraceable — which is why "the browser never opened after install" could not be explained.
+// $BROWSER is the user's explicit choice and must win; `gio open` covers portal desktops.
+it("orders the Linux browser openers: $BROWSER, then xdg-open, then gio open", () => {
+  const withBrowser = ExternalLauncher.linuxBrowserLaunches("https://example.com/", {
+    BROWSER: "firefox",
+  });
+  assert.deepEqual(
+    withBrowser.map((launch) => launch.command),
+    ["firefox", "xdg-open", "gio"],
+  );
+  assert.deepEqual(withBrowser[2]?.args, ["open", "https://example.com/"]);
+  assert.equal(withBrowser[0]?.options.detached, true);
+
+  const withoutBrowser = ExternalLauncher.linuxBrowserLaunches("https://example.com/", {});
+  assert.deepEqual(
+    withoutBrowser.map((launch) => launch.command),
+    ["xdg-open", "gio"],
+  );
+
+  // A blank $BROWSER is not a choice.
+  assert.deepEqual(
+    ExternalLauncher.linuxBrowserLaunches("https://example.com/", { BROWSER: "   " }).map(
+      (l) => l.command,
+    ),
+    ["xdg-open", "gio"],
+  );
+});

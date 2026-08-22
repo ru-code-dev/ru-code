@@ -27,8 +27,40 @@ export const isPortInUse = (host: string, port: number): Effect.Effect<boolean> 
   });
 
 /**
- * Prefer `desiredPort`; if it's taken, probe upward for the first free port.
+ * Can THIS process actually bind `host:port`? The question a port picker has to answer.
+ *
+ * `isPortInUse` asks a different one — "is anything accepting connections there" — and the two
+ * disagree exactly where it hurts: a port with no listener that nevertheless cannot be bound (a
+ * Windows excluded range, a reservation, a permission rule, another interface) reads as FREE. The
+ * child then dies at bind, the launcher retries, and because the connect-probe is a pure function
+ * of observable listeners it hands back the SAME dead port all three attempts. Binding and
+ * releasing is the only probe whose success means what the caller needs it to mean.
+ */
+const canBindPort = (host: string, port: number): Effect.Effect<boolean> =>
+  Effect.callback<boolean>((resume) => {
+    const server = NodeNet.createServer();
+    let settled = false;
+    const settle = (free: boolean) => {
+      if (settled) return;
+      settled = true;
+      server.close(() => resume(Effect.succeed(free)));
+    };
+    server.once("error", () => settle(false));
+    server.once("listening", () => settle(true));
+    server.listen(port, host);
+    return Effect.sync(() => {
+      settled = true;
+      server.close();
+    });
+  });
+
+/**
+ * Prefer `desiredPort`; if it cannot be bound, probe upward for the first port that can.
  * `None` only if the whole window is occupied (pathological).
+ *
+ * There IS a race between releasing the probe socket and the child binding — unavoidable for any
+ * out-of-process launcher, and the retry loop above exists for exactly that. What this removes is
+ * the case the retry loop could never fix: a port that is free of listeners but impossible to bind.
  */
 export const findFreePort = (
   host: string,
@@ -37,7 +69,7 @@ export const findFreePort = (
   Effect.gen(function* () {
     for (let offset = 0; offset < PORT_PROBE_LIMIT; offset += 1) {
       const candidate = desiredPort + offset;
-      if (!(yield* isPortInUse(host, candidate))) {
+      if (yield* canBindPort(host, candidate)) {
         return Option.some(candidate);
       }
     }

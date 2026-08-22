@@ -1,0 +1,44 @@
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index 29b02311c2101b01e5ad991f2e9375e699f2340c..606cebbbd55b9d26cd1d229fb901c07f31e5b76d 100644
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -239,7 +239,13 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   };
+   const spawn = (command, spawnOptions) => Effect.callback(resume => {
+     const deferred = Deferred.makeUnsafe();
+-    const handle = NodeChildProcess.spawn(command.command, command.args, spawnOptions);
++    const handle = NodeChildProcess.spawn(command.command, command.args, {
++      ...spawnOptions,
++      // ru-code: a console-less parent (daemon child runs with DETACHED_PROCESS)
++      // makes every console-subsystem child open a VISIBLE console window on
++      // Windows unless the spawn hides it. Ignored on POSIX.
++      windowsHide: true
++    });
+     handle.on("error", error => {
+       resume(Effect.fail(toPlatformError("spawn", error, command)));
+     });
+@@ -256,7 +262,11 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   const killProcessGroup = (command, childProcess, signal) => {
+     if (globalThis.process.platform === "win32") {
+       return Effect.callback(resume => {
+-        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, error => {
++        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, {
++          // ru-code: same reason as the spawn above - exec runs via cmd.exe, which
++          // paints a visible console per tree-kill under a console-less parent.
++          windowsHide: true
++        }, error => {
+           if (error) {
+             resume(Effect.fail(toPlatformError("kill", toError(error), command)));
+           } else {
+@@ -274,7 +284,10 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   };
+   const killProcessGroupOnExit = (childProcess, signal) => {
+     if (globalThis.process.platform === "win32") {
+-      NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {
++      NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, {
++        // ru-code: hidden for the same reason as the kill above.
++        windowsHide: true
++      }, () => {
+         // ignore errors during best-effort cleanup
+       });
+       return;

@@ -22,7 +22,7 @@ const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; windowsHide?: boolean },
 ) => string;
 
 function canExecuteFile(filePath: string): boolean {
@@ -386,7 +386,9 @@ export function readEnvironmentFromWindowsShell(
   ];
   for (const shell of WINDOWS_SHELL_CANDIDATES) {
     try {
-      const output = execFile(shell, args, { encoding: "utf8", timeout: 5000 });
+      // ru-code: hidden — under the console-less daemon server this boot-time
+      // probe would otherwise flash a visible powershell window.
+      const output = execFile(shell, args, { encoding: "utf8", timeout: 5000, windowsHide: true });
 
       const environment: Partial<Record<string, string>> = {};
       for (const name of names) {

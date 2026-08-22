@@ -8,6 +8,8 @@ export type SettingsPath =
   | "/settings/integrations"
   | "/settings/source-control"
   | "/settings/connections"
+  // ru-code: auto-update settings section
+  | "/settings/auto-update"
   | "/settings/archived";
 
 export interface SettingsSearchItem {
@@ -32,6 +34,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
+  // ru-code: auto-update settings section
+  "/settings/auto-update": "Auto-update",
   "/settings/archived": "Archive",
 };
 

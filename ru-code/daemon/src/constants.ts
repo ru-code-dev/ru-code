@@ -86,6 +86,10 @@ export const SIGTERM_GRACE_MS = 1_500;
  * child tree in one shot (best-effort — if AppLocker blocks it, children orphan).
  * When false, only the server pid is killed via `process.kill`.
  */
+// ru-code: read together with KILL_BY_JOURNAL_PIDS above — this only ever applies when THAT one is
+// false. At the shipped defaults (`KILL_BY_JOURNAL_PIDS = true`) the taskkill path in terminate.ts
+// is unreachable, and so is sweep.ts, which nothing else imports. Kept as the documented fallback
+// backend rather than deleted, but nobody should read this constant as describing what runs today.
 export const USE_TASK_KILL_FOR_WINDOWS = true;
 
 /** How far above the desired port we probe for a free one before giving up. */

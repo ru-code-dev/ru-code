@@ -17,9 +17,13 @@ import { APP_COMMAND, APP_NAME } from "@ru-code/branding";
 import * as Daemon from "@ru-code/daemon"; // ru-code: `stop` subcommand
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
+import * as Clock from "effect/Clock"; // ru-code: update-relaunch journal timestamps
 import { authCommand } from "./cli/auth.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { pairCommand } from "./cli/pair.ts";
+// ru-code: auto-update relaunch hop (pinned-port restart) + its journal.
+import { JOURNAL_SCHEMA, readJournal, writeJournal } from "./ru-code/auto-update/apply/journal.ts";
+import { appRootFromArgv, runUpdateRelaunch } from "./ru-code/auto-update/apply/updateRelaunch.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { resolveServerConfig, sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
@@ -58,6 +62,45 @@ const restartCommand = Command.make("restart", { ...sharedServerCommandFlags }).
         statePath: config.serverRuntimeStatePath,
         baseDir: config.baseDir,
         version: packageJson.version,
+      });
+    }),
+  ),
+);
+
+// ru-code: hidden `ru-code update-relaunch` — the auto-update restart hop: graceful stop, the
+// pinned-port gate (3×30s, NO drift — the SW page polls the old origin), then the shipped daemon
+// launch pinned to the same port. Spawned detached by the install run; lives seconds.
+const updateRelaunchCommand = Command.make("update-relaunch", { ...sharedServerCommandFlags }).pipe(
+  Command.withDescription("Internal: relaunch after an auto-update (pinned port)."),
+  Command.withHidden,
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      const logLevel = yield* GlobalFlag.LogLevel;
+      const config = yield* resolveServerConfig(flags, logLevel);
+      const appRoot = appRootFromArgv(process.argv[1], process.env["RU_CODE_APP_ROOT"]);
+      const nowMs = yield* Clock.currentTimeMillis;
+      const journalPortBusy =
+        appRoot === null
+          ? Effect.void
+          : Effect.gen(function* () {
+              const journal = yield* readJournal(appRoot);
+              yield* writeJournal(appRoot, {
+                schema: JOURNAL_SCHEMA,
+                targetVersion: journal?.targetVersion ?? packageJson.version,
+                fromVersion: journal?.fromVersion ?? "",
+                outcome: "failed",
+                reasonCode: "port-busy",
+                at: nowMs,
+              });
+              // ru-code: the journal helpers need the node platform (fs+path); close
+              // the requirement here so runUpdateRelaunch sees a self-contained Effect.
+            }).pipe(Effect.provide(NodeServices.layer));
+      return yield* runUpdateRelaunch({
+        flags,
+        statePath: config.serverRuntimeStatePath,
+        baseDir: config.baseDir,
+        version: packageJson.version,
+        journalPortBusy,
       });
     }),
   ),
@@ -114,6 +157,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       serveCommand,
       stopCommand, // ru-code: daemon stop
       restartCommand, // ru-code: daemon restart
+      updateRelaunchCommand, // ru-code: hidden auto-update restart hop
       envAnalysisCommand, // ru-code: hidden capability probe
 
       // ru-code: `auth`, `project`, `pair` and `service` stay fully invocable but are
@@ -133,7 +177,13 @@ export const cli = makeCli();
 
 // ru-code: import.meta.main only exists on node >= 22.18 — on 22.16 it is undefined and
 // the CLI silently never starts. Fall back to the argv entry-module comparison.
-if (import.meta.main ?? pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
+// ru-code: the frozen auto-update wrapper (wrapper/wrapperSource.ts) IMPORTS this bundle, so
+// `import.meta.main` is a defined `false` for it and the argv URL never matches the wrapper path —
+// the wrapper sets RU_CODE_WRAPPER_LAUNCH so we still start the CLI on that launch path.
+if (
+  (import.meta.main ?? pathToFileURL(process.argv[1] ?? "").href === import.meta.url) ||
+  process.env.RU_CODE_WRAPPER_LAUNCH === "1"
+) {
   Command.run(cli, { version: packageJson.version }).pipe(
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),

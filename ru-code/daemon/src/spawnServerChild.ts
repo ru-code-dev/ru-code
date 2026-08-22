@@ -15,6 +15,8 @@ export const spawnServerChild = (params: {
   readonly host: string;
   readonly port: number;
   readonly logPath: string;
+  /** Append rather than truncate — set for a RETRY, so attempt 1's stack survives. */
+  readonly appendLog?: boolean;
 }): Effect.Effect<number, DaemonSpawnError> =>
   Effect.gen(function* () {
     const cliEntry = process.argv[1];
@@ -34,5 +36,6 @@ export const spawnServerChild = (params: {
       args: [...process.execArgv, cliEntry, ...childArgs],
       env: { ...process.env, [DAEMON_CHILD_ENV]: "1" },
       logPath: params.logPath,
+      ...(params.appendLog === true ? { appendLog: true } : {}),
     });
   });

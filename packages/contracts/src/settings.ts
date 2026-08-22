@@ -631,7 +631,9 @@ export const SourceControlWritingStyleSettings = Schema.Struct({
 });
 export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyleSettings.Type;
 
-export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
+// ru-code: background remote refresh OFF by default (was 30s) — each tick runs a real
+// `git fetch --no-tags` per watched project. Still user-editable (Settings → Source control).
+export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(0);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
 
 export const BackgroundActivityProfile = Schema.Literals([

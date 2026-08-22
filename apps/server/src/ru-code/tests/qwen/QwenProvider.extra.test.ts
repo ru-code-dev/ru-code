@@ -3,7 +3,7 @@
 //   - buildInitialQwenProviderSnapshot: disabled vs enabled placeholder draft
 //   - checkQwenProviderStatus: disabled early-return (no spawn), version-probe
 //     success, command-missing, and non-missing spawn failure branches.
-import { describe, expect, it } from "@effect/vitest";
+import { beforeEach, describe, expect, it } from "@effect/vitest";
 import { APP_NAME, resolveCliProfile } from "@ru-code/branding";
 import { QwenSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -18,6 +18,13 @@ import {
   buildInitialQwenProviderSnapshot,
   checkQwenProviderStatus,
 } from "../../qwen/QwenProvider.ts";
+import { clearVersionProbeCacheForTests } from "../../qwen/versionProbeCache.ts";
+
+// ru-code: the version probe is cached per CLI path for the process lifetime;
+// reset it so each case gets a fresh probe.
+beforeEach(() => {
+  clearVersionProbeCacheForTests();
+});
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const ENABLED = decodeQwenSettings({});
@@ -71,18 +78,21 @@ describe("buildInitialQwenProviderSnapshot", () => {
     }),
   );
 
-  it.effect("enabled settings → probing placeholder advertises the profile's built-ins", () =>
+  it.effect("enabled settings → ready placeholder advertises the profile's built-ins", () =>
     Effect.gen(function* () {
       const draft = yield* buildInitialQwenProviderSnapshot(ENABLED, LABEL);
       expect(draft.enabled).toBe(true);
-      // enabled → status reflects the probe.status ("warning" placeholder)
-      expect(draft.status).toBe("warning");
+      // ru-code: `ready`, not a "checking…" warning — the model picker only enables an
+      // instance while status is "ready", so a placeholder warning disables the provider
+      // for the whole probe.
+      expect(draft.status).toBe("ready");
       expect(draft.installed).toBe(true);
+      expect(draft.version).toBeNull();
+      expect(draft.message).toBeUndefined();
       // Model-agnostic: the snapshot advertises exactly the instance profile's built-in
       // models — whatever they are — not a hardcoded slug list.
       const profileModels = resolveCliProfile(ENABLED.profile).models;
       expect(draft.models.map((m) => m.slug)).toEqual(profileModels.map((m) => m.slug));
-      expect(draft.message).toContain(LABEL);
     }),
   );
 });
@@ -167,7 +177,9 @@ describe("checkQwenProviderStatus", () => {
     }),
   );
 
-  it.effect("enabled + non-zero exit with version → warning, version-aware message", () =>
+  // ru-code: the version came through, so the exit code is unrelated noise — the provider stays
+  // `ready` (a warning would disable it in the model picker). See QwenProvider.test.ts.
+  it.effect("enabled + non-zero exit with version → ready, version reported", () =>
     Effect.gen(function* () {
       const draft = yield* checkQwenProviderStatus("/fake/cli.js", ENABLED, LABEL, {}).pipe(
         Effect.provide(
@@ -175,9 +187,9 @@ describe("checkQwenProviderStatus", () => {
         ),
       );
       expect(draft.installed).toBe(true);
-      expect(draft.status).toBe("warning");
+      expect(draft.status).toBe("ready");
       expect(draft.version).toBe("4.5.6");
-      expect(draft.message).toContain("4.5.6");
+      expect(draft.message).toBeUndefined();
     }),
   );
 

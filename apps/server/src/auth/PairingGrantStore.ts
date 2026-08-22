@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
+import { installLocalBootstrapMinting } from "../ru-code/auth/localAutoAuth.ts"; // ru-code: loopback auto-auth seam
 
 export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
@@ -328,6 +329,16 @@ export const make = Effect.gen(function* () {
       remainingUses: "unbounded",
     });
   }
+
+  // ru-code: loopback auto-auth — in web mode on a loopback bind, hand the
+  // local-bootstrap endpoint the store internals it needs (credential generator +
+  // in-memory grant seeding). All policy, gating and minting logic lives in
+  // ru-code/auth/localAutoAuth.ts; ineligible configs make this a no-op.
+  yield* installLocalBootstrapMinting({
+    config: { mode: config.mode, host: config.host },
+    generateCredential: generatePairingToken,
+    seedGrant,
+  });
 
   const listActive: PairingGrantStore["Service"]["listActive"] = Effect.fn(
     "PairingGrantStore.listActive",

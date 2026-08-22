@@ -153,6 +153,10 @@ const makeHarness = Effect.gen(function* () {
         readEvents: (fromSequenceExclusive, limit) => real.readEvents(fromSequenceExclusive, limit),
         // ru-code: t3 added `latestSequence` to OrchestrationEngineShape (A15).
         latestSequence: real.latestSequence,
+        // ru-code: boot-performance.md S1 seam
+        readStreamEvents: (aggregateKind, streamId, fromSequenceExclusive, limit) =>
+          real.readStreamEvents(aggregateKind, streamId, fromSequenceExclusive, limit),
+        readLatestEventSequence: () => real.readLatestEventSequence(), // ru-code: boot-performance.md S1 seam
         dispatch: (command) =>
           Effect.suspend(() => {
             recorded.push(command);

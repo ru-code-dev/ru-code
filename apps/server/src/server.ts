@@ -32,8 +32,13 @@ import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionD
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
+import { healthzRouteLayer } from "./ru-code/auto-update/healthz.ts"; // ru-code: auto-update restart heartbeat
+import { localBootstrapRouteLayer } from "./ru-code/auth/localAutoAuth.ts"; // ru-code: loopback auto-auth credential endpoint
+import { autoUpdateTestTriggerRouteLayer } from "./ru-code/auto-update/apply/testTriggerRoute.ts"; // ru-code: default-off live-cycle test trigger
+import { AutoUpdateHostLayer } from "./ru-code/auto-update/autoUpdateWiring.ts"; // ru-code: auto-update engine
 import { QwenModelDiscoveryStore } from "./ru-code/qwen/discovery/QwenModelDiscoveryStore.ts"; // ru-code
 import { QwenCompactionHistory } from "./ru-code/qwen/compaction/QwenCompactionHistory.ts"; // ru-code
+import { FirstClientConnectedLive } from "./ru-code/startup/firstClientConnected.ts"; // ru-code: boot-performance.md Fix W
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -421,11 +426,14 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // for the auto-compact circuit breaker. `OrchestrationLayerLive` is the same
   // module-level reference composed into `ProviderRuntimeLayerLive`, so Layer
   // memoization shares one engine/query instance.
+  // FirstClientConnectedLive: boot-performance.md Fix W — one module-level layer, so the
+  // ws route (signal on attach) and the qwen adapter (deferred prewarm) share ONE deferred.
   Layer.provideMerge(
     Layer.mergeAll(
       ProviderEventLoggers.layer,
       QwenModelDiscoveryStore.layer(),
       QwenCompactionHistory.layer().pipe(Layer.provide(OrchestrationLayerLive)),
+      FirstClientConnectedLive,
     ),
   ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
@@ -492,6 +500,9 @@ export const makeRoutesLayer = Layer.mergeAll(
     ),
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
+    healthzRouteLayer, // ru-code: auto-update restart heartbeat (before the GET * catch-all)
+    localBootstrapRouteLayer, // ru-code: loopback auto-auth credential endpoint (before the GET * catch-all)
+    autoUpdateTestTriggerRouteLayer, // ru-code: default-off live-cycle test trigger (RU_CODE_UPDATE_TEST_TRIGGER=1)
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
@@ -718,6 +729,7 @@ export const makeServerLayer = Layer.unwrap(
       runtimeStateLayer,
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
+      AutoUpdateHostLayer, // ru-code: auto-update engine (boot probes + scheduler live with the app)
     );
 
     return serverApplicationLayer.pipe(

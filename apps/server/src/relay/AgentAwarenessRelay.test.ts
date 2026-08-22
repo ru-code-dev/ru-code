@@ -474,6 +474,8 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
 
         const orchestrationEngine = {
           readEvents: () => Stream.empty,
+          readStreamEvents: () => Stream.empty, // ru-code: boot-performance.md S1 seam
+          readLatestEventSequence: () => Effect.succeed(0), // ru-code: boot-performance.md S1 seam
           dispatch: () => Effect.succeed({ sequence: 1 }),
           streamDomainEvents: Stream.fromQueue(events),
           latestSequence: Effect.succeed(0),
@@ -667,6 +669,8 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           }),
           Layer.succeed(OrchestrationEngineService, {
             readEvents: () => Stream.empty,
+            readStreamEvents: () => Stream.empty, // ru-code: boot-performance.md S1 seam
+            readLatestEventSequence: () => Effect.succeed(0), // ru-code: boot-performance.md S1 seam
             dispatch: () => Effect.succeed({ sequence: 1 }),
             streamDomainEvents: Stream.fromQueue(events),
             latestSequence: Effect.succeed(0),

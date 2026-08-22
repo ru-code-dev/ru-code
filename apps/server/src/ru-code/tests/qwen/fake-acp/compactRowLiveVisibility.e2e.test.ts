@@ -17,6 +17,7 @@ import {
   QwenSettings,
   ThreadId,
   defaultInstanceIdForDriver,
+  type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,7 @@ import { ProviderAdapterRegistry } from "../../../../provider/Services/ProviderA
 import { makeAdapterRegistryMock } from "../../../../provider/testUtils/providerAdapterRegistryMock.ts";
 import type { FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
+import { pollUntil } from "./testKit.ts";
 import { makeOrchestrationIntegrationHarness } from "../../../../../integration/OrchestrationEngineHarness.integration.ts";
 
 const decodeQwenSettings = Schema.decodeEffect(QwenSettings);
@@ -54,6 +56,17 @@ const script: FakeAcpScript = {
     steps.emitText("ok").respondOk();
   },
 };
+
+// ONE predicate behind both reads of the compaction rows — the progress row we
+// wait for and the completion row that must be absent (mirrors the sibling
+// pipeline proof's `isCompactionActivity`).
+const isCompactionActivity = (
+  activity: OrchestrationThread["activities"][number],
+  kind: "task.progress" | "task.completed",
+) =>
+  activity.kind === kind &&
+  typeof (activity.payload as { taskId?: unknown })?.taskId === "string" &&
+  (activity.payload as { taskId: string }).taskId.startsWith(CONTEXT_COMPACTION_TASK_PREFIX);
 
 const registryOverride = (ctx: { readonly workspaceDir: string; readonly rootDir: string }) =>
   Layer.effect(
@@ -133,30 +146,30 @@ it.live("the spinner row is in the projection WHILE the compression is still run
           createdAt: NOW,
         });
 
+        // The projection row and the prompt reaching the fake's recorder are two
+        // INDEPENDENT async legs of this one dispatch, in no guaranteed order —
+        // so the row landing proves nothing about the prompt. Settle on the
+        // recorder first (it IS the source of truth for "prompt dispatched"),
+        // then judge the projection at a moment provably after the prompt landed.
+        yield* pollUntil(
+          () => promptTexts.at(-1) === "/compress",
+          "the /compress prompt reached the fake",
+        );
+
         // THE guarantee: the progress row lands in the projection while the
         // /compress prompt is still parked (compression never completes here).
         const thread = yield* harness.waitForThread(
           THREAD_ID,
           (candidate) =>
-            candidate.activities.some(
-              (activity) =>
-                activity.kind === "task.progress" &&
-                typeof (activity.payload as { taskId?: unknown })?.taskId === "string" &&
-                (activity.payload as { taskId: string }).taskId.startsWith(
-                  CONTEXT_COMPACTION_TASK_PREFIX,
-                ),
+            candidate.activities.some((activity) =>
+              isCompactionActivity(activity, "task.progress"),
             ),
           15_000,
         );
 
         // Still mid-compression: no completion row exists.
-        const completionRow = thread.activities.find(
-          (activity) =>
-            activity.kind === "task.completed" &&
-            typeof (activity.payload as { taskId?: unknown })?.taskId === "string" &&
-            (activity.payload as { taskId: string }).taskId.startsWith(
-              CONTEXT_COMPACTION_TASK_PREFIX,
-            ),
+        const completionRow = thread.activities.find((activity) =>
+          isCompactionActivity(activity, "task.completed"),
         );
         assert.isUndefined(completionRow, "completion row present — row was NOT live");
         assert.deepStrictEqual(promptTexts.slice(-1), ["/compress"]);

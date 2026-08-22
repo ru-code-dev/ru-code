@@ -38,6 +38,27 @@ export interface OrchestrationEngineShape {
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /**
+   * ru-code: replay ONE aggregate stream's events after the cursor — the
+   * SQL-filtered form of `readEvents` for per-thread catch-up, so the read cost
+   * is bounded by that stream's gap instead of the global tail
+   * (boot-performance.md S1).
+   */
+  readonly readStreamEvents: (
+    aggregateKind: OrchestrationEvent["aggregateKind"],
+    streamId: OrchestrationEvent["aggregateId"],
+    fromSequenceExclusive: number,
+    limit?: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /**
+   * ru-code: the store's highest persisted sequence (0 when empty). The
+   * reconnect gap policy measures a reconnecting client's cursor against this
+   * — the store tail is the truthful replay bound; the projection cursor can
+   * lag it (boot-performance.md S1).
+   */
+  readonly readLatestEventSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /**
    * Dispatch a validated orchestration command.
    *
    * @param command - Valid orchestration command.

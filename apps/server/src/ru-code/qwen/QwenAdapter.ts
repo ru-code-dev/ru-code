@@ -152,6 +152,7 @@ import {
 // ru-code: live token feed — pull qwen's running promptTokenCount off each
 // agent_message_chunk's _meta so the context meter updates mid-turn.
 import { extractQwenInputTokens } from "./usage.ts";
+import { triggerGenericPrewarm } from "./warmPrewarmTrigger.ts";
 
 const PROVIDER = ProviderDriverKind.make(QWEN_KIND);
 
@@ -764,7 +765,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const prewarmOnCreate =
       options?.prewarmOnCreate ?? boundInstanceId === defaultInstanceIdForDriver(PROVIDER);
     if (warmPool !== undefined && prewarmOnCreate) {
-      yield* warmPool.prewarmGeneric;
+      // ru-code (Fix W): with FirstClientConnected in context the prewarm is
+      // forked onto the adapter layer scope and gated on the first client
+      // attach (the heavy CLI boot must not compete with the first connect);
+      // without the service it is awaited inline as before. NO timers.
+      yield* triggerGenericPrewarm(warmPool.prewarmGeneric, layerScope);
     }
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);

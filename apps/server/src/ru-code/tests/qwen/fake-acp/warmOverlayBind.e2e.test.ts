@@ -18,7 +18,11 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
-import { MCP_PREWARM_INSTANCES, PREWARM_GENERIC_INSTANCES } from "@ru-code/qwen/constants";
+import {
+  MCP_PREWARM_INSTANCES,
+  NO_MCP_SERVER_SENTINEL,
+  PREWARM_GENERIC_INSTANCES,
+} from "@ru-code/qwen/constants";
 
 import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
@@ -76,10 +80,17 @@ it.effect(
       bindReader = (path) => fs.readFileString(path).pipe(Effect.orDie);
       const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
       const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
-      // Boot prewarm: 2 GENERIC spares (no allowlist argv, slot overlay env).
+      // Boot prewarm: 2 GENERIC spares (sentinel allowlist argv, slot overlay env).
       assert.lengthOf(recipes, PREWARM_GENERIC_INSTANCES, "boot prewarmed the generic spares");
       for (const generic of recipes) {
-        assert.isNull(allowlistOf(generic), "generic spares carry no allowlist argv");
+        // ru-code: a generic spare wants NO MCP, which must be an allowlist nothing matches —
+        // omitting the flag disables the CLI's filter, so it connects (and awaits) every
+        // configured server during startup and the spare dies on its warmup budget.
+        assert.strictEqual(
+          allowlistOf(generic),
+          NO_MCP_SERVER_SENTINEL,
+          "generic spares block MCP with the sentinel allowlist",
+        );
         assert.strictEqual(generic.env?.["QWEN_CODE_NO_RELAUNCH"], "true");
         assert.strictEqual(generic.cwd, serverConfig.stateDir, "spares spawn with neutral cwd");
       }

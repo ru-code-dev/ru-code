@@ -639,6 +639,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       {
         onExpectedFailure: setStreamError,
         retryExpectedFailureAfter: "250 millis",
+        // ru-code: cap the expected-failure resubscribe (a deleted thread was
+        // re-requested at 4/s forever; the new-thread race still recovers on the
+        // first 250 ms retries).
+        retryExpectedFailureCap: "30 seconds",
         resubscribe: foregroundResubscriptions,
       },
     ).pipe(Stream.runForEach(applyItem)),

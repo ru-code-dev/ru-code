@@ -196,9 +196,14 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
         streamSettings: Stream.never,
         haveSettingsChanged: () => false,
         initialSnapshot: (settings) =>
-          buildInitialQwenProviderSnapshot(settings, resolved.name, getDiscoveredModels).pipe(
-            Effect.map(stampIdentity),
-          ),
+          // ru-code: pass the resolved CLI path so a rebuilt instance reuses this process's
+          // version verdict for that path instead of starting from an unknown version.
+          buildInitialQwenProviderSnapshot(
+            settings,
+            resolved.name,
+            getDiscoveredModels,
+            resolved.bin,
+          ).pipe(Effect.map(stampIdentity)),
         checkProvider,
         refreshInterval: SNAPSHOT_REFRESH_INTERVAL,
       }).pipe(

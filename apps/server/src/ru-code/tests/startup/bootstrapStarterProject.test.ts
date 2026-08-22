@@ -43,6 +43,8 @@ it.effect("registers <baseDir>/Project (not cwd) with createWorkspaceRootIfMissi
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, unusedProjectionQuery),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readStreamEvents: () => Stream.empty, // ru-code: boot-performance.md S1 seam
+        readLatestEventSequence: () => Effect.succeed(0), // ru-code: boot-performance.md S1 seam
         dispatch: (command) =>
           Ref.update(commands, (all) => [...all, command as Record<string, unknown>]).pipe(
             Effect.as({ sequence: 1 }),

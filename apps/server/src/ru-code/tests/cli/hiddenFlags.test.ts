@@ -31,6 +31,7 @@ const HIDDEN_FLAGS = [
   "--log-websocket-events",
   "--tailscale-serve",
   "--tailscale-serve-port",
+  "--json", // ru-code: the installer's launch contract, not a user-facing option
 ];
 
 // Tests run in the default EN locale (VITEST ⇒ en; the effect patch defaults to English
@@ -103,6 +104,27 @@ it.effect("a hidden flag is still parsed (InvalidValue inside ShowHelp, not Unre
         (wrapped) => wrapped._tag === "InvalidValue" && wrapped.option === "tailscale-serve-port",
       ),
       `expected InvalidValue for tailscale-serve-port, got: ${wrappedTags.join(",")}`,
+    );
+  }).pipe(Effect.provide(runLayer)),
+);
+
+// ru-code: --json is the installer's launch contract. It must be RECOGNIZED (an
+// unknown flag would abort the launch the installer is waiting on) while staying
+// out of --help. Parsing is proven by what it is NOT: the run below fails only on
+// the deliberately bad tailscale value, never with UnrecognizedOption for --json.
+it.effect("--json is recognized (hidden, not removed)", () =>
+  Effect.gen(function* () {
+    const error = yield* Command.runWith(cli, { version: "0.0.0" })([
+      "--json",
+      "--tailscale-serve-port",
+      "not-a-number",
+    ]).pipe(Effect.flip);
+    if (!CliError.isCliError(error) || error._tag !== "ShowHelp") {
+      return assert.fail(`expected ShowHelp, got ${String((error as { _tag?: string })._tag)}`);
+    }
+    assert.isFalse(
+      error.errors.some((wrapped) => wrapped._tag === "UnrecognizedOption"),
+      `--json must parse; got: ${error.errors.map((wrapped) => wrapped._tag).join(",")}`,
     );
   }).pipe(Effect.provide(runLayer)),
 );

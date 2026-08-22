@@ -64,6 +64,8 @@ import {
   McpCatalogRepository,
   McpRepositoriesLive,
 } from "@smart-tools/qwen-cli-mcp-manager/server";
+// ru-code: boot-performance.md Fix G — snapshot serving never waits on git.
+import { makeCacheFirstRepositoryIdentity } from "../../ru-code/reconnect/cacheFirstRepositoryIdentity.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
@@ -363,6 +365,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const mcpCatalogRepository = yield* McpCatalogRepository;
   const mcpBindingRepository = yield* McpBindingRepository;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  // ru-code: boot-performance.md Fix G — the SNAPSHOT paths resolve identities cache-first
+  // (immediate answer + deduped background git); the per-project reads below keep the
+  // direct resolver (they are keyed single-project lookups, not the serve hot path).
+  const cacheFirstRepositoryIdentity = yield* makeCacheFirstRepositoryIdentity(
+    repositoryIdentityResolver,
+  );
   const repositoryIdentityResolutionConcurrency = 4;
   const resolveRepositoryIdentitiesForProjects = Effect.fn(
     "ProjectionSnapshotQuery.resolveRepositoryIdentitiesForProjects",
@@ -381,7 +389,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       yield* Effect.forEach(
         uniqueWorkspaceRoots,
         (workspaceRoot) =>
-          repositoryIdentityResolver
+          // ru-code: boot-performance.md Fix G (cache-first — see const above).
+          cacheFirstRepositoryIdentity
             .resolve(workspaceRoot)
             .pipe(Effect.map((identity) => [workspaceRoot, identity] as const)),
         { concurrency: repositoryIdentityResolutionConcurrency },

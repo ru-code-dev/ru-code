@@ -22,6 +22,8 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+// ru-code: boot-performance.md S5 seam — the lean boot-sweep reader takes the raw SqlClient.
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as CheckpointStore from "../src/checkpointing/CheckpointStore.ts";
 import { TextGeneration, type TextGenerationShape } from "../src/textGeneration/TextGeneration.ts";
@@ -192,6 +194,8 @@ export interface OrchestrationIntegrationHarness {
   readonly adapterHarness: TestProviderAdapterHarness | null;
   readonly engine: OrchestrationEngineShape;
   readonly snapshotQuery: ProjectionSnapshotQuery["Service"];
+  // ru-code: boot-performance.md S5 seam — same client the projections write through.
+  readonly sql: SqlClient.SqlClient;
   readonly providerService: ProviderService["Service"];
   readonly checkpointStore: CheckpointStore.CheckpointStore["Service"];
   readonly checkpointRepository: ProjectionCheckpointRepository["Service"];
@@ -323,6 +327,10 @@ export const makeOrchestrationIntegrationHarness = (
                   real.readEvents(fromSequenceExclusive, limit),
                 // ru-code: t3 added `latestSequence` to OrchestrationEngineShape (A15).
                 latestSequence: real.latestSequence,
+                // ru-code: boot-performance.md S1 seam
+                readStreamEvents: (aggregateKind, streamId, fromSequenceExclusive, limit) =>
+                  real.readStreamEvents(aggregateKind, streamId, fromSequenceExclusive, limit),
+                readLatestEventSequence: () => real.readLatestEventSequence(), // ru-code: boot-performance.md S1 seam
                 dispatch: (command) =>
                   Effect.suspend(() => {
                     onEngineCommand(command);
@@ -473,7 +481,9 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(McpManagerSecretStoreMemory),
       Layer.provideMerge(McpSessionOverlayNoop),
       Layer.provideMerge(providerRegistryLayer),
-      Layer.provide(persistenceLayer),
+      // ru-code: boot-performance.md S5 seam — provideMerge so the harness can hand the
+      // runtime's own SqlClient to the lean boot-sweep reader.
+      Layer.provideMerge(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
@@ -496,6 +506,10 @@ export const makeOrchestrationIntegrationHarness = (
     ).pipe(Effect.orDie);
     const snapshotQuery = yield* tryRuntimePromise("load ProjectionSnapshotQuery service", () =>
       runtime.runPromise(Effect.service(ProjectionSnapshotQuery)),
+    ).pipe(Effect.orDie);
+    // ru-code: boot-performance.md S5 seam.
+    const sql = yield* tryRuntimePromise("load SqlClient service", () =>
+      runtime.runPromise(Effect.service(SqlClient.SqlClient)),
     ).pipe(Effect.orDie);
     const providerService = yield* tryRuntimePromise("load ProviderService service", () =>
       runtime.runPromise(Effect.service(ProviderService)),
@@ -650,6 +664,7 @@ export const makeOrchestrationIntegrationHarness = (
       adapterHarness,
       engine,
       snapshotQuery,
+      sql, // ru-code: boot-performance.md S5 seam
       providerService,
       checkpointStore,
       checkpointRepository,

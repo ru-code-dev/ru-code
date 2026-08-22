@@ -47,6 +47,28 @@ export interface OrchestrationEventStoreShape {
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**
+   * ru-code: replay ONE aggregate stream's events after the cursor — the
+   * SQL-filtered form of `readFromSequence` for per-thread catch-up, served by
+   * the existing `idx_orch_events_stream_sequence` index so the read cost is
+   * bounded by the stream's own gap, never the global tail
+   * (boot-performance.md S1).
+   */
+  readonly readStreamFromSequence: (
+    aggregateKind: OrchestrationEvent["aggregateKind"],
+    streamId: OrchestrationEvent["aggregateId"],
+    sequenceExclusive: number,
+    limit?: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /**
+   * ru-code: the highest sequence currently persisted (0 when empty) — one
+   * indexed MAX read. The reconnect gap policy measures a stale cursor against
+   * THIS (the replay reads from the store, so the store tail is the truthful
+   * replay bound; the projection cursor can lag it) (boot-performance.md S1).
+   */
+  readonly readLatestSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /**
    * Read all events from the beginning of the stream.
    *
    * @returns Stream containing all stored events.

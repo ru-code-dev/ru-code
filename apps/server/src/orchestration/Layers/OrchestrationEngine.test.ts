@@ -110,6 +110,8 @@ describe("OrchestrationEngine", () => {
           return savedEvent;
         }),
       readFromSequence: () => Stream.empty,
+      readStreamFromSequence: () => Stream.empty, // ru-code: boot-performance.md S1 seam
+      readLatestSequence: () => Effect.succeed(0), // ru-code: boot-performance.md S1 seam
       readAll: () =>
         Stream.fail(
           new PersistenceSqlError({
@@ -825,6 +827,9 @@ describe("OrchestrationEngine", () => {
         events.push(savedEvent);
         return Effect.succeed(savedEvent);
       },
+      // ru-code: boot-performance.md S1 seam
+      readStreamFromSequence: () => Stream.empty,
+      readLatestSequence: () => Effect.succeed(0),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
       },
@@ -1068,6 +1073,9 @@ describe("OrchestrationEngine", () => {
         events.push(savedEvent);
         return Effect.succeed(savedEvent);
       },
+      // ru-code: boot-performance.md S1 seam
+      readStreamFromSequence: () => Stream.empty,
+      readLatestSequence: () => Effect.succeed(0),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
       },

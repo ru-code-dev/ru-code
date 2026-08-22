@@ -123,6 +123,13 @@ describe("resolveInitialServerAuthGateState", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     installTestBrowser("http://localhost/");
+    // ru-code: loopback auto-auth probes /api/auth/local-bootstrap with the
+    // global fetch once the gate lands unauthenticated on a loopback origin.
+    // These cases predate the feature and assert the requires-auth/pairing
+    // flow, so the endpoint is stubbed DARK (404) suite-wide: the gate falls
+    // through exactly as before and no unit test ever touches a real socket.
+    // The granted path is covered by ru-code/tests/auth + the e2e suite.
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(null, { status: 404 })));
   });
 
   afterEach(async () => {
@@ -132,6 +139,7 @@ describe("resolveInitialServerAuthGateState", () => {
     __resetServerAuthBootstrapForTests();
     __setPrimaryHttpRunnerForTests();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals(); // ru-code: drop per-test fetch stubs (window/document are re-stubbed by beforeEach)
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

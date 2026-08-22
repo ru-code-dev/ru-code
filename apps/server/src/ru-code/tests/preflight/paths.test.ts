@@ -1,13 +1,11 @@
-// ru-code: covers the per-platform candidate path tables. CONFIG is always
-// `{home}/<CLI_DIR>` on every platform; CLI_BIN_PATHS are optional fallback
-// probes. We assert the token shapes and that they expand to concrete paths.
+// ru-code: covers the per-platform candidate path table. CLI_BIN_PATHS is the ONE source of qwen's
+// cli.js location; we assert the token shapes and that they expand to concrete paths.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { expand } from "../../preflight/common/expand.ts";
-import { CLI_BIN_PATHS, CONFIG } from "../../preflight/paths.ts";
+import { CLI_BIN_PATHS } from "../../preflight/paths.ts";
 
 const PLATFORMS = ["darwin", "linux", "win32"] as const;
 
@@ -24,19 +22,6 @@ afterEach(() => {
   } else {
     process.env.HOME = savedHome;
   }
-});
-
-describe("CONFIG", () => {
-  it("has exactly one entry per platform, all `{home}/.qwen`", () => {
-    for (const platform of PLATFORMS) {
-      expect(CONFIG[platform], platform).toEqual(["{home}/.qwen"]);
-    }
-  });
-
-  it("expands to <home>/.qwen", () => {
-    const expanded = expand(CONFIG.linux[0]!);
-    expect(expanded).toBe(NodePath.join(NodeOS.homedir(), ".qwen"));
-  });
 });
 
 describe("CLI_BIN_PATHS", () => {

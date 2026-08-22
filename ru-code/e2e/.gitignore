@@ -1,2 +1,8 @@
 .artifacts/
 test-results/
+
+# ru-code
+# Pin-runner debris — regenerated on every pins run (evidence *.json stays tracked).
+.artifacts-pins/test-output/
+.artifacts-pins/results.json
+.artifacts-pins/.last-run.json

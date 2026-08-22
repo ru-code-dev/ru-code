@@ -21,6 +21,7 @@ import {
 
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { tryLocalLoopbackBootstrap } from "../../ru-code/auth/localLoopbackBootstrap"; // ru-code: loopback auto-auth
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
@@ -325,6 +326,18 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   }
 
   if (!bootstrapCredential) {
+    // ru-code: loopback auto-auth — a loopback web server hands same-origin
+    // loopback pages its per-boot bootstrap credential (/api/auth/local-bootstrap),
+    // so cleared cookies / a second browser / an expired session recover without
+    // a pairing token. Any refusal falls through to the /pair flow unchanged.
+    if (
+      await tryLocalLoopbackBootstrap({
+        exchangeBootstrapCredential,
+        waitForAuthenticatedSession: waitForAuthenticatedSessionAfterBootstrap,
+      })
+    ) {
+      return { status: "authenticated" };
+    }
     return {
       status: "requires-auth",
       auth: currentSession.auth,

@@ -222,6 +222,11 @@ import {
 } from "@smart-tools/qwen-cli-extended-chat/contracts";
 
 export { TRANSCRIPT_WS_METHODS };
+// ru-code: the auto-update RPC surface (channels/check/apply/credentials/rollback +
+// subscription) — minted in this package's ru-code zone, spread into WsRpcGroup below.
+import { autoUpdateRpcs, AUTO_UPDATE_METHODS } from "./ru-code/auto-update/index.ts";
+
+export { AUTO_UPDATE_METHODS };
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1120,4 +1125,6 @@ export const WsRpcGroup = RpcGroup.make(
   ...commandCatalogRpcs,
   // ru-code: the 5 MCP manager RPCs (snapshot / setActiveProject / recheck + 2 subscriptions).
   ...mcpManagerRpcs,
+  // ru-code: the 18 auto-update RPCs (channels/check/apply/credentials/rollback + stream).
+  ...autoUpdateRpcs,
 );

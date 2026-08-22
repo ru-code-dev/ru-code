@@ -8,7 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
-import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
+import { CREATE_STARTER_PROJECT, DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -296,9 +296,18 @@ const maybeOpenBrowser = (target: string) =>
     const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
 
     yield* externalLauncher.launchBrowser(target).pipe(
-      Effect.catch(() =>
-        Effect.logInfo("browser auto-open unavailable", {
-          hint: `Open ${target} in your browser.`,
+      Effect.catch((cause) =>
+        // ru-code: this used to be `logInfo`, which is filtered at the default level — so a failed
+        // auto-open produced NO diagnostics anywhere, and "the browser never opened" could not be
+        // explained. It is a real failure of a user-visible step: log it as one, with the session
+        // facts that decide whether a Linux opener can work at all.
+        Effect.logError("browser auto-open failed", {
+          cause,
+          target,
+          hasDisplay: typeof process.env["DISPLAY"] === "string",
+          hasWaylandDisplay: typeof process.env["WAYLAND_DISPLAY"] === "string",
+          hasDbusSession: typeof process.env["DBUS_SESSION_BUS_ADDRESS"] === "string",
+          browserEnv: typeof process.env["BROWSER"] === "string",
         }),
       ),
     );
@@ -389,16 +398,17 @@ export const make = (options?: StartupOptions) =>
         }),
       );
 
-      // ru-code: close work that died with the previous process (dangling qwen
-      // compactions + parked requests). Parked like every other background root:
-      // it never delays startup, and it runs once the server has committed.
-      yield* forkParked(runStartupPhase("qwen.boot-sweep", runQwenBootSweep));
-
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;
       yield* Effect.logDebug("startup phase: preparing welcome payload");
 
-      if (serverConfig.autoBootstrapProjectFromCwd) {
+      // ru-code: gate the runtime starter registration on the branding toggle (default off).
+      // The e2e opts in via RU_CODE_CREATE_STARTER_PROJECT=1 — read here (not in the node-free
+      // branding leaf), where process.env is available. Prod (env unset) keeps the brand default.
+      if (
+        serverConfig.autoBootstrapProjectFromCwd &&
+        (CREATE_STARTER_PROJECT || process.env["RU_CODE_CREATE_STARTER_PROJECT"] === "1")
+      ) {
         yield* forkParked(
           runStartupPhase(
             "welcome.autobootstrap",
@@ -445,6 +455,15 @@ export const make = (options?: StartupOptions) =>
             Effect.withSpan("server.startup.heartbeat.record"),
             Effect.ignoreCause({ log: true }),
           );
+          // ru-code: close work that died with the previous process (dangling qwen
+          // compactions + parked requests, mid-stream messages, stale live session
+          // rows). AWAITED here — the lean reads are sub-ms per thread — so the
+          // finalized state precedes the auto-opened browser: no phantom «Working»
+          // window, and the sweep's writes never contend with the first snapshot
+          // serve. `runQwenBootSweep` swallows-and-logs its own failures; a sweep
+          // problem never blocks startup.
+          yield* Effect.logDebug("startup phase: qwen boot sweep");
+          yield* runStartupPhase("qwen.boot-sweep", runQwenBootSweep);
           if (serverConfig.startupPresentation === "headless") {
             const accessInfo = yield* issueHeadlessServeAccessInfo();
             yield* runStartupPhase(

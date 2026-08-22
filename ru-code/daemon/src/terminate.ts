@@ -3,6 +3,15 @@
 // app's own teardown run (it kills its ACP children itself via the adapter
 // finalizer); if it doesn't exit within the drain budget we escalate to SIGKILL.
 // `force` skips straight to SIGKILL.
+//
+// PLATFORM TRUTH, stated because the drain language below reads as universal and is not:
+// `process.kill(pid, "SIGTERM")` on Windows is mapped by Node to an unconditional
+// `TerminateProcess` — there are no POSIX signals to deliver. So on Windows the server gets NO
+// graceful window and its own teardown never runs; STOP_DRAIN_TIMEOUT_MS observes a process that
+// is already gone. Nothing leaks either way — the ACP children are reaped by their journaled pids
+// (KILL_BY_JOURNAL_PIDS, a pure `process.kill` per pid, which is exactly why that backend is the
+// default) — but a clean drain is a POSIX-only property today. A real graceful stop on Windows
+// needs a different mechanism (a control event or an IPC "please exit"), not a different constant.
 
 import * as Effect from "effect/Effect";
 

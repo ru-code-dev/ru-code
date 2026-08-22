@@ -15,8 +15,12 @@ import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
-import { resolveCliProfile } from "@ru-code/branding";
-import { ACP_SERVER_NO_SSL, MCP_ENGINE_USE_OVERLAY } from "@ru-code/qwen/constants";
+import { CLI_ENV_VAR_PREFIX, resolveCliProfile } from "@ru-code/branding";
+import {
+  ACP_SERVER_NO_SSL,
+  MCP_ENGINE_USE_OVERLAY,
+  NO_MCP_SERVER_SENTINEL,
+} from "@ru-code/qwen/constants";
 import { buildCliSpawn } from "@ru-code/qwen/spawn";
 import { resolveDefaultAuthMethod } from "./profileResolver.ts";
 import {
@@ -67,6 +71,23 @@ function parseLaunchArgs(launchArgs: string | undefined): ReadonlyArray<string> 
   return trimmed.split(/\s+/);
 }
 
+/**
+ * ru-code: the `--allowed-mcp-server-names` argument pair for an allowlist.
+ *
+ * Shared by every qwen spawn that should honour the overlay's allowlist (ACP sessions, warm
+ * slots, one-shot text generation). An empty/absent list yields the sentinel rather than no
+ * flag, because the CLI treats a missing flag as "no filter" and connects everything.
+ */
+export function buildAllowedMcpServerArgs(
+  allowedMcpServers: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  const names = (allowedMcpServers ?? []).filter((name) => name.trim().length > 0);
+  return [
+    "--allowed-mcp-server-names",
+    names.length > 0 ? names.join(",") : NO_MCP_SERVER_SENTINEL,
+  ];
+}
+
 export function buildQwenAcpSpawnInput(
   cliJs: string,
   // ru-code: the spawn only needs launchArgs/homePath — narrower than the runtime
@@ -80,11 +101,7 @@ export function buildQwenAcpSpawnInput(
   // ru-code: qwen re-spawns itself as a child unless this is set (relaunch
   // wrapper, qwen-code relaunch.ts). One process ⇒ half the boot cost/memory
   // and our SIGKILL hits the real agent instead of the wrapper.
-  env.QWEN_CODE_NO_RELAUNCH = "true";
-  const homePath = qwenSettings?.homePath?.trim();
-  if (homePath) {
-    env.CLI_HOME = homePath;
-  }
+  env[`${CLI_ENV_VAR_PREFIX}_NO_RELAUNCH`] = "true";
   if (ACP_SERVER_NO_SSL) {
     env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
@@ -92,14 +109,16 @@ export function buildQwenAcpSpawnInput(
   // Gated on MCP_ENGINE_USE_OVERLAY so the documented kill-switch actually disables
   // overlay injection (and the server allowlist below) when off.
   if (MCP_ENGINE_USE_OVERLAY && settingsOverlay?.settingsOverlayPath) {
-    env.QWEN_CODE_SYSTEM_SETTINGS_PATH = settingsOverlay.settingsOverlayPath;
+    env[`${CLI_ENV_VAR_PREFIX}_SYSTEM_SETTINGS_PATH`] = settingsOverlay.settingsOverlayPath;
   }
-  // ru-code: restrict qwen to exactly the overlay's MCP servers (omit ⇒ no filter).
-  const allowedMcpServers = MCP_ENGINE_USE_OVERLAY
-    ? (settingsOverlay?.allowedMcpServers ?? [])
+  // ru-code: restrict qwen to exactly the overlay's MCP servers. The flag is ALWAYS passed while
+  // the engine is on — an empty allowlist means "no MCP", which is expressed by the sentinel and
+  // NOT by omitting the flag (omitting it disables the filter, so the CLI connects every server
+  // the user configured; see NO_MCP_SERVER_SENTINEL). Engine off ⇒ no flag at all, so the
+  // kill-switch leaves qwen's own MCP configuration untouched.
+  const allowMcpArgs = MCP_ENGINE_USE_OVERLAY
+    ? buildAllowedMcpServerArgs(settingsOverlay?.allowedMcpServers)
     : [];
-  const allowMcpArgs =
-    allowedMcpServers.length > 0 ? ["--allowed-mcp-server-names", allowedMcpServers.join(",")] : [];
   // ru-code: `node <cliJs> [launchArgs] [--allowed-mcp-server-names …] --acp`
   // directly — no shell, no PATH lookup.
   const spawn = buildCliSpawn(cliJs, [

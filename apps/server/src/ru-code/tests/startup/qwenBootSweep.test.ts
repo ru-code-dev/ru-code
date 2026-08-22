@@ -26,11 +26,13 @@ import { makeOrchestrationIntegrationHarness } from "../../../../integration/Orc
 import {
   findDanglingCompactionTaskIds,
   findDanglingParkedRequests,
+  SWEEP_ACTIVITY_KINDS,
 } from "../../qwen/compaction/compactionHistory.ts";
 import {
   CANCELLED_APPROVAL_TEXT,
   CANCELLED_USER_INPUT_TEXT,
   INTERRUPTED_COMPACTION_TEXT,
+  makeSweepThreadStateReader,
   planQwenBootSweepRows,
   planQwenBootSweepSessionStop,
   planQwenBootSweepStreamingFinalizes,
@@ -269,6 +271,74 @@ it.live(
             });
           }
 
+          // The prod reader over the harness's own SqlClient + shell read —
+          // the sweep below runs through the exact production read path.
+          const readSweepThreadState = makeSweepThreadStateReader(
+            harness.sql,
+            harness.snapshotQuery.getThreadShellById,
+          );
+
+          // S5 equivalence law (the 0-regression guarantee): on both seeded
+          // threads the lean reader must yield exactly the state the previous
+          // full-detail read derived — same session row, same mid-stream
+          // assistant messages, same kind-filtered activities — and feed the
+          // pure plans to identical outputs.
+          for (const threadId of [THREAD_QWEN, THREAD_OTHER]) {
+            const detail = yield* harness.waitForThread(
+              threadId,
+              (thread) =>
+                thread.messages.some((message) => message.streaming) &&
+                findDanglingParkedRequests(thread.activities).length > 0 &&
+                thread.session?.status === "running",
+            );
+            const lean = yield* readSweepThreadState(threadId);
+            assert.isNotNull(lean, `lean state missing for ${threadId}`);
+            assert.deepStrictEqual(lean!.session, detail.session);
+            assert.deepStrictEqual(
+              lean!.streamingAssistantMessages,
+              detail.messages
+                .filter((message) => message.role === "assistant" && message.streaming)
+                .map((message) => ({
+                  id: message.id,
+                  role: message.role,
+                  streaming: message.streaming,
+                  turnId: message.turnId,
+                  updatedAt: message.updatedAt,
+                })),
+            );
+            assert.deepStrictEqual(
+              lean!.activities,
+              detail.activities
+                .filter((activity) => SWEEP_ACTIVITY_KINDS.includes(activity.kind))
+                .map((activity) => {
+                  const payload = activity.payload as Record<string, unknown>;
+                  return {
+                    kind: activity.kind,
+                    payload: {
+                      ...(typeof payload["taskId"] === "string"
+                        ? { taskId: payload["taskId"] }
+                        : {}),
+                      ...(typeof payload["requestId"] === "string"
+                        ? { requestId: payload["requestId"] }
+                        : {}),
+                    },
+                  };
+                }),
+            );
+            assert.deepStrictEqual(
+              planQwenBootSweepStreamingFinalizes(lean!.streamingAssistantMessages),
+              planQwenBootSweepStreamingFinalizes(detail.messages),
+            );
+            assert.deepStrictEqual(
+              planQwenBootSweepRows(threadId, lean!.activities),
+              planQwenBootSweepRows(threadId, detail.activities),
+            );
+            assert.deepStrictEqual(
+              planQwenBootSweepSessionStop(lean!.session, createdAt),
+              planQwenBootSweepSessionStop(detail.session, createdAt),
+            );
+          }
+
           let uuidCounter = 0;
           yield* runQwenBootSweepWith({
             listBindings: () =>
@@ -282,7 +352,7 @@ it.live(
                   lastSeenAt: createdAt,
                 },
               ]),
-            getThreadDetailById: harness.snapshotQuery.getThreadDetailById,
+            readSweepThreadState,
             dispatch: harness.engine.dispatch,
             randomUuid: Effect.sync(() => `sweep-uuid-${uuidCounter++}`),
           });

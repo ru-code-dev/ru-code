@@ -9,7 +9,7 @@ import * as os from "node:os";
 
 // Env vars that drive resolution. The Windows-specific profile vars are only
 // shown on Windows — elsewhere they're always unset and just add noise.
-const POSIX_ENV_KEYS = ["HOME", "NODE_PATH", "TRY_TO_FIND_CLI"] as const;
+const POSIX_ENV_KEYS = ["HOME", "NODE_PATH"] as const;
 const WINDOWS_ENV_KEYS = [
   "MSYSTEM",
   "USERPROFILE",
@@ -19,7 +19,6 @@ const WINDOWS_ENV_KEYS = [
   "APPDATA",
   "LOCALAPPDATA",
   "NODE_PATH",
-  "TRY_TO_FIND_CLI",
 ] as const;
 
 const envKeys = (): ReadonlyArray<string> =>

@@ -42,7 +42,8 @@ describe("qwen constants", () => {
 
   it("timeout/grace budgets hold their tuned values", () => {
     expect(ACP_SESSION_START_TIMEOUT_MS).toBe(60_000);
-    expect(CLI_VERSION_PROBE_TIMEOUT_MS).toBe(3_000);
+    // Cached per CLI path per process, so a generous budget costs at most one slow wait.
+    expect(CLI_VERSION_PROBE_TIMEOUT_MS).toBe(60_000);
     expect(CLI_TEXT_GENERATION_TIMEOUT_MS).toBe(180_000);
     expect(EXIT_DRAIN_GRACE_MS).toBe(250);
   });

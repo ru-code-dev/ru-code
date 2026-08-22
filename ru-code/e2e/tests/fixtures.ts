@@ -21,6 +21,54 @@ export function writeFakeControl(
   NodeFS.writeFileSync(state.controlFile, JSON.stringify(control));
 }
 
+// ── ru-code: auto-update mock-update-source control (per-spec behaviour switch) ──
+
+export type MockUpdateMode = "release" | "notfound" | "unauthorized" | "invalid" | "gonetarball";
+
+/**
+ * Switch the mock WEB update source's behaviour for the next request. The mock
+ * re-reads its control file on every request, so a spec resets it (and, for the
+ * counter cases, reads a fresh request baseline) before each check.
+ */
+export function setMockUpdateMode(state: HarnessState, mode: MockUpdateMode): void {
+  // sha256 / sizeBytes / minNode were baked into the control file at boot; keep them
+  // and change only the `mode`.
+  const current = readMockControl(state);
+  NodeFS.writeFileSync(state.mockControlFile, JSON.stringify({ ...current, mode }));
+}
+
+interface MockControl {
+  readonly mode: MockUpdateMode;
+  readonly version: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  readonly minNode: string;
+}
+
+function readMockControl(state: HarnessState): MockControl {
+  return JSON.parse(NodeFS.readFileSync(state.mockControlFile, "utf8")) as MockControl;
+}
+
+/** The mock server's monotonic request counter (only web requests ever reach it). */
+export function readMockRequestCount(state: HarnessState): number {
+  try {
+    const raw = JSON.parse(NodeFS.readFileSync(state.mockRequestsFile, "utf8")) as {
+      count?: number;
+    };
+    return typeof raw.count === "number" ? raw.count : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Fetch the SERVER's /healthz (baked version + pid) — the #39 real-wire-fact source. */
+export async function fetchServerHealthz(
+  state: HarnessState,
+): Promise<{ ok: boolean; version: string; pid: number }> {
+  const response = await fetch(`${state.serverUrl}/healthz`);
+  return (await response.json()) as { ok: boolean; version: string; pid: number };
+}
+
 export interface ScrollSample {
   readonly t: number;
   readonly top: number;

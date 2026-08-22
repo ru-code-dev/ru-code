@@ -12,6 +12,12 @@ import { normalizeDispatchCommand } from "./Normalizer.ts";
 // ru-code: snapshots leave the server here (the cold-cache door beside the WS RPC one) —
 // resolve localization wire tokens before they egress.
 import { localizeWireValue } from "../ru-code/localization/wireEgress.ts";
+// ru-code: boot-performance.md Fix D — slow snapshot serves leave a debug trace.
+import {
+  summarizeShellSnapshotForServeLog,
+  summarizeThreadForServeLog,
+  withSlowServeLog,
+} from "../ru-code/reconnect/slowServeLog.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -54,6 +60,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+            // ru-code: boot-performance.md Fix D — trace serves over 1 s.
+            withSlowServeLog(args.endpoint.name, summarizeShellSnapshotForServeLog),
             Effect.map(localizeWireValue), // ru-code: egress localization
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_snapshot_failed", cause),
@@ -79,6 +87,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                   },
             )
             .pipe(
+              // ru-code: boot-performance.md Fix D — trace serves over 1 s.
+              withSlowServeLog(args.endpoint.name, (option) =>
+                Option.isSome(option)
+                  ? summarizeThreadForServeLog(option.value.thread)
+                  : { threadId: args.params.threadId, found: false },
+              ),
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
               ),

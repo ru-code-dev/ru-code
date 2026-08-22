@@ -68,6 +68,15 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
   sequenceExclusive: NonNegativeInt,
   limit: Schema.Number,
 });
+
+// ru-code: request shape for the per-stream catch-up read (boot-performance.md S1) —
+// same id schemas as AppendEventRequestSchema above.
+const ReadStreamFromSequenceRequestSchema = Schema.Struct({
+  aggregateKind: OrchestrationAggregateKind,
+  streamId: Schema.Union([ProjectId, ThreadId, McpCatalogAggregateId]),
+  sequenceExclusive: NonNegativeInt,
+  limit: Schema.Number,
+});
 const DEFAULT_READ_FROM_SEQUENCE_LIMIT = 1_000;
 const READ_PAGE_SIZE = 500;
 
@@ -212,6 +221,58 @@ const makeEventStore = Effect.gen(function* () {
       ),
     );
 
+  // ru-code: the SQL-filtered sibling of readEventRowsFromSequence — one stream's
+  // rows only, served by idx_orch_events_stream_sequence (boot-performance.md S1).
+  const readStreamEventRowsFromSequence = SqlSchema.findAll({
+    Request: ReadStreamFromSequenceRequestSchema,
+    Result: OrchestrationEventPersistedRowSchema,
+    execute: (request) =>
+      sql`
+        SELECT
+          sequence,
+          event_id AS "eventId",
+          event_type AS "type",
+          aggregate_kind AS "aggregateKind",
+          stream_id AS "aggregateId",
+          occurred_at AS "occurredAt",
+          command_id AS "commandId",
+          causation_event_id AS "causationEventId",
+          correlation_id AS "correlationId",
+          payload_json AS "payload",
+          metadata_json AS "metadata"
+        FROM orchestration_events
+        WHERE aggregate_kind = ${request.aggregateKind}
+          AND stream_id = ${request.streamId}
+          AND sequence > ${request.sequenceExclusive}
+        ORDER BY sequence ASC
+        LIMIT ${request.limit}
+      `,
+  });
+
+  // ru-code: one indexed MAX over the autoincrement pk — the store-tail cursor the
+  // reconnect gap policy compares stale client cursors against (boot-performance.md S1).
+  const readLatestSequenceRow = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: Schema.Struct({ latestSequence: Schema.Number }),
+    execute: () =>
+      sql`
+        SELECT COALESCE(MAX(sequence), 0) AS "latestSequence"
+        FROM orchestration_events
+      `,
+  });
+
+  const readLatestSequence: OrchestrationEventStoreShape["readLatestSequence"] = () =>
+    readLatestSequenceRow(void 0).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.readLatestSequence:query",
+          "OrchestrationEventStore.readLatestSequence:decodeRow",
+        ),
+      ),
+      // COALESCE(MAX(...), 0) always yields exactly one row.
+      Effect.map((row) => row.latestSequence),
+    );
+
   const readFromSequence: OrchestrationEventStoreShape["readFromSequence"] = (
     sequenceExclusive,
     limit = DEFAULT_READ_FROM_SEQUENCE_LIMIT,
@@ -264,9 +325,71 @@ const makeEventStore = Effect.gen(function* () {
     return readPage(sequenceExclusive, normalizedLimit);
   };
 
+  // ru-code: per-stream catch-up read — the same page loop as readFromSequence
+  // over the stream-filtered query (boot-performance.md S1).
+  const readStreamFromSequence: OrchestrationEventStoreShape["readStreamFromSequence"] = (
+    aggregateKind,
+    streamId,
+    sequenceExclusive,
+    limit = DEFAULT_READ_FROM_SEQUENCE_LIMIT,
+  ) => {
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedLimit === 0) {
+      return Stream.empty;
+    }
+    const readPage = (
+      cursor: number,
+      remaining: number,
+    ): Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError> =>
+      Stream.fromEffect(
+        readStreamEventRowsFromSequence({
+          aggregateKind,
+          streamId,
+          sequenceExclusive: cursor,
+          limit: Math.min(remaining, READ_PAGE_SIZE),
+        }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "OrchestrationEventStore.readStreamFromSequence:query",
+              "OrchestrationEventStore.readStreamFromSequence:decodeRows",
+            ),
+          ),
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, (row) =>
+              decodeEvent(row).pipe(
+                Effect.mapError(
+                  toPersistenceDecodeError(
+                    "OrchestrationEventStore.readStreamFromSequence:rowToEvent",
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ).pipe(
+        Stream.flatMap((events) => {
+          if (events.length === 0) {
+            return Stream.empty;
+          }
+          const nextRemaining = remaining - events.length;
+          if (nextRemaining <= 0) {
+            return Stream.fromIterable(events);
+          }
+          return Stream.concat(
+            Stream.fromIterable(events),
+            readPage(events[events.length - 1]!.sequence, nextRemaining),
+          );
+        }),
+      );
+
+    return readPage(sequenceExclusive, normalizedLimit);
+  };
+
   return {
     append,
     readFromSequence,
+    readStreamFromSequence, // ru-code: boot-performance.md S1
+    readLatestSequence, // ru-code: boot-performance.md S1
     readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
   } satisfies OrchestrationEventStoreShape;
 });

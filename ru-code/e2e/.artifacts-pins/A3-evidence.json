@@ -1,0 +1,11 @@
+{
+  "control": {
+    "ms": 5,
+    "kind": "upgrade"
+  },
+  "hostile": {
+    "ms": 3,
+    "kind": "response",
+    "status": 401
+  }
+}

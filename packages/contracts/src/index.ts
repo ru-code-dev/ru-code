@@ -34,6 +34,8 @@ export * from "./rpc.ts";
 
 // ru-code
 export * from "./ru-code/syntheticAssistantMessage.ts";
+// ru-code: auto-update wire model (methods/rpcs flow through ./rpc.ts).
+export * from "./ru-code/auto-update/model.ts";
 // ru-code: the extended-chat transcript wire model (minted in its package; named
 // re-exports so the package's ThreadId/auth mirrors never shadow ours).
 export {

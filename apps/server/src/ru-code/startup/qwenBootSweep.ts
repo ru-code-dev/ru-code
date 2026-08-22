@@ -32,24 +32,33 @@ import { QWEN_KIND } from "@ru-code/branding";
 import {
   CommandId,
   EventId,
-  type MessageId,
-  type OrchestrationMessage,
+  MessageId,
+  ThreadId,
+  TurnId,
   type OrchestrationSession,
   type OrchestrationThreadActivity,
-  type ThreadId,
-  type TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  toPersistenceDecodeError,
+  toPersistenceSqlError,
+  type ProjectionRepositoryError,
+} from "../../persistence/Errors.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import {
   findDanglingCompactionTaskIds,
   findDanglingParkedRequests,
+  SWEEP_ACTIVITY_KINDS,
+  type SweepActivityInput,
 } from "../qwen/compaction/compactionHistory.ts";
 
 export interface QwenBootSweepRowSpec {
@@ -73,7 +82,7 @@ export const CANCELLED_USER_INPUT_TEXT = "Question cancelled by a server restart
  */
 export function planQwenBootSweepRows(
   threadId: ThreadId,
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activities: ReadonlyArray<SweepActivityInput>,
 ): ReadonlyArray<QwenBootSweepRowSpec> {
   const rows: QwenBootSweepRowSpec[] = [];
   for (const taskId of findDanglingCompactionTaskIds(activities)) {
@@ -110,13 +119,27 @@ export interface QwenBootSweepStreamingFinalizeSpec {
 }
 
 /**
+ * The columns the streaming-finalize plan reads — full `OrchestrationMessage`
+ * rows remain assignable; the lean boot-sweep SQL read produces exactly this.
+ */
+export interface SweepStreamingMessageInput {
+  readonly id: MessageId;
+  readonly role: string;
+  readonly streaming: boolean;
+  readonly turnId: TurnId | null;
+  readonly updatedAt: string;
+}
+
+/**
  * The mid-stream messages a dead-process thread needs finalized, pure. Each
  * gets the adapter's own end-of-stream write (`thread.message.assistant.complete`
  * — accumulated text kept, `streaming` flipped off, turn binding preserved);
  * a message left `streaming: true` blocks the timeline's turn fold forever.
+ * The lean read pre-filters role/streaming in SQL; the in-plan filter stays as
+ * the semantic definition (and keeps full-row callers correct).
  */
 export function planQwenBootSweepStreamingFinalizes(
-  messages: ReadonlyArray<OrchestrationMessage>,
+  messages: ReadonlyArray<SweepStreamingMessageInput>,
 ): ReadonlyArray<QwenBootSweepStreamingFinalizeSpec> {
   return messages
     .filter((message) => message.role === "assistant" && message.streaming)
@@ -157,13 +180,141 @@ export function planQwenBootSweepSessionStop(
   };
 }
 
+/**
+ * Everything the sweep needs to know about one thread — a fraction of the full
+ * thread detail (the previous read): the shell's session row, the mid-stream
+ * assistant messages, and the sweep-relevant activity kinds with only the
+ * taskId/requestId their derivations read.
+ */
+export interface QwenSweepThreadState {
+  readonly session: OrchestrationSession | null;
+  readonly streamingAssistantMessages: ReadonlyArray<SweepStreamingMessageInput>;
+  readonly activities: ReadonlyArray<SweepActivityInput>;
+}
+
 /** The sweep's dependencies, explicit so tests can drive the exact prod path. */
 export interface QwenBootSweepDeps {
   readonly listBindings: ProviderSessionDirectory["Service"]["listBindings"];
-  readonly getThreadDetailById: ProjectionSnapshotQuery["Service"]["getThreadDetailById"];
+  readonly readSweepThreadState: (
+    threadId: ThreadId,
+  ) => Effect.Effect<QwenSweepThreadState | null, ProjectionRepositoryError>;
   readonly dispatch: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
   readonly randomUuid: Effect.Effect<string>;
 }
+
+const SweepThreadLookupInput = Schema.Struct({ threadId: ThreadId });
+const SweepStreamingMessageRowSchema = Schema.Struct({
+  messageId: MessageId,
+  turnId: Schema.NullOr(TurnId),
+  role: Schema.String,
+  isStreaming: Schema.Number,
+  updatedAt: Schema.String,
+});
+const SweepActivityRowSchema = Schema.Struct({
+  kind: Schema.String,
+  taskId: Schema.NullOr(Schema.String),
+  requestId: Schema.NullOr(Schema.String),
+});
+
+const toSweepReadError =
+  (sqlOperation: string, decodeOperation: string) =>
+  (cause: unknown): ProjectionRepositoryError =>
+    Schema.isSchemaError(cause)
+      ? toPersistenceDecodeError(decodeOperation)(cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+
+/**
+ * The lean per-thread reader: the shell read (3 small keyed queries — carries
+ * the session row and doubles as the missing/deleted-thread check) plus two
+ * column-lean SQL reads. Both reads reproduce the full projection reads'
+ * ORDER BY exactly (messages: ProjectionSnapshotQuery's by-thread message
+ * read; activities: its by-thread activity read — the dangling logic is an
+ * ordered open/close replay, so order is semantics, not cosmetics).
+ */
+export const makeSweepThreadStateReader = (
+  sql: SqlClient.SqlClient,
+  getThreadShellById: ProjectionSnapshotQuery["Service"]["getThreadShellById"],
+): QwenBootSweepDeps["readSweepThreadState"] => {
+  const readStreamingAssistantMessageRows = SqlSchema.findAll({
+    Request: SweepThreadLookupInput,
+    Result: SweepStreamingMessageRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          turn_id AS "turnId",
+          role,
+          is_streaming AS "isStreaming",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND is_streaming = 1
+          AND role = 'assistant'
+        ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+  const readSweepActivityRows = SqlSchema.findAll({
+    Request: SweepThreadLookupInput,
+    Result: SweepActivityRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          kind,
+          json_extract(payload_json, '$.taskId') AS "taskId",
+          json_extract(payload_json, '$.requestId') AS "requestId"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND ${sql.in("kind", SWEEP_ACTIVITY_KINDS)}
+        ORDER BY
+          sequence ASC,
+          created_at ASC,
+          activity_id ASC
+      `,
+  });
+
+  return (threadId) =>
+    Effect.gen(function* () {
+      const shell = yield* getThreadShellById(threadId);
+      if (Option.isNone(shell)) {
+        return null;
+      }
+      const [messageRows, activityRows] = yield* Effect.all([
+        readStreamingAssistantMessageRows({ threadId }).pipe(
+          Effect.mapError(
+            toSweepReadError(
+              "qwenBootSweep.readStreamingMessages:query",
+              "qwenBootSweep.readStreamingMessages:decodeRow",
+            ),
+          ),
+        ),
+        readSweepActivityRows({ threadId }).pipe(
+          Effect.mapError(
+            toSweepReadError(
+              "qwenBootSweep.readSweepActivities:query",
+              "qwenBootSweep.readSweepActivities:decodeRow",
+            ),
+          ),
+        ),
+      ]);
+      return {
+        session: shell.value.session,
+        streamingAssistantMessages: messageRows.map((row) => ({
+          id: row.messageId,
+          role: row.role,
+          streaming: row.isStreaming !== 0,
+          turnId: row.turnId,
+          updatedAt: row.updatedAt,
+        })),
+        activities: activityRows.map((row) => ({
+          kind: row.kind,
+          payload: {
+            ...(row.taskId !== null ? { taskId: row.taskId } : {}),
+            ...(row.requestId !== null ? { requestId: row.requestId } : {}),
+          },
+        })),
+      } satisfies QwenSweepThreadState;
+    });
+};
 
 /**
  * Run the sweep across every qwen-kind thread binding. Failures are logged
@@ -179,10 +330,8 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
 
     let closedCount = 0;
     for (const threadId of qwenThreadIds) {
-      const detail = yield* deps
-        .getThreadDetailById(threadId)
-        .pipe(Effect.map(Option.getOrUndefined));
-      if (!detail) continue;
+      const state = yield* deps.readSweepThreadState(threadId);
+      if (!state) continue;
 
       // Finalizes go FIRST and are BACK-DATED to each message's last delta:
       // `thread.message-sent` also bumps the thread row's updatedAt from the
@@ -190,7 +339,9 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
       // (stamped now) re-bump it — so the fold duration ends at the last real
       // byte while thread ordering still ends at the sweep. Replay order is
       // sequence-based; occurredAt is display data.
-      for (const finalize of planQwenBootSweepStreamingFinalizes(detail.messages)) {
+      for (const finalize of planQwenBootSweepStreamingFinalizes(
+        state.streamingAssistantMessages,
+      )) {
         const commandUuid = yield* deps.randomUuid;
         yield* deps.dispatch({
           type: "thread.message.assistant.complete",
@@ -203,7 +354,7 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
         closedCount += 1;
       }
 
-      for (const row of planQwenBootSweepRows(threadId, detail.activities)) {
+      for (const row of planQwenBootSweepRows(threadId, state.activities)) {
         const commandUuid = yield* deps.randomUuid;
         const activityUuid = yield* deps.randomUuid;
         const createdAt = DateTime.formatIso(yield* DateTime.now);
@@ -226,7 +377,7 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
       }
 
       const sessionStopCreatedAt = DateTime.formatIso(yield* DateTime.now);
-      const sessionStop = planQwenBootSweepSessionStop(detail.session, sessionStopCreatedAt);
+      const sessionStop = planQwenBootSweepSessionStop(state.session, sessionStopCreatedAt);
       if (sessionStop !== null) {
         const commandUuid = yield* deps.randomUuid;
         yield* deps.dispatch({
@@ -261,9 +412,10 @@ export const runQwenBootSweep = Effect.gen(function* () {
   const projectionQuery = yield* ProjectionSnapshotQuery;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const crypto = yield* Crypto.Crypto;
+  const sql = yield* SqlClient.SqlClient;
   yield* runQwenBootSweepWith({
     listBindings: () => directory.listBindings(),
-    getThreadDetailById: projectionQuery.getThreadDetailById,
+    readSweepThreadState: makeSweepThreadStateReader(sql, projectionQuery.getThreadShellById),
     dispatch: engine.dispatch,
     randomUuid: crypto.randomUUIDv4.pipe(Effect.orDie),
   });

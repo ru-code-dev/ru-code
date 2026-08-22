@@ -2553,6 +2553,30 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
               prompt: promptParts,
             })
             .pipe(
+              // ru-code: PERMANENT harness diagnostics — the e2e loop's
+              // heartbeat (grep `DISPATCH|RESOLVED|FAILED` in app-boot.log is
+              // the abort-and-analyze rule's first read). Debug level, and
+              // per-TURN frequency — negligible in any Debug-level run.
+              (self) =>
+                Effect.flatMap(
+                  Effect.logDebug("[cli-adapter] prompt DISPATCH", {
+                    threadId: input.threadId,
+                    parts: promptParts.length,
+                  }),
+                  () => self,
+                ),
+              Effect.tap((response) =>
+                Effect.logDebug("[cli-adapter] prompt RESOLVED", {
+                  threadId: input.threadId,
+                  stopReason: response.stopReason,
+                }),
+              ),
+              Effect.tapError((error) =>
+                Effect.logDebug("[cli-adapter] prompt FAILED", {
+                  threadId: input.threadId,
+                  error: String(error),
+                }),
+              ),
               // ru-code: classify CLI RPC failures through the
               // recognizer registry. **B-surface** decisions (recoverable —
               // rate limit, empty stream, generic -32603 with usable details)

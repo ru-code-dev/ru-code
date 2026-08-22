@@ -63,6 +63,7 @@ const BASE_THREAD: OrchestrationThread = {
   },
   runtimeMode: "full-access",
   interactionMode: "default",
+  chatViewMode: null, // ru-code: thread-state chat view (extended chat)
   branch: "main",
   worktreePath: null,
   latestTurn: null,

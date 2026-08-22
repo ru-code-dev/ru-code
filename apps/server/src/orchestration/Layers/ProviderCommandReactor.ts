@@ -781,7 +781,8 @@ const make = Effect.gen(function* () {
         const resumeCursor = shouldRestartForModelChange
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
-        yield* Effect.logInfo("provider command reactor restarting provider session", {
+        // ru-code: debug — reactor restart diagnostics are not user-facing output.
+        yield* Effect.logDebug("provider command reactor restarting provider session", {
           threadId,
           existingSessionThreadId,
           currentProvider: activeSession?.provider,

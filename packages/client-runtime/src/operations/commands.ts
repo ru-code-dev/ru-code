@@ -45,6 +45,7 @@ export type ReorderPinnedThreadInput = CommandInput<"thread.pin.reorder">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
+export type SetThreadChatViewModeInput = CommandInput<"thread.chat-view-mode.set">; // ru-code
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type CompactThreadContextInput = CommandInput<"thread.context.compact">; // ru-code
@@ -259,6 +260,18 @@ export const setThreadInteractionMode: (input: SetThreadInteractionModeInput) =>
     return yield* dispatch({
       ...input,
       type: "thread.interaction-mode.set",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+// ru-code: pin the user's explicit chat-view choice to the thread (plan-mode parity).
+export const setThreadChatViewMode: (input: SetThreadChatViewModeInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.setThreadChatViewMode")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.chat-view-mode.set",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

@@ -96,6 +96,7 @@ function makeReadModel(
       modelSelection: defaultModelSelection,
       interactionMode: "default" as const,
       runtimeMode: "full-access" as const,
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       branch: null,
       worktreePath: null,
       createdAt: now,

@@ -34,6 +34,7 @@
     "@smart-tools/qwen-cli-agents-manager": "catalog:",
     "@smart-tools/qwen-cli-catalog-core": "catalog:",
     "@smart-tools/qwen-cli-commands-manager": "catalog:",
+    "@smart-tools/qwen-cli-extended-chat": "catalog:",
     "@smart-tools/qwen-cli-mcp-manager": "catalog:",
     "@smart-tools/qwen-cli-skill-manager": "catalog:",
     "@smart-tools/qwen-cli-ui-kit": "catalog:",

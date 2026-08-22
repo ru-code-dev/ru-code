@@ -53,9 +53,10 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
 import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
-import { UnifiedSettings } from "@t3tools/contracts/settings";
+import { ChatViewMode, UnifiedSettings } from "@t3tools/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 const isRuntimeMode = Schema.is(RuntimeMode);
+const isChatViewMode = Schema.is(ChatViewMode); // ru-code
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 
@@ -150,6 +151,13 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  // ru-code[HEAVY]: per-thread chat view override (compact / detailed CLI transcript);
+  // absent = follow the server-settings default. optionalKey keeps existing
+  // persisted drafts decoding unchanged. HEAVY because this ONE field is threaded
+  // through the whole store surface (schema, empty-draft, setChatViewMode action,
+  // shouldRemoveDraft, rehydrate normalizer, partialize, hydrate) — at resync,
+  // re-thread all `chatViewMode` sites in this file together.
+  chatViewMode: Schema.optionalKey(ChatViewMode),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -278,6 +286,8 @@ export interface ComposerThreadDraftState {
   activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  /** ru-code: per-thread chat view override; null = follow the settings default. */
+  chatViewMode: ChatViewMode | null;
 }
 
 /**
@@ -343,7 +353,7 @@ interface ProjectDraftSession extends DraftSessionState {
  * Raw `ThreadId` is intentionally excluded so callers cannot drop environment
  * identity for real threads.
  */
-type ComposerThreadTarget = ScopedThreadRef | DraftId;
+export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
 /**
  * Persisted store for composer content plus draft-session metadata.
@@ -470,6 +480,11 @@ interface ComposerDraftStoreState {
   setInteractionMode: (
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
+  ) => void;
+  /** ru-code: per-thread chat view override (null clears it → settings default). */
+  setChatViewMode: (
+    threadRef: ComposerThreadTarget,
+    chatViewMode: ChatViewMode | null | undefined,
   ) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => void;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerImageAttachment[]) => void;
@@ -637,6 +652,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
+  chatViewMode: null,
 });
 
 /**
@@ -659,6 +675,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+    chatViewMode: null,
   };
 }
 
@@ -731,7 +748,8 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    draft.chatViewMode === null
   );
 }
 
@@ -1718,6 +1736,12 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode
         : null;
+    // ru-code: carry the per-thread chat-view override through rehydration —
+    // omitting it here silently reverted «Компактный/Подробный» to the
+    // settings default on every reload (interactionMode survived, this didn't).
+    const chatViewMode = isChatViewMode(draftCandidate.chatViewMode)
+      ? draftCandidate.chatViewMode
+      : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -1778,7 +1802,10 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      // ru-code: a draft whose only content is the chat-view override is a
+      // real draft — dropping it here erased the override on reload.
+      !chatViewMode
     ) {
       continue;
     }
@@ -1808,6 +1835,7 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(chatViewMode ? { chatViewMode } : {}),
     };
   }
 
@@ -1910,7 +1938,8 @@ function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.chatViewMode === null
     ) {
       continue;
     }
@@ -1969,6 +1998,7 @@ function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.chatViewMode ? { chatViewMode: draft.chatViewMode } : {}),
     };
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
@@ -2215,6 +2245,7 @@ function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    chatViewMode: persistedDraft.chatViewMode ?? null,
   };
 }
 
@@ -2945,6 +2976,36 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const nextDraft: ComposerThreadDraftState = {
               ...base,
               interactionMode: nextInteractionMode,
+            };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadKey[threadKey];
+            } else {
+              nextDraftsByThreadKey[threadKey] = nextDraft;
+            }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        // ru-code: same machinery as setRuntimeMode — a typed per-thread override
+        // that prunes back to "no draft" when it is the only content left.
+        setChatViewMode: (threadRef, chatViewMode) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) {
+            return;
+          }
+          const nextChatViewMode = isChatViewMode(chatViewMode) ? chatViewMode : null;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey];
+            if (!existing && nextChatViewMode === null) {
+              return state;
+            }
+            const base = existing ?? createEmptyThreadDraft();
+            if (base.chatViewMode === nextChatViewMode) {
+              return state;
+            }
+            const nextDraft: ComposerThreadDraftState = {
+              ...base,
+              chatViewMode: nextChatViewMode,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {

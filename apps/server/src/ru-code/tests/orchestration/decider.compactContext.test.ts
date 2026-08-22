@@ -64,6 +64,7 @@ const seedReadModel = Effect.gen(function* () {
       title: "Compact Thread",
       modelSelection: { instanceId: ProviderInstanceId.make("qwen"), model: "coder-model" },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       runtimeMode: "approval-required",
       branch: null,
       worktreePath: null,

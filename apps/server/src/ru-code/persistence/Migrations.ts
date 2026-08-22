@@ -13,11 +13,15 @@ import { mcpMigration } from "@smart-tools/qwen-cli-mcp-manager/server";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
+import projectionThreadsChatViewMode from "./Migrations/002_ProjectionThreadsChatViewMode.ts";
+
 const RU_CODE_MIGRATIONS_TABLE = "ru_code_migrations";
 
 export const ruCodeMigrationEntries = [
   // MCP manager tables (DDL lives with the feature package).
   [1, "Mcp", mcpMigration],
+  // Per-thread chat-view choice column (extended-chat feature).
+  [2, "ProjectionThreadsChatViewMode", projectionThreadsChatViewMode],
 ] as const;
 
 const loader = Migrator.fromRecord(

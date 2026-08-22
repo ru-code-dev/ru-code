@@ -1305,6 +1305,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
+    chatViewMode: null, // ru-code: thread-state chat view (extended chat)
     session: null,
     messages: [],
     proposedPlans: [],

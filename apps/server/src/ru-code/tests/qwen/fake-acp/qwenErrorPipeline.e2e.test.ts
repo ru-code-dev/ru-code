@@ -334,6 +334,7 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
     });
     yield* harness.engine.dispatch({
       type: "thread.create",
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       commandId: CommandId.make("qwen-cmd-thread-create"),
       threadId: THREAD_ID,
       projectId: PROJECT_ID,

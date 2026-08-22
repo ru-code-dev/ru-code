@@ -151,6 +151,18 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "auto-accept-edits";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
+// ru-code: how the thread's chat renders — compact (standard) chat or the detailed
+// CLI transcript. Thread state, same lifecycle as runtimeMode: an explicit user
+// choice sticks to the thread; `null` means "never chosen" and the client falls
+// back to the settings default. Re-exported from settings.ts (its historical home).
+export const ChatViewMode = Schema.Literals(["compact", "detailed"]);
+export type ChatViewMode = typeof ChatViewMode.Type;
+export const DEFAULT_CHAT_VIEW_MODE: ChatViewMode = "compact";
+// ru-code: shared "nullable with old-data default" shape for thread schemas below —
+// absent on every record written before the field existed.
+const ThreadChatViewMode = Schema.NullOr(ChatViewMode).pipe(
+  Schema.withDecodingDefault(Effect.succeed(null)),
+);
 export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
@@ -408,6 +420,7 @@ export const OrchestrationThread = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  chatViewMode: ThreadChatViewMode, // ru-code
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -483,6 +496,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  chatViewMode: ThreadChatViewMode, // ru-code
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -704,6 +718,7 @@ const ThreadCreateCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  chatViewMode: ThreadChatViewMode, // ru-code
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -825,12 +840,23 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ru-code: pins the user's explicit chat-view choice to the thread (plan-mode
+// parity — see ChatViewMode above).
+const ThreadChatViewModeSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.chat-view-mode.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  chatViewMode: ChatViewMode,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  chatViewMode: ThreadChatViewMode, // ru-code
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -966,6 +992,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadChatViewModeSetCommand, // ru-code
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadContextCompactCommand, // ru-code
@@ -1002,6 +1029,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadChatViewModeSetCommand, // ru-code
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadContextCompactCommand, // ru-code
@@ -1142,6 +1170,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.chat-view-mode-set", // ru-code
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1208,6 +1237,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  chatViewMode: ThreadChatViewMode, // ru-code
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1306,6 +1336,13 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  updatedAt: IsoDateTime,
+});
+
+// ru-code: mirrors ThreadInteractionModeSetPayload for the chat-view choice.
+export const ThreadChatViewModeSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  chatViewMode: ChatViewMode,
   updatedAt: IsoDateTime,
 });
 
@@ -1516,6 +1553,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.chat-view-mode-set"), // ru-code
+    payload: ThreadChatViewModeSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

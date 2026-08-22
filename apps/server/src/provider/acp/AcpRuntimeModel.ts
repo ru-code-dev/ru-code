@@ -449,10 +449,16 @@ export function parsePermissionRequest(
     { fallbackStatus: "pending" },
   );
   const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
+  // ru-code[HEAVY]: in-place reorder of upstream precedence — the presentation
+  // DETAIL (file path / query) must beat the presentation TITLE. `makeToolCallState`
+  // rewrites the title into a generic summary («Changed files») and moves the
+  // specific path into `detail`, so title-first precedence shadowed the path for
+  // every file approval (log-proven on qwen 0.13.1 WriteFile requests; commands
+  // survived only because `command` wins).
   const detail =
     toolCall?.command ??
-    toolCall?.title ??
     toolCall?.detail ??
+    toolCall?.title ??
     (typeof params.sessionId === "string" ? `Session ${params.sessionId}` : undefined);
   return {
     kind,

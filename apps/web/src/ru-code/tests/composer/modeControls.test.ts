@@ -23,8 +23,10 @@ describe("runtime-access mode catalog", () => {
         description: "Ask before commands and file changes.",
       },
       {
+        // Round-5: the label dropped "edits" so the footer trigger stays
+        // narrow; the description keeps the full explanation.
         value: "auto-accept-edits",
-        label: "Auto-accept edits",
+        label: "Auto-accept",
         description: "Auto-approve edits, ask before other actions.",
       },
       {

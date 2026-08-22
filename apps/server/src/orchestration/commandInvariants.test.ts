@@ -64,6 +64,7 @@ const readModel: OrchestrationReadModel = {
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       runtimeMode: "full-access",
       branch: null,
       worktreePath: null,
@@ -89,6 +90,7 @@ const readModel: OrchestrationReadModel = {
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       runtimeMode: "full-access",
       branch: null,
       worktreePath: null,
@@ -159,6 +161,7 @@ describe("commandInvariants", () => {
         readModel,
         command: {
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-2"),
           threadId: ThreadId.make("thread-3"),
           projectId: ProjectId.make("project-a"),
@@ -183,6 +186,7 @@ describe("commandInvariants", () => {
           readModel,
           command: {
             type: "thread.create",
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             commandId: CommandId.make("cmd-3"),
             threadId: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-a"),

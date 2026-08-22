@@ -391,6 +391,7 @@ describe("CheckpointReactor", () => {
       engine
         .dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code
           commandId: CommandId.make("cmd-thread-create"),
           threadId: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
@@ -410,6 +411,7 @@ describe("CheckpointReactor", () => {
             ? Effect.andThen(
                 engine.dispatch({
                   type: "thread.create",
+                  chatViewMode: null, // ru-code
                   commandId: CommandId.make("cmd-thread-create-2"),
                   threadId: ThreadId.make("thread-2"),
                   projectId: asProjectId("project-1"),

@@ -53,6 +53,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
           },
           runtimeMode: "full-access",
           interactionMode: "default",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           branch: null,
           worktreePath: null,
           createdAt: clientCreatedAt,

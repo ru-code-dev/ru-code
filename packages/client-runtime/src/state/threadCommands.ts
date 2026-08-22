@@ -11,6 +11,7 @@ import {
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
   type RevertThreadCheckpointInput,
+  type SetThreadChatViewModeInput, // ru-code
   type SetThreadInteractionModeInput,
   type SetThreadRuntimeModeInput,
   type PinThreadInput,
@@ -32,6 +33,7 @@ import {
   respondToThreadApproval,
   respondToThreadUserInput,
   revertThreadCheckpoint,
+  setThreadChatViewMode, // ru-code
   setThreadInteractionMode,
   setThreadRuntimeMode,
   pinThread,
@@ -57,6 +59,7 @@ export type {
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
+  SetThreadChatViewModeInput, // ru-code
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,
   PinThreadInput,
@@ -163,6 +166,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     setInteractionMode: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-interaction-mode",
       execute: (input: SetThreadInteractionModeInput) => setThreadInteractionMode(input),
+      scheduler,
+      concurrency,
+    }),
+    // ru-code: chat-view choice pinned to the thread (plan-mode parity).
+    setChatViewMode: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-chat-view-mode",
+      execute: (input: SetThreadChatViewModeInput) => setThreadChatViewMode(input),
       scheduler,
       concurrency,
     }),

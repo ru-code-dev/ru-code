@@ -94,7 +94,15 @@ import {
   type ObserveMcpRpc,
   type ObserveMcpRpcStream,
 } from "./ru-code/mcp/mcpRpcHandlers.ts";
-
+// ru-code: extended-chat transcript service + handlers (extracted to
+// @smart-tools/qwen-cli-extended-chat; host resolver seam in ru-code/qwen/transcript).
+import {
+  buildTranscriptRpcHandlers,
+  QwenTranscriptService,
+} from "@smart-tools/qwen-cli-extended-chat/server";
+import { QwenTranscriptHostLive } from "./ru-code/qwen/transcript/transcriptHost.ts";
+import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
+import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -460,6 +468,8 @@ const makeWsRpcLayer = (
       const mcpProjectionQuery = yield* McpProjectionQuery;
       const mcpRuntime = yield* McpRuntime;
       const mcpSupervisor = yield* McpSupervisor;
+      // ru-code: extended-chat transcript reader (read-only tail of qwen's JSONL).
+      const qwenTranscript = yield* QwenTranscriptService;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -988,6 +998,7 @@ const makeWsRpcLayer = (
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
                 interactionMode: bootstrap.createThread.interactionMode,
+                chatViewMode: bootstrap.createThread.chatViewMode, // ru-code
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
                 createdAt: bootstrap.createThread.createdAt,
@@ -1542,6 +1553,12 @@ const makeWsRpcLayer = (
           mcpSupervisor,
           observeMcpRpc,
           observeMcpRpcStream,
+        }),
+        // ru-code: extended-chat transcript RPC handlers (ru-code/qwen/transcript).
+        ...buildTranscriptRpcHandlers({
+          qwenTranscript,
+          observeRpcEffect,
+          observeRpcStream,
         }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
@@ -2430,6 +2447,19 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // ru-code: the MCP manager services (same memoized module-level layer the
               // runtime graph provides, so ws sees the SAME supervisor instance).
               Layer.provide(McpManagerHostLayer),
+              // ru-code: transcript reader. The session directory is a stateless
+              // read facade over the runtime-binding repository, so we build our own
+              // instance here (SqlClient/ProjectionSnapshotQuery/ServerConfig/
+              // FileSystem/Path stay ambient from the outer runtime) instead of
+              // widening the route layer's requirements. RE-VERIFY this if
+              // ProviderSessionDirectory ever gains per-instance caching — two
+              // instances could then serve divergent bindings.
+              Layer.provide(
+                QwenTranscriptHostLive.pipe(
+                  Layer.provide(ProviderSessionDirectoryLive),
+                  Layer.provide(ProviderSessionRuntime.layer),
+                ),
+              ),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS

@@ -1,4 +1,9 @@
-import { MCP_MANAGER_METHODS, ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import {
+  MCP_MANAGER_METHODS,
+  ORCHESTRATION_WS_METHODS,
+  TRANSCRIPT_WS_METHODS, // ru-code: extended-chat transcript subscription
+  WS_METHODS,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -55,7 +60,9 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.terminalAttach
   // ru-code: the MCP manager subscriptions (authored projection + live runtime).
   | typeof MCP_MANAGER_METHODS.subscribeMcpProjection
-  | typeof MCP_MANAGER_METHODS.subscribeMcpRuntime;
+  | typeof MCP_MANAGER_METHODS.subscribeMcpRuntime
+  // ru-code: the extended-chat transcript subscription.
+  | typeof TRANSCRIPT_WS_METHODS.subscribeTranscript;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient

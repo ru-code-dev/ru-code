@@ -109,7 +109,17 @@ function collectPaths(value: unknown, paths: string[], seen: Set<string>, depth:
   if (!record) {
     return;
   }
-  for (const key of ["path", "filePath", "relativePath", "filename", "newPath", "oldPath"]) {
+  // ru-code: `file_path` is qwen's actual arg key (edit/replace/write_file rawInput) —
+  // without it path extraction depended on a non-empty `locations` array.
+  for (const key of [
+    "path",
+    "file_path",
+    "filePath",
+    "relativePath",
+    "filename",
+    "newPath",
+    "oldPath",
+  ]) {
     const candidate = maybePathLike(asTrimmedString(record[key]));
     if (!candidate || seen.has(candidate)) {
       continue;

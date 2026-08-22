@@ -201,6 +201,12 @@ const BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS: Record<BackgroundActivityProfile
 const ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION =
   "Uses custom background intervals with the selected shared power policy.";
 
+// ru-code: chat view mode labels — the same pair the composer switcher shows.
+const CHAT_VIEW_MODE_LABELS = {
+  compact: L("Compact", "Компактный"),
+  detailed: L("Detailed", "Подробный"),
+} as const;
+
 // ru-code: default driver kind derived from the single-source default-provider instance id (no codex).
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID);
 const BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES: ReadonlyArray<{
@@ -505,6 +511,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
+      ...(settings.chatViewMode !== DEFAULT_UNIFIED_SETTINGS.chatViewMode ? ["Chat view"] : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
@@ -595,6 +602,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.autoCompactContext, // ru-code
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
+      settings.chatViewMode,
       settings.wordWrap,
       followSystem,
       theme,
@@ -666,6 +674,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     }
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      chatViewMode: DEFAULT_UNIFIED_SETTINGS.chatViewMode,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
@@ -2052,6 +2061,47 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
                 <SelectItem hideIndicator value="24-hour">
                   {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        {/* ru-code: default chat view mode for qwen threads (server-persisted;
+            the composer switcher applies a per-thread override on top). */}
+        <SettingsRow
+          title="Chat view"
+          description="Compact is the standard chat. Detailed shows the full CLI transcript: tool calls, file changes, tasks."
+          resetAction={
+            settings.chatViewMode !== DEFAULT_UNIFIED_SETTINGS.chatViewMode ? (
+              <SettingResetButton
+                label="chat view"
+                onClick={() =>
+                  updateSettings({
+                    chatViewMode: DEFAULT_UNIFIED_SETTINGS.chatViewMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.chatViewMode}
+              onValueChange={(value) => {
+                if (value === "compact" || value === "detailed") {
+                  updateSettings({ chatViewMode: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Chat view">
+                <SelectValue>{CHAT_VIEW_MODE_LABELS[settings.chatViewMode]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="compact">
+                  {CHAT_VIEW_MODE_LABELS.compact}
+                </SelectItem>
+                <SelectItem hideIndicator value="detailed">
+                  {CHAT_VIEW_MODE_LABELS.detailed}
                 </SelectItem>
               </SelectPopup>
             </Select>

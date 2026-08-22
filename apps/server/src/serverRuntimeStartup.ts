@@ -248,6 +248,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
           title: "New thread",
           modelSelection: nextProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          chatViewMode: null, // ru-code: "never chosen" — client falls back to settings
           // ru-code: the fresh-install bootstrap thread must start in the app-wide default
           // mode (auto-accept-edits), NOT full access.
           runtimeMode: DEFAULT_RUNTIME_MODE,

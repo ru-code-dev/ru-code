@@ -286,6 +286,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
     await dispatch({
       type: "thread.create",
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       commandId: CommandId.make("cmd-thread-create"),
       threadId: ThreadId.make("thread-1"),
       projectId: asProjectId("project-1"),
@@ -1250,6 +1251,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-create-plan-source"),
         threadId: sourceThreadId,
         projectId: asProjectId("project-1"),
@@ -1285,6 +1287,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-create-plan-target"),
         threadId: targetThreadId,
         projectId: asProjectId("project-1"),
@@ -1438,6 +1441,7 @@ describe("ProviderRuntimeIngestion", () => {
       Effect.andThen(
         harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-thread-create-plan-source-guarded"),
           threadId: sourceThreadId,
           projectId: asProjectId("project-1"),
@@ -1676,6 +1680,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-create-plan-source-unrelated"),
         threadId: sourceThreadId,
         projectId: asProjectId("project-1"),
@@ -1711,6 +1716,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-create-plan-target-unrelated"),
         threadId: targetThreadId,
         projectId: asProjectId("project-1"),

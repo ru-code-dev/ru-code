@@ -203,6 +203,7 @@ const makeHarness = Effect.gen(function* () {
   });
   yield* engine.dispatch({
     type: "thread.create",
+    chatViewMode: null, // ru-code: thread-state chat view (extended chat)
     commandId: CommandId.make("cmd-flags-thread"),
     threadId: THREAD_ID,
     projectId: PROJECT_ID,

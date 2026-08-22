@@ -153,6 +153,7 @@ it.live("stop → instant restart via the warm slot → history preserved, proje
         });
         yield* harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("stop-next-thread-create"),
           threadId: THREAD_ID,
           projectId: PROJECT_ID,

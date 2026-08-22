@@ -29,10 +29,15 @@ layer("ru-code fork migrations", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
+      // Production order (the Sqlite `setup` seam): upstream migrations first,
+      // fork migrations after — fork entries may ALTER upstream tables
+      // (migration 2 adds projection_threads.chat_view_mode), so the fork
+      // runner alone is not a supported configuration.
+      yield* runMigrations();
       const executed = yield* runRuCodeMigrations();
       assert.deepStrictEqual(
         executed.map(([id, name]) => `${id}_${name}`),
-        ["1_Mcp"],
+        ["1_Mcp", "2_ProjectionThreadsChatViewMode"],
       );
 
       const tables = yield* listTables;
@@ -45,11 +50,30 @@ layer("ru-code fork migrations", (it) => {
       `;
       assert.deepStrictEqual(
         recorded.map((row) => `${row.migration_id}_${row.name}`),
-        ["1_Mcp"],
+        ["1_Mcp", "2_ProjectionThreadsChatViewMode"],
       );
 
-      // The fork run must NOT touch upstream's bookkeeping table.
-      assert.notInclude(tables, "effect_sql_migrations");
+      // The fork's chat_view_mode column landed on the upstream table.
+      const columns = yield* sql<{ name: string }>`
+        SELECT name FROM pragma_table_info('projection_threads')
+      `;
+      assert.include(
+        columns.map((column) => column.name),
+        "chat_view_mode",
+      );
+
+      // Fork entries must NOT leak into upstream's bookkeeping table.
+      const upstreamRecorded = yield* sql<{ name: string }>`
+        SELECT name FROM effect_sql_migrations
+      `;
+      assert.notInclude(
+        upstreamRecorded.map((row) => row.name),
+        "Mcp",
+      );
+      assert.notInclude(
+        upstreamRecorded.map((row) => row.name),
+        "ProjectionThreadsChatViewMode",
+      );
     }),
   );
 
@@ -77,7 +101,7 @@ coexistenceLayer("ru-code fork migrations — coexistence with upstream", (it) =
       const executed = yield* runRuCodeMigrations();
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [1],
+        [1, 2],
       );
 
       const upstreamFirst = yield* sql<{ migration_id: number }>`

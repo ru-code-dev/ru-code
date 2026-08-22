@@ -20,14 +20,19 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
+  type ChatViewMode, // ru-code
 } from "@t3tools/contracts";
 import { seedModelForDriver } from "../ru-code/modelPicker/seedModelForDriver"; // ru-code
+// ru-code: extended chat (CLI transcript) view — timeline swap + resolved view mode.
+import { ExtendedChatTimelineHost } from "../ru-code/extended-chat/extendedChatHost";
+import { selectPendingSendFor } from "../ru-code/extended-chat/pendingSend";
+import { useChatViewMode } from "../ru-code/extended-chat/chatViewMode";
 import {
   deriveRevertTurnCountByUserMessageId,
   deriveTurnDiffSummaryByAssistantMessageId,
 } from "../ru-code/chat/turnDiffAttachment"; // ru-code
 // ru-code: single-source default provider/model constants.
-import { DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
+import { DEFAULT_PROVIDER_INSTANCE_ID, QWEN_KIND } from "@ru-code/branding";
 import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashCommands"; // ru-code
 // ru-code: live catalog custom-command slugs (dynamic allowlist) for the qwen submit guard.
 import { useCatalogCommandSlugs } from "../ru-code/skills-agents/composer/useCatalogCommandSlugs"; // ru-code
@@ -1256,6 +1261,10 @@ function ChatViewContent(props: ChatViewProps) {
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
   });
+  // ru-code: pins the chat-view choice to the thread (plan-mode parity).
+  const setThreadChatViewMode = useAtomCommand(threadEnvironment.setChatViewMode, {
+    reportFailure: false,
+  });
   const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
@@ -1339,6 +1348,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
+  );
+  // ru-code: staging layer of the chat-view choice (see useChatViewMode).
+  const composerChatViewMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.chatViewMode ?? null,
   );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
@@ -2694,6 +2707,14 @@ function ChatViewContent(props: ChatViewProps) {
       })
     : null;
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
+  // ru-code: extended chat (CLI transcript) view — composer override (staging) →
+  // the thread's pinned choice (authority) → server-settings default; the same
+  // resolution the composer switcher shows.
+  const chatViewMode = useChatViewMode(
+    composerDraftTarget,
+    activeThread?.chatViewMode ?? null,
+    settings.chatViewMode,
+  );
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
       ? null
@@ -2742,6 +2763,12 @@ function ChatViewContent(props: ChatViewProps) {
     ? activeProviderStatus
     : null;
   const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
+  // ru-code: the detailed (CLI transcript) view exists only for qwen threads —
+  // they are the only provider that records the JSONL transcript it renders.
+  const extendedChatOpen =
+    chatViewMode === "detailed" &&
+    activeThread != null &&
+    activeProviderStatus?.driver === QWEN_KIND;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -3674,6 +3701,8 @@ function ChatViewContent(props: ChatViewProps) {
       branch?: string;
       runtimeMode: RuntimeMode;
       interactionMode: ProviderInteractionMode;
+      // ru-code: the composer's staged chat-view choice; null = user never chose.
+      chatViewMode?: ChatViewMode | null;
     }): Promise<AtomCommandResult<void, unknown>> => {
       if (!serverThread) {
         return AsyncResult.success(undefined);
@@ -3731,12 +3760,33 @@ function ChatViewContent(props: ChatViewProps) {
           }),
           () => undefined,
         );
+        if (result._tag === "Failure") {
+          return result;
+        }
+      }
+
+      // ru-code: reconcile the staged chat-view choice into the thread; null
+      // (never chosen) writes nothing — the thread keeps following the settings
+      // default until the user explicitly picks a view.
+      if (input.chatViewMode != null && input.chatViewMode !== serverThread.chatViewMode) {
+        result = mapAtomCommandResult(
+          await setThreadChatViewMode({
+            environmentId,
+            input: {
+              threadId: input.threadId,
+              chatViewMode: input.chatViewMode,
+              createdAt: input.createdAt,
+            },
+          }),
+          () => undefined,
+        );
       }
       return result;
     },
     [
       environmentId,
       serverThread,
+      setThreadChatViewMode,
       setThreadInteractionMode,
       setThreadRuntimeMode,
       updateThreadMetadata,
@@ -5356,6 +5406,7 @@ function ChatViewContent(props: ChatViewProps) {
           : {}),
         runtimeMode,
         interactionMode,
+        chatViewMode: composerChatViewMode, // ru-code
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -5380,6 +5431,10 @@ function ChatViewContent(props: ChatViewProps) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
+                      // ru-code: the thread is BORN owning the user's staged
+                      // chat-view choice (null = follow settings) — the draft's
+                      // deletion at promotion can no longer lose it.
+                      chatViewMode: composerChatViewMode,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -5796,6 +5851,7 @@ function ChatViewContent(props: ChatViewProps) {
           : {}),
         runtimeMode,
         interactionMode: nextInteractionMode,
+        chatViewMode: composerChatViewMode, // ru-code
       });
       let failure: AtomCommandResult<unknown, unknown> | null =
         settingsResult._tag === "Failure" ? settingsResult : null;
@@ -5934,6 +5990,7 @@ function ChatViewContent(props: ChatViewProps) {
         modelSelection: nextThreadModelSelection,
         runtimeMode,
         interactionMode: "default",
+        chatViewMode: null, // ru-code: new thread — settings default until the user chooses
         branch: activeThreadBranch,
         worktreePath: activeThread.worktreePath,
         createdAt,
@@ -6487,49 +6544,86 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
-              {/* Messages — LegendList handles virtualization and scrolling internally */}
-              <MessagesTimeline
-                agentPanelModel={agentPanelModel}
-                onOpenAgents={addAgentsSurface}
-                key={activeThread.id}
-                isWorking={isWorking}
-                workingStepLabel={workingStepLabel}
-                activeTurnInProgress={isWorking || !latestTurnSettled}
-                activeTurnStartedAt={activeWorkStartedAt}
-                listRef={legendListRef}
-                timelineEntries={timelineEntries}
-                latestTurn={activeLatestTurn}
-                runningTurnId={
-                  activeThread.session?.status === "running"
-                    ? activeThread.session.activeTurnId
-                    : null
-                }
-                turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                activeThreadEnvironmentId={activeThread.environmentId}
-                routeThreadKey={routeThreadKey}
-                onOpenTurnDiff={onOpenTurnDiff}
-                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                onRevertUserMessage={onRevertUserMessage}
-                isRevertingCheckpoint={isRevertingCheckpoint}
-                onImageExpand={onExpandTimelineImage}
-                markdownCwd={gitCwd ?? undefined}
-                resolvedTheme={resolvedTheme}
-                timestampFormat={timestampFormat}
-                workspaceRoot={activeWorkspaceRoot}
-                skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
-                anchorMessageId={timelineAnchorMessageId}
-                onAnchorReady={onTimelineAnchorReady}
-                contentInsetEndAdjustment={composerOverlayHeight}
-                liveFollowEnabled={timelineLiveFollowEnabled}
-                onIsAtEndChange={onIsAtEndChange}
-                onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
-                hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
-                topFadeEnabled={!hasTimelineTopBanner}
-                loadEarlier={loadEarlierTurns}
-              />
+              {/* ru-code[HEAVY]: extended chat view — wraps the upstream timeline JSX in a
+                  ternary and swaps in the read-only CLI transcript (composer/approvals stay
+                  live below); at resync, re-wrap upstream's current MessagesTimeline call. */}
+              {extendedChatOpen ? (
+                <ExtendedChatTimelineHost
+                  key={`extended-${activeThread.id}`}
+                  environmentId={activeThread.environmentId}
+                  threadId={activeThread.id}
+                  markdownCwd={gitCwd ?? undefined}
+                  resolvedTheme={resolvedTheme}
+                  bottomInset={composerOverlayHeight}
+                  isWorking={isWorking}
+                  workStartedAt={activeWorkStartedAt}
+                  timestampFormat={timestampFormat}
+                  pendingApproval={
+                    activePendingApproval?.requestKind !== undefined
+                      ? {
+                          requestKind: activePendingApproval.requestKind,
+                          ...(activePendingApproval.detail !== undefined
+                            ? { detail: activePendingApproval.detail }
+                            : {}),
+                          ...(activePendingApproval.args !== undefined
+                            ? { args: activePendingApproval.args }
+                            : {}),
+                        }
+                      : null
+                  }
+                  sendAnchorId={timelineAnchorMessageId}
+                  pendingSend={selectPendingSendFor(
+                    optimisticUserMessages,
+                    timelineAnchorMessageId,
+                  )}
+                  hideEmptyPlaceholder={isDraftHeroState}
+                />
+              ) : (
+                // Messages — LegendList handles virtualization and scrolling internally
+                <MessagesTimeline
+                  agentPanelModel={agentPanelModel}
+                  onOpenAgents={addAgentsSurface}
+                  key={activeThread.id}
+                  isWorking={isWorking}
+                  workingStepLabel={workingStepLabel}
+                  activeTurnInProgress={isWorking || !latestTurnSettled}
+                  activeTurnStartedAt={activeWorkStartedAt}
+                  listRef={legendListRef}
+                  timelineEntries={timelineEntries}
+                  latestTurn={activeLatestTurn}
+                  runningTurnId={
+                    activeThread.session?.status === "running"
+                      ? activeThread.session.activeTurnId
+                      : null
+                  }
+                  turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                  activeThreadEnvironmentId={activeThread.environmentId}
+                  routeThreadKey={routeThreadKey}
+                  onOpenTurnDiff={onOpenTurnDiff}
+                  revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                  onRevertUserMessage={onRevertUserMessage}
+                  isRevertingCheckpoint={isRevertingCheckpoint}
+                  onImageExpand={onExpandTimelineImage}
+                  markdownCwd={gitCwd ?? undefined}
+                  resolvedTheme={resolvedTheme}
+                  timestampFormat={timestampFormat}
+                  workspaceRoot={activeWorkspaceRoot}
+                  skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+                  anchorMessageId={timelineAnchorMessageId}
+                  onAnchorReady={onTimelineAnchorReady}
+                  contentInsetEndAdjustment={composerOverlayHeight}
+                  liveFollowEnabled={timelineLiveFollowEnabled}
+                  onIsAtEndChange={onIsAtEndChange}
+                  onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
+                  hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                  topFadeEnabled={!hasTimelineTopBanner}
+                  loadEarlier={loadEarlierTurns}
+                />
+              )}
 
-              {/* scroll to end pill — shown when user has scrolled away from the live edge */}
-              {showScrollToBottom && (
+              {/* scroll to end pill — shown when user has scrolled away from the live edge
+                  (ru-code: the extended view renders its own pill) */}
+              {!extendedChatOpen && showScrollToBottom && (
                 <div
                   className="pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}

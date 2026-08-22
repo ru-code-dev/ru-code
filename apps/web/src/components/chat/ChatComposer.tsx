@@ -21,6 +21,8 @@ import {
 // ru-code: single-source default-provider instance id.
 import { QWEN_KIND } from "@ru-code/branding";
 import { buildComposerSlashCommandMenuItems } from "../../ru-code/slash-commands/composerSlashMenu"; // ru-code
+import { ComposerViewSwitcher } from "../../ru-code/extended-chat/extendedChatHost"; // ru-code
+import { useChatViewMode } from "../../ru-code/extended-chat/chatViewMode"; // ru-code
 import { shouldBlockComposerSend } from "../../ru-code/composer/sendGate"; // ru-code
 import {
   type ComposerRuntimeMode,
@@ -767,6 +769,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  // ru-code: chat view mode — composer override (staging) → the thread's pinned
+  // choice (authority) → settings default; the switcher writes the override back
+  // and the send path reconciles it into the thread.
+  const chatViewMode = useChatViewMode(
+    composerDraftTarget,
+    activeThread?.chatViewMode ?? null,
+    settings.chatViewMode,
+  );
+  const setChatViewMode = useComposerDraftStore((store) => store.setChatViewMode);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -1192,7 +1203,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         query: composerTrigger.query,
         // ru-code: /compress is offered disabled while composing a draft.
         isDraftThread: routeKind === "draft",
-        planModeEnabled: planModeUiEnabled,
       });
       // ru-code: our catalog custom commands (already query-filtered by useCatalogComposerItems) lead
       // the list, grouped into Проект / Глобальные; the native composite (built-ins + provider) follows.
@@ -1236,7 +1246,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     composerTrigger,
-    planModeUiEnabled,
     routeKind,
     selectedProvider,
     selectedProviderStatus,
@@ -3399,6 +3408,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onInstanceModelChange={onProviderModelSelect}
                   />
                 )}
+
+                {/* ru-code: chat view mode control (Компактный/Подробный) — qwen
+                    threads only; writes the per-thread draft override. */}
+                <ComposerViewSwitcher
+                  mode={chatViewMode}
+                  visible={activeThreadProviderEntry?.driver === QWEN_KIND}
+                  compact={isComposerFooterCompact}
+                  onModeChange={(mode) => setChatViewMode(composerDraftTarget, mode)}
+                />
 
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu

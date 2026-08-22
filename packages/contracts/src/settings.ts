@@ -7,7 +7,7 @@ import { APP_NAME, DEFAULT_PROVIDER_INSTANCE_ID } from "@ru-code/branding";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode } from "./environment.ts";
 import { ProviderOptionSelections } from "./model.ts";
-import { ModelSelection } from "./orchestration.ts";
+import { ChatViewMode, DEFAULT_CHAT_VIEW_MODE, ModelSelection } from "./orchestration.ts"; // ru-code: +ChatViewMode (defined there since it became thread state)
 import {
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
@@ -30,6 +30,13 @@ export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "24-hour";
 export const Locale = Schema.Literals(["ru", "en"]);
 export type Locale = typeof Locale.Type;
 export const DEFAULT_LOCALE: Locale = "ru";
+
+// ru-code: how a qwen thread's chat renders — the compact (standard) chat or the
+// detailed CLI transcript. The SETTING is the default for threads whose user never
+// chose; an explicit per-thread choice lives on the thread itself (orchestration
+// contract — same lifecycle as runtime mode). Defined in orchestration.ts because
+// thread schemas need it and settings.ts already imports from there.
+export { ChatViewMode, DEFAULT_CHAT_VIEW_MODE } from "./orchestration.ts";
 
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
@@ -695,6 +702,13 @@ export const ServerSettings = Schema.Struct({
   enableLegacyTokenStreaming: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // ru-code: default chat view mode for qwen threads (compact chat vs the detailed CLI
+  // transcript). Server-owned like the appearance settings so the preference follows the
+  // user across origins. LAYER 3 of the client's three-layer read:
+  //   composer-draft override ?? thread.chatViewMode (event-sourced state) ?? THIS default.
+  chatViewMode: ChatViewMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CHAT_VIEW_MODE)),
+  ),
   // ru-code: default OFF — no registry.npmjs.org calls unless a user opts in.
   enableProviderUpdateChecks: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -915,6 +929,7 @@ export const ServerSettingsPatch = Schema.Struct({
   themeFollowSystem: Schema.optionalKey(Schema.Boolean), // ru-code
   themeHalves: Schema.optionalKey(TrimmedString), // ru-code
   customThemes: Schema.optionalKey(TrimmedString), // ru-code
+  chatViewMode: Schema.optionalKey(ChatViewMode), // ru-code
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),

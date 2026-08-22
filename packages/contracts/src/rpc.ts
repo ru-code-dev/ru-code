@@ -214,6 +214,14 @@ export { SKILL_CATALOG_METHODS, AGENT_CATALOG_METHODS, COMMAND_CATALOG_METHODS }
 import { mcpManagerRpcs, MCP_MANAGER_METHODS } from "@smart-tools/qwen-cli-mcp-manager/contracts";
 
 export { MCP_MANAGER_METHODS };
+// ru-code: the extended-chat transcript RPC surface (subscription + on-demand full body)
+// — minted in its package, spread into WsRpcGroup below.
+import {
+  transcriptRpcs,
+  TRANSCRIPT_WS_METHODS,
+} from "@smart-tools/qwen-cli-extended-chat/contracts";
+
+export { TRANSCRIPT_WS_METHODS };
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1104,6 +1112,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+  // ru-code: the 2 extended-chat transcript RPCs (subscription + on-demand full body).
+  ...transcriptRpcs,
   // ru-code: the 13 Skills + 13 Agents + 13 Commands catalog RPCs (minted by the shared core factory).
   ...skillCatalogRpcs,
   ...agentCatalogRpcs,

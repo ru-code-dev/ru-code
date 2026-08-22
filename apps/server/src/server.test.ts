@@ -225,6 +225,7 @@ const makeDefaultOrchestrationReadModel = () => {
         title: "Default Thread",
         modelSelection: defaultModelSelection,
         interactionMode: "default" as const,
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         runtimeMode: "full-access" as const,
         branch: null,
         worktreePath: null,
@@ -255,6 +256,7 @@ const makeDefaultOrchestrationThreadShell = (
     title: "Default Thread",
     modelSelection: defaultModelSelection,
     runtimeMode: "full-access",
+    chatViewMode: null, // ru-code: thread-state chat view (extended chat)
     interactionMode: "default",
     branch: null,
     worktreePath: null,
@@ -5857,6 +5859,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             title: "Thread A",
             modelSelection: defaultModelSelection,
             interactionMode: "default" as const,
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             runtimeMode: "full-access" as const,
             branch: null,
             worktreePath: null,
@@ -7431,6 +7434,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   title: "Bootstrap Thread",
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
+                  chatViewMode: null, // ru-code: thread-state chat view (extended chat)
                   interactionMode: "default",
                   branch: "main",
                   worktreePath: null,
@@ -7578,6 +7582,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
                   interactionMode: "default",
+                  chatViewMode: null, // ru-code
                   branch: "main",
                   worktreePath: null,
                   createdAt,
@@ -7680,6 +7685,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 title: "Bootstrap Thread",
                 modelSelection: defaultModelSelection,
                 runtimeMode: "full-access",
+                chatViewMode: null, // ru-code: thread-state chat view (extended chat)
                 interactionMode: "default",
                 branch: "main",
                 worktreePath: null,
@@ -7801,6 +7807,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 title: "Bootstrap Thread",
                 modelSelection: defaultModelSelection,
                 runtimeMode: "full-access",
+                chatViewMode: null, // ru-code: thread-state chat view (extended chat)
                 interactionMode: "default",
                 branch: "main",
                 worktreePath: null,
@@ -7885,6 +7892,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 title: "Bootstrap Thread",
                 modelSelection: defaultModelSelection,
                 runtimeMode: "full-access",
+                chatViewMode: null, // ru-code: thread-state chat view (extended chat)
                 interactionMode: "default",
                 branch: "main",
                 worktreePath: null,

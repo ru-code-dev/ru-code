@@ -214,7 +214,9 @@ export default defineConfig(() => {
     resolve: {
       tsconfigPaths: true,
       // ru-code: dedupe shared runtime libs to a single copy so the linked catalog packages
-      // share port's effect/atom/React context singletons (not a second instance).
+      // share port's effect/atom/React context singletons (not a second instance). RULE:
+      // every patched/singleton external of a linked @smart-tools package belongs here —
+      // re-audit whenever a linked package gains a dependency edge.
       dedupe: [
         "react",
         "react-dom",
@@ -223,6 +225,9 @@ export default defineConfig(() => {
         "effect",
         "zustand",
         "@pierre/diffs",
+        // PATCHED (anchoredEndSpace on web) — without dedupe the dev-linked
+        // extended-chat package would load the packages repo's stock copy.
+        "@legendapp/list",
         "lucide-react",
         "class-variance-authority",
         "tailwind-merge",

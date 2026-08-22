@@ -151,6 +151,7 @@ describe("OrchestrationEngine", () => {
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access" as const,
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           branch: null,
           worktreePath: null,
           latestTurn: null,
@@ -273,6 +274,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-1-create"),
         threadId: ThreadId.make("thread-1"),
         projectId: asProjectId("project-1"),
@@ -333,6 +335,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-archive-create"),
         threadId: ThreadId.make("thread-archive"),
         projectId: asProjectId("project-archive"),
@@ -426,6 +429,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-replay-create"),
         threadId: ThreadId.make("thread-replay"),
         projectId: asProjectId("project-replay"),
@@ -494,6 +498,7 @@ describe("OrchestrationEngine", () => {
         yield* Effect.sleep("10 millis");
         yield* engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-stream-thread-create"),
           threadId: ThreadId.make("thread-stream"),
           projectId: asProjectId("project-stream"),
@@ -545,6 +550,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-branch-race-thread-create"),
         threadId: ThreadId.make("thread-branch-race"),
         projectId: asProjectId("project-branch-race"),
@@ -598,6 +604,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-worktree-bootstrap-thread-create"),
         threadId: ThreadId.make("thread-worktree-bootstrap"),
         projectId: asProjectId("project-worktree-bootstrap"),
@@ -652,6 +659,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-ack-create"),
         threadId: ThreadId.make("thread-ack"),
         projectId: asProjectId("project-ack"),
@@ -689,6 +697,7 @@ describe("OrchestrationEngine", () => {
       system.run(
         engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-thread-missing-project"),
           threadId: ThreadId.make("thread-missing-project"),
           projectId: asProjectId("project-missing"),
@@ -740,6 +749,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-turn-diff-create"),
         threadId: ThreadId.make("thread-turn-diff"),
         projectId: asProjectId("project-turn-diff"),
@@ -865,6 +875,7 @@ describe("OrchestrationEngine", () => {
       runtime.runPromise(
         engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-flaky-1"),
           threadId: ThreadId.make("thread-flaky-fail"),
           projectId: asProjectId("project-flaky"),
@@ -885,6 +896,7 @@ describe("OrchestrationEngine", () => {
     const result = await runtime.runPromise(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-flaky-2"),
         threadId: ThreadId.make("thread-flaky-ok"),
         projectId: asProjectId("project-flaky"),
@@ -971,6 +983,7 @@ describe("OrchestrationEngine", () => {
     await runtime.runPromise(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-atomic-create"),
         threadId: ThreadId.make("thread-atomic"),
         projectId: asProjectId("project-atomic"),
@@ -1118,6 +1131,7 @@ describe("OrchestrationEngine", () => {
     await runtime.runPromise(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-sync-create"),
         threadId: ThreadId.make("thread-sync"),
         projectId: asProjectId("project-sync"),
@@ -1206,6 +1220,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-duplicate-1"),
         threadId: ThreadId.make("thread-duplicate"),
         projectId: asProjectId("project-duplicate"),
@@ -1226,6 +1241,7 @@ describe("OrchestrationEngine", () => {
       system.run(
         engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-thread-duplicate-2"),
           threadId: ThreadId.make("thread-duplicate"),
           projectId: asProjectId("project-duplicate"),
@@ -1268,6 +1284,7 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-retry-thread-create"),
         threadId: ThreadId.make("thread-retry"),
         projectId: asProjectId("project-retry"),
@@ -1333,6 +1350,7 @@ describe("OrchestrationEngine", () => {
       await system.run(
         engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make(`cmd-${threadId}-create`),
           threadId: ThreadId.make(threadId),
           projectId: asProjectId("project-conflict"),

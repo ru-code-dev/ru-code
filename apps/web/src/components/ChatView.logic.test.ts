@@ -87,6 +87,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     },
     runtimeMode: "full-access",
     interactionMode: "default",
+    chatViewMode: null, // ru-code: thread-state chat view (extended chat)
     session: null,
     messages: [],
     proposedPlans: [],
@@ -138,6 +139,7 @@ describe("buildLoadingThreadFromShell", () => {
       },
       runtimeMode: "full-access",
       interactionMode: "default",
+      chatViewMode: null, // ru-code
       branch: "main",
       worktreePath: null,
       latestTurn: null,

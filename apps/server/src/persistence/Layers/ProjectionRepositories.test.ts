@@ -85,6 +85,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "claude-opus-4-6",
         },
         runtimeMode: "full-access",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         interactionMode: "default",
         branch: null,
         worktreePath: null,
@@ -149,6 +150,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        chatViewMode: null, // ru-code
         branch: null,
         worktreePath: null,
         latestTurnId: null,

@@ -109,6 +109,7 @@ it.live("a mid-turn interrupt lands in the projection as a clean cancellation, n
         });
         yield* harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("interrupt-cancel-thread-create"),
           threadId: THREAD_ID,
           projectId: PROJECT_ID,

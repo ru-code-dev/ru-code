@@ -39,6 +39,9 @@ export interface FakeAcpTransportControls {
 export interface PromptSteps {
   /** Stream an assistant text chunk (`session/update` agent_message_chunk). */
   emitText(text: string): PromptSteps;
+  /** ru-code(e2e): real wall-clock pause between steps — the stdio fake uses it to
+   *  simulate qwen's spawn/think latency for the live browser harness. */
+  sleep(ms: number): PromptSteps;
   /**
    * ru-code: like emitText but stamps running usage on the chunk under
    * `update._meta.usage.inputTokens` — exactly where qwen puts its live
@@ -91,6 +94,12 @@ export interface PromptSteps {
 export interface FakeAcpScript {
   /** Called once per `session/prompt`; build the response with the step DSL. */
   readonly onPrompt: (steps: PromptSteps) => void;
+  /** ru-code(e2e): step-execution observer for the stdio harness diagnostics. */
+  readonly onStepExecuting?: (kind: string) => void;
+  /** ru-code(e2e): session id `session/new` answers with (default FAKE_SESSION_ID).
+   *  The stdio harness uses a per-process id so parallel threads get separate
+   *  transcript files. */
+  readonly sessionId?: string;
   /**
    * ru-code: wire-capture hooks (optional). The fake records the session-start
    * `authenticate` methodId and every `session/set_config_option` so tests can
@@ -257,6 +266,7 @@ type FakeStep =
       readonly entries: ReadonlyArray<{ content: string; status: string }>;
     }
   | { readonly kind: "requestPermission"; readonly payload: AcpSchema.RequestPermissionRequest }
+  | { readonly kind: "sleep"; readonly ms: number }
   | { readonly kind: "extNotification"; readonly method: string; readonly params: unknown }
   | { readonly kind: "ok"; readonly stopReason: StopReason }
   | {
@@ -273,6 +283,10 @@ class PromptStepsRecorder implements PromptSteps {
   readonly steps: FakeStep[] = [];
   emitText(text: string): PromptSteps {
     this.steps.push({ kind: "text", text });
+    return this;
+  }
+  sleep(ms: number): PromptSteps {
+    this.steps.push({ kind: "sleep", ms });
     return this;
   }
   emitTextWithUsage(text: string, inputTokens: number): PromptSteps {
@@ -376,7 +390,7 @@ export const runFakeAcpAgent = (
             : (script.onCreateSessionEffect?.() ?? Effect.void).pipe(
                 Effect.andThen(
                   Effect.succeed({
-                    sessionId: FAKE_SESSION_ID,
+                    sessionId: script.sessionId ?? FAKE_SESSION_ID,
                     // ru-code: real qwen advertises its model catalog here.
                     ...(script.sessionModels ? { models: script.sessionModels } : {}),
                   }),
@@ -461,7 +475,7 @@ export const runFakeAcpAgent = (
       agentMessageChunk: (text) =>
         agent.client
           .sessionUpdate({
-            sessionId: FAKE_SESSION_ID,
+            sessionId: script.sessionId ?? FAKE_SESSION_ID,
             update: {
               sessionUpdate: "agent_message_chunk",
               content: { type: "text", text },
@@ -485,7 +499,12 @@ export const runFakeAcpAgent = (
         yield* Ref.set(activeCancelRef, cancelled);
 
         for (const step of recorder.steps) {
+          script.onStepExecuting?.(step.kind);
           switch (step.kind) {
+            case "sleep":
+              // ru-code(e2e): wall-clock pause (browser-harness realism only).
+              yield* Effect.sleep(step.ms);
+              break;
             case "text":
               yield* agent.client.sessionUpdate({
                 sessionId: request.sessionId,

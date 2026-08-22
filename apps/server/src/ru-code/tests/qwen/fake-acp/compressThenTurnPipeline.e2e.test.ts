@@ -113,6 +113,7 @@ it.live("after a hidden compress the NEXT turn recovers the session and projects
         });
         yield* harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("compress-turn-thread-create"),
           threadId: THREAD_ID,
           projectId: PROJECT_ID,
@@ -261,6 +262,7 @@ it.live("compact on a fresh thread (nothing to recover) still yields the failure
         });
         yield* harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("compact-fresh-thread-create"),
           threadId: freshThreadId,
           projectId: ProjectId.make("compact-fresh-project"),
@@ -326,6 +328,7 @@ it.live("RESTART + compact as the FIRST action — the next turn's reply must pr
           });
           yield* harness.engine.dispatch({
             type: "thread.create",
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             commandId: CommandId.make("compact-first-thread-create"),
             threadId: THREAD_ID_COMPACT_FIRST,
             projectId: ProjectId.make("compact-first-project"),

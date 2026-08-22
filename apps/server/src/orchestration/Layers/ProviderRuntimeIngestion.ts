@@ -211,6 +211,17 @@ function maxCheckpointTurnCount(
   return maxTurnCount;
 }
 
+// ru-code: defensive ceiling for raw approval args (see the args passthrough
+// below) — matches the transcript wire budget's order of magnitude.
+const APPROVAL_ARGS_MAX_BYTES = 2 * 1024 * 1024;
+function approvalArgsWithinBudget(args: unknown): boolean {
+  try {
+    return JSON.stringify(args).length <= APPROVAL_ARGS_MAX_BYTES;
+  } catch {
+    return false; // unserializable args never ride the activity
+  }
+}
+
 function truncateDetail(value: string, limit = 180): string {
   // ru-code: a localization wire token (Lc) sliced mid-JSON can never resolve again and
   // renders raw on every client, forever (it is persisted). Token-carrying values truncate
@@ -403,6 +414,15 @@ export function runtimeEventToActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: event.payload.detail } : {}),
+            // ru-code: raw approval args (ACP: the full request incl. toolCall.rawInput)
+            // ride the activity UNTRUNCATED — the extended chat synthesizes the real
+            // proposed diff from them, and a clamp would corrupt the JSON args. Size is
+            // bounded by what the CLI already sent over the ACP wire for this request,
+            // with a defensive ceiling: a pathological payload is DROPPED whole (the
+            // approval row falls back to `detail`) rather than truncated into broken JSON.
+            ...(event.payload.args !== undefined && approvalArgsWithinBudget(event.payload.args)
+              ? { args: event.payload.args }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

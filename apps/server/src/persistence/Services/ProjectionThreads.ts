@@ -7,6 +7,7 @@
  * @module ProjectionThreadRepository
  */
 import {
+  ChatViewMode, // ru-code
   CommandId,
   IsoDateTime,
   ModelSelection,
@@ -31,6 +32,7 @@ export const ProjectionThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  chatViewMode: Schema.NullOr(ChatViewMode), // ru-code
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),

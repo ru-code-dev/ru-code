@@ -281,6 +281,7 @@ const makeHarness = (cwd: string, runtimeEventPubSub: PubSub.PubSub<ProviderRunt
     });
     yield* engine.dispatch({
       type: "thread.create",
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       commandId: CommandId.make("cmd-thread-create"),
       threadId: THREAD,
       projectId: ProjectId.make("project-1"),

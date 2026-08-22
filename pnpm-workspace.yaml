@@ -43,12 +43,14 @@ catalog:
   "@noble/hashes": 1.8.0
   "@pierre/diffs": 1.3.0-beta.10
   "@smart-tools/acp-warm-pool": 2.0.0
-  "@smart-tools/qwen-cli-agents-manager": 2.0.0
-  "@smart-tools/qwen-cli-catalog-core": 2.0.0
-  "@smart-tools/qwen-cli-commands-manager": 2.0.0
-  "@smart-tools/qwen-cli-mcp-manager": 2.0.0
-  "@smart-tools/qwen-cli-skill-manager": 2.0.0
-  "@smart-tools/qwen-cli-ui-kit": 2.0.0
+  "@smart-tools/qwen-cli-agents-manager": 2.0.1
+  "@smart-tools/qwen-cli-catalog-core": 2.0.1
+  "@smart-tools/qwen-cli-commands-manager": 2.0.1
+  "@smart-tools/qwen-cli-extended-chat": 1.0.1
+  "@smart-tools/qwen-cli-mcp-manager": 2.0.1
+  "@smart-tools/qwen-cli-skill-manager": 2.0.1
+  "@smart-tools/qwen-cli-transcript-core": 1.0.1
+  "@smart-tools/qwen-cli-ui-kit": 2.0.1
   "@types/node": 24.12.4
   "@typescript/native-preview": 7.0.0-dev.20260604.1
   effect: 4.0.0-beta.103
@@ -79,13 +81,15 @@ minimumReleaseAgeExclude:
   - "@effect/sql-sqlite-bun@4.0.0-beta.103"
   - "@effect/vitest@4.0.0-beta.103"
   - "@smart-tools/acp-warm-pool@2.0.0"
-  - "@smart-tools/qwen-cli-agents-manager@2.0.0"
-  - "@smart-tools/qwen-cli-catalog-core@2.0.0"
-  - "@smart-tools/qwen-cli-commands-manager@2.0.0"
-  - "@smart-tools/qwen-cli-common@2.0.0"
-  - "@smart-tools/qwen-cli-mcp-manager@2.0.0"
-  - "@smart-tools/qwen-cli-skill-manager@2.0.0"
-  - "@smart-tools/qwen-cli-ui-kit@2.0.0"
+  - "@smart-tools/qwen-cli-agents-manager@2.0.1"
+  - "@smart-tools/qwen-cli-catalog-core@2.0.1"
+  - "@smart-tools/qwen-cli-commands-manager@2.0.1"
+  - "@smart-tools/qwen-cli-common@2.0.1"
+  - "@smart-tools/qwen-cli-extended-chat@1.0.1"
+  - "@smart-tools/qwen-cli-mcp-manager@2.0.1"
+  - "@smart-tools/qwen-cli-skill-manager@2.0.1"
+  - "@smart-tools/qwen-cli-transcript-core@1.0.1"
+  - "@smart-tools/qwen-cli-ui-kit@2.0.1"
   - alchemy@2.0.0-beta.65
   - effect@4.0.0-beta.103
   - "@legendapp/list@3.3.5"

@@ -143,6 +143,10 @@ export interface PendingApproval {
   requestType?: CanonicalRequestType;
   createdAt: string;
   detail?: string;
+  // ru-code: raw approval args from the activity payload (ACP: the full permission
+  // request incl. toolCall.rawInput) — the extended chat renders the held request's
+  // command / proposed diff from them.
+  args?: unknown;
 }
 
 export interface PendingUserInput {
@@ -475,6 +479,8 @@ export function derivePendingApprovals(
         ...(requestType ? { requestType } : {}),
         createdAt: activity.createdAt,
         ...(detail ? { detail } : {}),
+        // ru-code: raw args pass through untouched for the extended-chat awaiting row.
+        ...(payload && payload.args !== undefined ? { args: payload.args } : {}),
       });
       continue;
     }

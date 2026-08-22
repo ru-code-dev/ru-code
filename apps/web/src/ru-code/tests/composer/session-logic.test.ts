@@ -116,3 +116,49 @@ describe("derivePendingApprovals — qwen plan_approval held approvals", () => {
     ]);
   });
 });
+
+describe("derivePendingApprovals — raw approval args passthrough (round 7)", () => {
+  it("carries detail + raw args from the activity payload to the pending approval", () => {
+    const args = {
+      toolCall: {
+        rawInput: { file_path: "/proj/permission-test.txt", content: "hello from subagent\n" },
+      },
+    };
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-approval-open",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        payload: {
+          requestId: "req-file-1",
+          requestKind: "file-change",
+          requestType: "file_change_approval",
+          detail: "/proj/permission-test.txt",
+          args,
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "req-file-1",
+        requestKind: "file-change",
+        requestType: "file_change_approval",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        detail: "/proj/permission-test.txt",
+        args,
+      },
+    ]);
+  });
+
+  it("omits args when the persisted activity predates them (old data decodes)", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "legacy-approval-open",
+        payload: { requestId: "req-legacy", requestKind: "command", detail: "ls -la" },
+      }),
+    ];
+    const [approval] = derivePendingApprovals(activities);
+    expect(approval).toBeDefined();
+    expect("args" in approval!).toBe(false);
+  });
+});

@@ -301,6 +301,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             model: "gpt-5-codex",
           },
           interactionMode: "default",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -420,6 +421,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             model: "gpt-5-codex",
           },
           interactionMode: "default",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,

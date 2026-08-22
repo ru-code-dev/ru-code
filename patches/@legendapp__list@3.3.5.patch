@@ -925,6 +925,184 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..2d556eecb0bafe2f54084c809f82144c
        onScroll: onScrollHandler,
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2.cloneElement(refreshControlElement, {
+diff --git a/react.d.ts b/react.d.ts
+index b6c7481603f4119495551b3e4c1c071984c144af..738f91c7a33698f16e00808192e54a92f1dcdfdc 100644
+--- a/react.d.ts
++++ b/react.d.ts
+@@ -206,6 +206,12 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
+      * @default undefined
+      */
+     estimatedItemSize?: number;
++    /**
++     * ru-code[HEAVY]: per-item-type first-render size estimate, used before any
++     * measurement or learned average exists for that type.
++     * @default undefined
++     */
++    estimatedItemSizesByType?: Record<string, number>;
+     /**
+      * Estimated size of the ScrollView in pixels, a hint for the first render to improve performance
+      * @default undefined
+@@ -587,6 +593,10 @@ type LegendListRef$1 = {
+      * Displays the scroll indicators momentarily.
+      */
+     flashScrollIndicators(): void;
++    /**
++     * ru-code[HEAVY]: flush a deferred (anchor-locked) measured-size relayout synchronously.
++     */
++    flushPendingLayout(): void;
+     /**
+      * Returns the native ScrollView component reference.
+      */
+diff --git a/react.js b/react.js
+index 914d2dafaafa001c9ab6791a0a0581659295e333..96f77ae716b3d19a0d23e4dd0aead56089371807 100644
+--- a/react.js
++++ b/react.js
+@@ -1225,7 +1225,11 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+     }
+   }
+   if (size === void 0) {
+-    size = estimatedItemSize + ctx.scrollAxisGap;
++    // ru-code[HEAVY]: fork addition -- per-item-type first-render size estimate
++    // (estimatedItemSizesByType prop), used before any measurement or learned average exists.
++    const ruCodeByType = state.props.estimatedItemSizesByType;
++    const perTypeEstimate = ruCodeByType == null ? void 0 : ruCodeByType[itemType];
++    size = (perTypeEstimate != null ? perTypeEstimate : estimatedItemSize) + ctx.scrollAxisGap;
+   }
+   setSize(ctx, key, size, notifyTotalSize);
+   return size;
+@@ -1454,7 +1458,10 @@ function doMaintainScrollAtEnd(ctx) {
+       requestAnimationFrame(() => {
+         const isStillWithinThreshold = peek$(ctx, "isWithinMaintainScrollAtEndThreshold");
+         const didScrollSinceRequest = state.scroll !== scrollAtRequest;
+-        if (isStillWithinThreshold || !didScrollSinceRequest) {
++        // ru-code[HEAVY]: re-check the LIVE prop -- this closure is queued one frame earlier and a
++        // send commit can turn maintainScrollAtEnd off in between; executing the stale scrollToEnd
++        // snapped the send scroll (the "pushed, not animated" second message).
++        if ((isStillWithinThreshold || !didScrollSinceRequest) && state.props.maintainScrollAtEnd) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
+@@ -1499,6 +1506,14 @@ function doMaintainScrollAtEnd(ctx) {
+ // src/utils/requestAdjust.ts
+ function requestAdjust(ctx, positionDiff, dataChanged) {
+   const state = ctx.state;
++  // ru-code[HEAVY]: single-writer gate -- while the host's send anchor owns the viewport
++  // (anchoredEndSpace.suppressDataAdjust() true), MVCP data-change compensations are spurious
++  // second writers (the +-21px response-arrival jerk); the anchor + reserved end space fully
++  // determine the viewport there.
++  const ruCodeSuppress = state.props.anchoredEndSpace && state.props.anchoredEndSpace.suppressDataAdjust;
++  if (typeof ruCodeSuppress === "function" && peek$(ctx, "readyToRender") && ruCodeSuppress()) {
++    return;
++  }
+   if (Math.abs(positionDiff) > 0.1) {
+     const doit = () => {
+       {
+@@ -7376,6 +7391,14 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+   return {
+     clearCaches,
+     flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
++    // ru-code[HEAVY]: flush a deferred (anchor-locked) measured-size relayout synchronously so
++    // toggle handlers can read and paint FINAL positions in the same task.
++    flushPendingLayout: () => {
++      if (state.scheduledWork.has("mvcpRecalculate")) {
++        state.scheduledWork.cancel("mvcpRecalculate");
++        calculateItemsInView(ctx, { doMVCP: true });
++      }
++    },
+     getAnimatableRef: () => {
+       var _a3, _b, _c;
+       return (_c = (_b = (_a3 = refScroller.current).getNativeScrollRef) == null ? void 0 : _b.call(_a3)) != null ? _c : refScroller.current;
+@@ -7720,6 +7743,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     drawDistance = 250,
+     contentInsetEndAdjustment,
+     estimatedItemSize = 100,
++    estimatedItemSizesByType, // ru-code[HEAVY]
+     estimatedListSize,
+     extraData,
+     getFixedItemSize,
+@@ -7990,6 +8014,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     dataVersion,
+     drawDistance,
+     estimatedItemSize,
++    estimatedItemSizesByType, // ru-code[HEAVY]
+     getFixedItemSize: useWrapIfItem(getFixedItemSize),
+     getItemType: useWrapIfItem(getItemType),
+     horizontal: !!horizontal,
+diff --git a/react.mjs b/react.mjs
+index 95465f2ab89ce41a10553f58af83618f7310e83c..1d6203643e45cea6ca6ec2141376c3e7ea8a4709 100644
+--- a/react.mjs
++++ b/react.mjs
+@@ -1204,7 +1204,11 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+     }
+   }
+   if (size === void 0) {
+-    size = estimatedItemSize + ctx.scrollAxisGap;
++    // ru-code[HEAVY]: fork addition -- per-item-type first-render size estimate
++    // (estimatedItemSizesByType prop), used before any measurement or learned average exists.
++    const ruCodeByType = state.props.estimatedItemSizesByType;
++    const perTypeEstimate = ruCodeByType == null ? void 0 : ruCodeByType[itemType];
++    size = (perTypeEstimate != null ? perTypeEstimate : estimatedItemSize) + ctx.scrollAxisGap;
+   }
+   setSize(ctx, key, size, notifyTotalSize);
+   return size;
+@@ -1433,7 +1437,10 @@ function doMaintainScrollAtEnd(ctx) {
+       requestAnimationFrame(() => {
+         const isStillWithinThreshold = peek$(ctx, "isWithinMaintainScrollAtEndThreshold");
+         const didScrollSinceRequest = state.scroll !== scrollAtRequest;
+-        if (isStillWithinThreshold || !didScrollSinceRequest) {
++        // ru-code[HEAVY]: re-check the LIVE prop -- this closure is queued one frame earlier and a
++        // send commit can turn maintainScrollAtEnd off in between; executing the stale scrollToEnd
++        // snapped the send scroll (the "pushed, not animated" second message).
++        if ((isStillWithinThreshold || !didScrollSinceRequest) && state.props.maintainScrollAtEnd) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
+@@ -1478,6 +1485,14 @@ function doMaintainScrollAtEnd(ctx) {
+ // src/utils/requestAdjust.ts
+ function requestAdjust(ctx, positionDiff, dataChanged) {
+   const state = ctx.state;
++  // ru-code[HEAVY]: single-writer gate -- while the host's send anchor owns the viewport
++  // (anchoredEndSpace.suppressDataAdjust() true), MVCP data-change compensations are spurious
++  // second writers (the +-21px response-arrival jerk); the anchor + reserved end space fully
++  // determine the viewport there.
++  const ruCodeSuppress = state.props.anchoredEndSpace && state.props.anchoredEndSpace.suppressDataAdjust;
++  if (typeof ruCodeSuppress === "function" && peek$(ctx, "readyToRender") && ruCodeSuppress()) {
++    return;
++  }
+   if (Math.abs(positionDiff) > 0.1) {
+     const doit = () => {
+       {
+@@ -7355,6 +7370,14 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+   return {
+     clearCaches,
+     flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
++    // ru-code[HEAVY]: flush a deferred (anchor-locked) measured-size relayout synchronously so
++    // toggle handlers can read and paint FINAL positions in the same task.
++    flushPendingLayout: () => {
++      if (state.scheduledWork.has("mvcpRecalculate")) {
++        state.scheduledWork.cancel("mvcpRecalculate");
++        calculateItemsInView(ctx, { doMVCP: true });
++      }
++    },
+     getAnimatableRef: () => {
+       var _a3, _b, _c;
+       return (_c = (_b = (_a3 = refScroller.current).getNativeScrollRef) == null ? void 0 : _b.call(_a3)) != null ? _c : refScroller.current;
+@@ -7699,6 +7722,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     drawDistance = 250,
+     contentInsetEndAdjustment,
+     estimatedItemSize = 100,
++    estimatedItemSizesByType, // ru-code[HEAVY]
+     estimatedListSize,
+     extraData,
+     getFixedItemSize,
+@@ -7969,6 +7993,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     dataVersion,
+     drawDistance,
+     estimatedItemSize,
++    estimatedItemSizesByType, // ru-code[HEAVY]
+     getFixedItemSize: useWrapIfItem(getFixedItemSize),
+     getItemType: useWrapIfItem(getItemType),
+     horizontal: !!horizontal,
 diff --git a/reanimated.d.ts b/reanimated.d.ts
 index e5043320700b12f34f4c0babbc341f85ca8135c1..2ce63830a28636b21937a0741fd0e613dae950fe 100644
 --- a/reanimated.d.ts

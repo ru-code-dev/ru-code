@@ -208,6 +208,7 @@ it.live(
           });
           yield* harness.engine.dispatch({
             type: "thread.create",
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             commandId: CommandId.make("compaction-history-thread-create"),
             threadId: HISTORY_THREAD,
             projectId: HISTORY_PROJECT,
@@ -340,6 +341,7 @@ it.live("a send dispatched during a running compression surfaces B5 in the proje
         });
         yield* harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("compaction-b5-thread-create"),
           threadId: B5_THREAD,
           projectId: B5_PROJECT,

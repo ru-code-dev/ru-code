@@ -15,36 +15,36 @@ export function buildComposerSlashCommandMenuItems(input: {
   readonly query: string;
   /** True while composing a DRAFT (no thread yet) — disables /compress. */
   readonly isDraftThread?: boolean;
-  /** ru-code: gate the plan-mode built-ins on t3's plan-mode setting. */
-  readonly planModeEnabled: boolean;
 }): ComposerCommandItem[] {
-  const builtInSlashCommandItems = [
-    {
-      id: "slash:model",
-      type: "slash-command",
-      command: "model",
-      label: "/model",
-      description: "Switch response model for this thread",
-    },
-    ...(input.planModeEnabled
-      ? ([
-          {
-            id: "slash:plan",
-            type: "slash-command",
-            command: "plan",
-            label: "/plan",
-            description: "Switch this thread into plan mode",
-          },
-          {
-            id: "slash:default",
-            type: "slash-command",
-            command: "default",
-            label: "/default",
-            description: "Switch this thread back to normal build mode",
-          },
-        ] as const)
-      : []),
-  ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+  // ru-code: built-ins HIDDEN for now (product decision 2026-07-21) — set to false to restore.
+  // Runtime filter (not commenting/DCE): the strings must stay in the bundle so the
+  // localization dict entries keep matching (the build fails on orphaned translations).
+  const HIDE_BUILTIN_SLASH_COMMANDS = true;
+  const builtInSlashCommandItems = (
+    [
+      {
+        id: "slash:model",
+        type: "slash-command",
+        command: "model",
+        label: "/model",
+        description: "Switch response model for this thread",
+      },
+      {
+        id: "slash:plan",
+        type: "slash-command",
+        command: "plan",
+        label: "/plan",
+        description: "Switch this thread into plan mode",
+      },
+      {
+        id: "slash:default",
+        type: "slash-command",
+        command: "default",
+        label: "/default",
+        description: "Switch this thread back to normal build mode",
+      },
+    ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>
+  ).filter(() => !HIDE_BUILTIN_SLASH_COMMANDS);
   const providerSlashCommandItems = input.providerSlashCommands.map((command) => ({
     id: `provider-slash-command:${input.selectedProvider}:${command.name}`,
     type: "provider-slash-command" as const,

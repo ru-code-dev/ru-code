@@ -86,6 +86,7 @@ const seedReadModel = (currentSession: OrchestrationSession | null) =>
         title: "Preserve Thread",
         modelSelection: { instanceId: ProviderInstanceId.make("qwen"), model: "m" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,

@@ -71,6 +71,7 @@ export const seedTransferBudgetHistory = Effect.fn("TransferBudget.seedHistory")
   });
   yield* harness.engine.dispatch({
     type: "thread.create",
+    chatViewMode: null, // ru-code
     commandId: CommandId.make(`transfer:${provider}:thread-create`),
     threadId: TRANSFER_THREAD_ID,
     projectId: TRANSFER_PROJECT_ID,

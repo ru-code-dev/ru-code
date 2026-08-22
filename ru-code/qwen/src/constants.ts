@@ -102,7 +102,10 @@ export const QWEN_MODELS_AUTO_DISCOVERY = true;
  * shutdown). false ⇒ spawn/stop behavior byte-identical to the classic path.
  * `QWEN_CODE_NO_RELAUNCH` is deliberately NOT behind this gate.
  */
-export const ACP_WARM_ENGINE = true;
+// ru-code: PERMANENT env seam — RU_CODE_WARM_ENGINE=0 disables the pool and is
+// set ONLY by the e2e harness (ru-code/e2e/scripts/bootApp.ts) for determinism
+// with the instant fake CLI. Production/dev never set it ⇒ pool always ON.
+export const ACP_WARM_ENGINE = process.env["RU_CODE_WARM_ENGINE"] !== "0";
 
 /**
  * ACP_CANCEL_GRACE_MS — grace between `session/cancel` and the unconditional

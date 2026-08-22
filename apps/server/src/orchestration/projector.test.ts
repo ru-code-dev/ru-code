@@ -83,6 +83,7 @@ describe("orchestration projector", () => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         branch: null,
         worktreePath: null,
         latestTurn: null,

@@ -38,8 +38,10 @@ export const RUNTIME_MODE_OPTIONS: ReadonlyArray<RuntimeModeCatalogEntry> = [
     description: "Ask before commands and file changes.",
   },
   {
+    // The label stays short (the trigger renders it inline in the footer);
+    // the description keeps the full "edits" explanation.
     value: "auto-accept-edits",
-    label: "Auto-accept edits",
+    label: "Auto-accept",
     description: "Auto-approve edits, ask before other actions.",
   },
   {

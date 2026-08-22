@@ -48,7 +48,8 @@
     "release:smoke": "node scripts/release-smoke.ts",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
     "build:preflight": "vp run --filter t3 build:preflight",
-    "prepare-release": "node scripts/prepare-release.ts"
+    "prepare-release": "node scripts/prepare-release.ts",
+    "test:e2e": "pnpm --filter @ru-code/e2e test:e2e"
   },
   "devDependencies": {
     "@babel/plugin-transform-react-jsx": "7.28.6",

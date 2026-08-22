@@ -318,12 +318,20 @@ const makeAcpSessionRuntime = (
 
     const acpContext = yield* Layer.build(
       EffectAcpClient.layerChildProcess(child, {
+        // ru-code: PERMANENT env-gated harness equipment —
+        // RU_CODE_ACP_PROTOCOL_LOG=1 turns on full ACP wire logging in both
+        // directions (env unset ⇒ behavior identical to stock: options win,
+        // otherwise the client's defaults).
         ...(options.protocolLogging?.logIncoming !== undefined
           ? { logIncoming: options.protocolLogging.logIncoming }
-          : {}),
+          : process.env["RU_CODE_ACP_PROTOCOL_LOG"] === "1"
+            ? { logIncoming: true }
+            : {}),
         ...(options.protocolLogging?.logOutgoing !== undefined
           ? { logOutgoing: options.protocolLogging.logOutgoing }
-          : {}),
+          : process.env["RU_CODE_ACP_PROTOCOL_LOG"] === "1"
+            ? { logOutgoing: true }
+            : {}),
         ...(options.protocolLogging?.logger ? { logger: options.protocolLogging.logger } : {}),
       }),
     ).pipe(Effect.provideService(Scope.Scope, runtimeScope));

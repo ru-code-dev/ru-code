@@ -15,6 +15,8 @@ import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { CATALOG_RPC_SCOPES } from "../ru-code/skills-agents/catalogRpcHandlers.ts";
 // ru-code: MCP manager per-method scopes (extracted to ru-code/mcp).
 import { MCP_RPC_SCOPES } from "../ru-code/mcp/mcpRpcHandlers.ts";
+// ru-code: extended-chat transcript per-method scopes (ru-code/qwen/transcript).
+import { TRANSCRIPT_RPC_SCOPES } from "../ru-code/qwen/transcript/transcriptHost.ts";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
@@ -131,6 +133,8 @@ export const RPC_REQUIRED_SCOPES = {
   ...CATALOG_RPC_SCOPES,
   // ru-code: MCP manager per-method scopes (extracted to ru-code/mcp).
   ...MCP_RPC_SCOPES,
+  // ru-code: extended-chat transcript per-method scopes.
+  ...TRANSCRIPT_RPC_SCOPES,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

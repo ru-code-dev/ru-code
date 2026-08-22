@@ -1,0 +1,21 @@
+/* ru-code: extended-chat transcript scroll surfaces (package pre/code blocks)
+   share the `.chat-markdown pre` thin-scrollbar look — one scrollbar style
+   across the whole chat. */
+.ru-transcript-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--border) 78%, transparent) transparent;
+}
+
+.ru-transcript-scroll::-webkit-scrollbar {
+  height: 7px;
+  width: 7px;
+}
+
+.ru-transcript-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ru-transcript-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 78%, transparent);
+}

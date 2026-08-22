@@ -51,6 +51,7 @@ const baseThread: OrchestrationThread = {
   modelSelection: { instanceId: ProviderInstanceId.make("qwen"), model: "" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  chatViewMode: null, // ru-code: thread-state chat view (extended chat)
   branch: null,
   worktreePath: null,
   latestTurn: null,

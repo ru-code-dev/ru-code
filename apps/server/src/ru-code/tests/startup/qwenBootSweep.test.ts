@@ -215,6 +215,7 @@ it.live(
           for (const [index, threadId] of [THREAD_QWEN, THREAD_OTHER].entries()) {
             yield* harness.engine.dispatch({
               type: "thread.create",
+              chatViewMode: null, // ru-code: thread-state chat view (extended chat)
               commandId: CommandId.make(`sweep-thread-create-${index}`),
               threadId,
               projectId,

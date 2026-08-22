@@ -93,6 +93,9 @@ export function buildLocalDraftThread(
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
+    // ru-code: a draft has no pinned choice yet — the composer override (staging)
+    // is the only source until the real thread is born carrying it.
+    chatViewMode: null,
     session: null,
     messages: [],
     createdAt: draftThread.createdAt,

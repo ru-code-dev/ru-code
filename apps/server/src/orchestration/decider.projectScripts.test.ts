@@ -297,6 +297,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, McpManagerSecretStoreMemory))(
               model: "gpt-5-codex",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             runtimeMode: "approval-required",
             branch: null,
             worktreePath: null,
@@ -398,6 +399,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, McpManagerSecretStoreMemory))(
               model: "gpt-5-codex",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
@@ -476,6 +478,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, McpManagerSecretStoreMemory))(
               model: "gpt-5-codex",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            chatViewMode: null, // ru-code: thread-state chat view (extended chat)
             runtimeMode: "approval-required",
             branch: null,
             worktreePath: null,

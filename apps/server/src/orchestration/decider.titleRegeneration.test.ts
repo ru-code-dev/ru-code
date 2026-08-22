@@ -30,6 +30,7 @@ const readModel: OrchestrationReadModel = {
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",
       interactionMode: "default",
+      chatViewMode: null, // ru-code
       branch: null,
       worktreePath: null,
       latestTurn: null,

@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalDate:off
+// @effect-diagnostics globalTimers:off
 // ru-code: stdio shell for the fake ACP agent — LIVE manual mode.
 //
 // A standalone Node entry that speaks the real ndJSON-RPC ACP wire over actual
@@ -21,6 +24,13 @@
 // CLASSIFICATION is pinned by the in-memory unit tests. Likewise B2 (exit with no
 // readable code) and the D-bucket (provider-adapter errors) are not wire-inducible
 // from a running agent — they are covered by the in-memory + classifier tests.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
+// ru-code(e2e): the REAL path formula (win32 lowercasing included) — the fake
+// used to re-implement the sanitize regex and would have silently diverged.
+import { resolveTranscriptFilePath } from "@smart-tools/qwen-cli-transcript-core";
+
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Cause from "effect/Cause";
@@ -77,7 +87,127 @@ const SCENARIOS: Record<string, FakeAcpScript> = {
   // Stop demo: a long-running turn the user can interrupt from the UI.
   HOLD: { onPrompt: (steps) => steps.emitText("работаю, нажмите Стоп…") },
   OK: { onPrompt: (steps) => steps.emitText("Готово.").respondOk("end_turn") },
+  // ru-code(e2e): the browser-harness flow — a realistic "user asks, CLI responds"
+  // turn that ALSO writes the session JSONL the extended view tails (raw shapes
+  // mirror a real qwen 0.13.1 fixture). Per-spawn knobs come from the JSON file
+  // at RU_CODE_FAKE_CONTROL_FILE ({delayMs, responseText}), re-read every prompt,
+  // so specs steer latency without restarting the app.
+  FLOW: makeFlowScenario(),
 };
+
+interface FlowControl {
+  readonly delayMs?: number;
+  readonly responseText?: string;
+}
+
+// ru-code(e2e): append-only diagnostics file (RU_CODE_FAKE_LOG_FILE) — the real
+// spawn's stderr is not surfaced by the server, so the harness reads this file.
+function fakeLog(line: string): void {
+  const logFile = process.env["RU_CODE_FAKE_LOG_FILE"];
+  if (!logFile) return;
+  try {
+    NodeFS.appendFileSync(logFile, `[${new Date().toISOString()}] pid=${process.pid} ${line}\n`);
+  } catch {
+    // diagnostics only — SWALLOW-BY-DESIGN: a broken log file must never take
+    // down the fake CLI mid-scenario; the ACP wire is the observable contract
+  }
+}
+
+function makeFlowScenario(): FakeAcpScript {
+  // Per-process session id → each thread (one spawn each) tails its OWN file.
+  const sessionId = `fake-acp-session-${process.pid}`;
+  const cwd = process.cwd();
+  let lastPromptText = "";
+  let lastRecordUuid: string | null = null;
+  let recordCounter = 0;
+
+  const readControl = (): FlowControl => {
+    const controlPath = process.env["RU_CODE_FAKE_CONTROL_FILE"];
+    if (!controlPath) return {};
+    try {
+      return JSON.parse(NodeFS.readFileSync(controlPath, "utf8")) as FlowControl;
+    } catch {
+      return {};
+    }
+  };
+
+  const transcriptPath = (): string | null => {
+    const configDir = process.env["RU_CODE_FAKE_CLI_CONFIG_DIR"];
+    if (!configDir) return null;
+    return resolveTranscriptFilePath({
+      cliConfigDir: configDir,
+      cwd,
+      // oxlint-disable-next-line t3code/no-global-process-runtime -- ru-code: standalone stdio Node entry (no Effect runtime to inject HostProcessPlatform); mirrors the real CLI which also reads its own process
+      platform: process.platform,
+      sessionId,
+    });
+  };
+
+  const appendRecord = (record: Record<string, unknown>): void => {
+    const filePath = transcriptPath();
+    if (!filePath) return;
+    NodeFS.mkdirSync(NodePath.dirname(filePath), { recursive: true });
+    NodeFS.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
+  };
+
+  const baseRecord = (type: string) => {
+    recordCounter += 1;
+    const uuid = `flow-${type}-${process.pid}-${recordCounter}`;
+    const record = {
+      uuid,
+      parentUuid: lastRecordUuid,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      type,
+      cwd,
+      version: "0.13.1",
+    };
+    lastRecordUuid = uuid;
+    return record;
+  };
+
+  return {
+    sessionId,
+    onCreateSession: () => fakeLog("session/new"),
+    onStepExecuting: (kind) => fakeLog(`step: ${kind}`),
+    onSetConfigOption: (configId, value) =>
+      fakeLog(`set_config_option ${configId}=${String(value)}`),
+    onLoadSession: (loaded) => fakeLog(`session/load ${loaded}`),
+    onPromptText: (text) => {
+      lastPromptText = text;
+      fakeLog(`prompt text: ${text.slice(0, 120)}`);
+    },
+    onPrompt: (steps) => {
+      const control = readControl();
+      fakeLog(`onPrompt control=${JSON.stringify(control)}`);
+      const delayMs = control.delayMs ?? 0;
+      const responseText =
+        control.responseText ??
+        "Понял вас! Вот развёрнутый ответ на ваш вопрос — несколько строк текста,\nчтобы пузырь имел реальную высоту, как настоящий ответ модели.";
+      const promptText = lastPromptText;
+      // Real qwen writes the user record only after boot/binding — the delay
+      // reproduces the fresh-spawn window the empty-screen bug lived in.
+      setTimeout(() => {
+        fakeLog("writing user record");
+        appendRecord({
+          ...baseRecord("user"),
+          message: { role: "user", parts: [{ text: promptText }] },
+        });
+      }, delayMs);
+      setTimeout(() => {
+        appendRecord({
+          ...baseRecord("assistant"),
+          model: "fake/model",
+          message: { role: "model", parts: [{ text: responseText }] },
+        });
+      }, delayMs + 400);
+      steps
+        .sleep(delayMs + 500)
+        .emitText(responseText)
+        .respondOk("end_turn");
+    },
+  };
+}
 
 const scenarioId = process.env["RU_CODE_FAKE_ACP"] ?? "OK";
 const script = SCENARIOS[scenarioId] ?? SCENARIOS["OK"]!;
@@ -99,6 +229,8 @@ const stdio = Stdio.make({
   stdout: () =>
     Sink.forEach((chunk: string | Uint8Array) =>
       Effect.sync(() => {
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+        fakeLog(`OUT ${text.slice(0, 100).replaceAll("\n", "\\n")}`);
         process.stdout.write(typeof chunk === "string" ? chunk : Buffer.from(chunk));
       }),
     ),

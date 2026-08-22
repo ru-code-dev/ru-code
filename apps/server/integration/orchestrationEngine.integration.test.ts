@@ -138,6 +138,7 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
 
     yield* harness.engine.dispatch({
       type: "thread.create",
+      chatViewMode: null, // ru-code: thread-state chat view (extended chat)
       commandId: CommandId.make("cmd-thread-create"),
       threadId: THREAD_ID,
       projectId: PROJECT_ID,
@@ -288,6 +289,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
 
         yield* harness.engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code: thread-state chat view (extended chat)
           commandId: CommandId.make("cmd-thread-create-real-codex"),
           threadId: THREAD_ID,
           projectId: PROJECT_ID,

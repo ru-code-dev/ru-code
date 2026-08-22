@@ -30,6 +30,7 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadChatViewModeSetPayload, // ru-code
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -311,6 +312,7 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            chatViewMode: payload.chatViewMode, // ru-code
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
@@ -499,6 +501,23 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             interactionMode: payload.interactionMode,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    // ru-code: chat-view choice pinned to the thread (plan-mode parity).
+    case "thread.chat-view-mode-set":
+      return decodeForEvent(
+        ThreadChatViewModeSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            chatViewMode: payload.chatViewMode,
             updatedAt: payload.updatedAt,
           }),
         })),

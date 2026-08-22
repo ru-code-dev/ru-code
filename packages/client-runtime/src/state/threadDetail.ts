@@ -51,6 +51,7 @@ export function mergeEnvironmentThread(
     modelSelection: shell.modelSelection,
     runtimeMode: shell.runtimeMode,
     interactionMode: shell.interactionMode,
+    chatViewMode: shell.chatViewMode, // ru-code
     branch: shell.branch,
     worktreePath: shell.worktreePath,
     latestTurn: shell.latestTurn,

@@ -26,6 +26,8 @@ type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
 const makeProjectionThreadRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // ru-code: every SQL block below additionally carries the chat_view_mode
+  // column (ru-code migration 002; nullable — NULL = "user never chose").
   const upsertProjectionThreadRow = SqlSchema.void({
     Request: ProjectionThread,
     execute: (row) =>
@@ -37,6 +39,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json,
           runtime_mode,
           interaction_mode,
+          chat_view_mode,
           branch,
           worktree_path,
           latest_turn_id,
@@ -64,6 +67,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
           ${row.interactionMode},
+          ${row.chatViewMode},
           ${row.branch},
           ${row.worktreePath},
           ${row.latestTurnId},
@@ -91,6 +95,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
+          chat_view_mode = excluded.chat_view_mode,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           latest_turn_id = excluded.latest_turn_id,
@@ -125,6 +130,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          chat_view_mode AS "chatViewMode",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -161,6 +167,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          chat_view_mode AS "chatViewMode",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",

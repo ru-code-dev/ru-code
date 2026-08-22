@@ -59,7 +59,7 @@ import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import { ScrollArea } from "./ui/scroll-area";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
-import { stackedThreadToast, toastManager } from "./ui/toast";
+import { anchoredToastManager, stackedThreadToast, toastManager } from "./ui/toast"; // ru-code: anchored «Copied!»
 import { recordVisitForThread } from "../browserHistoryStore";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
@@ -630,6 +630,9 @@ function MarkdownCodeBlock({
   const [copied, setCopied] = useState(false);
   const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ru-code: the hover Tooltip never opens on a plain click — the anchored
+  // «Copied!» toast (MessageCopyButton parity) is the click feedback.
+  const copyButtonRef = useRef<HTMLButtonElement | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
 
@@ -644,6 +647,15 @@ function MarkdownCodeBlock({
           clearTimeout(copiedTimerRef.current);
         }
         setCopied(true);
+        // ru-code: anchored click feedback (tooltip-style, 1s — MessageCopyButton parity).
+        if (copyButtonRef.current !== null) {
+          anchoredToastManager.add({
+            data: { tooltipStyle: true },
+            positionerProps: { anchor: copyButtonRef.current },
+            timeout: 1000,
+            title: "Copied!",
+          });
+        }
         copiedTimerRef.current = setTimeout(() => {
           setCopied(false);
           copiedTimerRef.current = null;
@@ -714,6 +726,7 @@ function MarkdownCodeBlock({
                   className="chat-markdown-chrome-action"
                   onClick={handleCopy}
                   aria-label={copyLabel}
+                  ref={copyButtonRef}
                 />
               }
             >

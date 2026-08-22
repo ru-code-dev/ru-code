@@ -71,6 +71,7 @@ const JUST_CREATED_THREAD: OrchestrationThread = {
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  chatViewMode: null, // ru-code: thread-state chat view (extended chat)
   branch: "main",
   worktreePath: null,
   latestTurn: null,
@@ -160,6 +161,7 @@ const turnStartRequested = (sequence: number): OrchestrationThreadStreamItem =>
         messageId: USER_MESSAGE_ID,
         runtimeMode: "full-access",
         interactionMode: "default",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         createdAt: "2026-04-01T00:00:01.000Z",
       },
     },

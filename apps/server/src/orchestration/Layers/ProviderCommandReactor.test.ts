@@ -455,6 +455,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       engine.dispatch({
         type: "thread.create",
+        chatViewMode: null, // ru-code: thread-state chat view (extended chat)
         commandId: CommandId.make("cmd-thread-create"),
         threadId: ThreadId.make("thread-1"),
         projectId: asProjectId("project-1"),
@@ -471,6 +472,7 @@ describe("ProviderCommandReactor", () => {
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.create",
+          chatViewMode: null, // ru-code
           commandId: CommandId.make("cmd-thread-create-2"),
           threadId: ThreadId.make("thread-2"),
           projectId: asProjectId("project-1"),

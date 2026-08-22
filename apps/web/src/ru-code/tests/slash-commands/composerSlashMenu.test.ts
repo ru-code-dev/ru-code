@@ -16,17 +16,13 @@ const providerCommand = {
 } as ServerProviderSlashCommand;
 
 describe("buildComposerSlashCommandMenuItems", () => {
-  it("qwen kind, empty query: built-ins, then the four qwen commands, then provider commands", () => {
+  it("qwen kind, empty query: the four qwen commands, then provider commands (built-ins hidden)", () => {
     const items = buildComposerSlashCommandMenuItems({
       selectedProvider: QWEN,
       providerSlashCommands: [providerCommand],
       query: "",
-      planModeEnabled: true,
     });
     expect(items.map((item) => item.id)).toEqual([
-      "slash:model",
-      "slash:plan",
-      "slash:default",
       "qwen-slash:init",
       "qwen-slash:summary",
       "qwen-slash:compress",
@@ -35,27 +31,13 @@ describe("buildComposerSlashCommandMenuItems", () => {
     ]);
   });
 
-  it("non-qwen kind: no qwen commands injected", () => {
+  it("non-qwen kind: no qwen commands injected (built-ins hidden → empty)", () => {
     const items = buildComposerSlashCommandMenuItems({
       selectedProvider: CLAUDE,
       providerSlashCommands: [],
       query: "",
-      planModeEnabled: true,
     });
-    expect(items.map((item) => item.id)).toEqual(["slash:model", "slash:plan", "slash:default"]);
-  });
-
-  // ru-code: plan mode is a t3 setting the shared composite must gate on —
-  // otherwise every build offers /plan and /default regardless of whether the
-  // build even surfaces plan mode.
-  it("plan mode disabled: /plan and /default are not offered", () => {
-    const items = buildComposerSlashCommandMenuItems({
-      selectedProvider: CLAUDE,
-      providerSlashCommands: [],
-      query: "",
-      planModeEnabled: false,
-    });
-    expect(items.map((item) => item.id)).toEqual(["slash:model"]);
+    expect(items.map((item) => item.id)).toEqual([]);
   });
 
   it("search: /compress survives a matching query, unrelated built-ins are filtered", () => {
@@ -63,7 +45,6 @@ describe("buildComposerSlashCommandMenuItems", () => {
       selectedProvider: QWEN,
       providerSlashCommands: [],
       query: "compress",
-      planModeEnabled: true,
     });
     expect(items.map((item) => item.id)).toContain("qwen-slash:compress");
     expect(items.map((item) => item.id)).not.toContain("slash:model");
@@ -79,7 +60,6 @@ describe("buildComposerSlashCommandMenuItems", () => {
       selectedProvider: CLAUDE,
       providerSlashCommands: [withHint, bare],
       query: "",
-      planModeEnabled: true,
     });
     const descriptions = new Map(items.map((item) => [item.id, item.description]));
     expect(descriptions.get("provider-slash-command:claudeAgent:hinted")).toBe("Подсказка");
@@ -94,7 +74,6 @@ describe("buildComposerSlashCommandMenuItems", () => {
       providerSlashCommands: [providerCommand],
       query: "",
       isDraftThread: true,
-      planModeEnabled: true,
     });
     const disabledById = new Map(
       items.map((item) => [item.id, "disabled" in item ? item.disabled : undefined]),
@@ -115,7 +94,6 @@ describe("buildComposerSlashCommandMenuItems", () => {
         selectedProvider: QWEN,
         providerSlashCommands: [],
         query: "",
-        planModeEnabled: true,
         ...input,
       });
       const compress = items.find((item) => item.id === "qwen-slash:compress");

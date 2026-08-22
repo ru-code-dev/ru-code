@@ -86,6 +86,7 @@ export function applyThreadDetailEvent(
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          chatViewMode: event.payload.chatViewMode, // ru-code
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
@@ -240,6 +241,17 @@ export function applyThreadDetailEvent(
         thread: {
           ...thread,
           interactionMode: event.payload.interactionMode,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    // ru-code: chat-view choice pinned to the thread (plan-mode parity).
+    case "thread.chat-view-mode-set":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          chatViewMode: event.payload.chatViewMode,
           updatedAt: event.payload.updatedAt,
         },
       };

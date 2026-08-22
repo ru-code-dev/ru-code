@@ -34,3 +34,20 @@ export * from "./rpc.ts";
 
 // ru-code
 export * from "./ru-code/syntheticAssistantMessage.ts";
+// ru-code: the extended-chat transcript wire model (minted in its package; named
+// re-exports so the package's ThreadId/auth mirrors never shadow ours).
+export {
+  TranscriptBody,
+  TranscriptDiffStat,
+  TranscriptImage,
+  TranscriptJson,
+  TranscriptPart,
+  TranscriptRecord,
+  TranscriptRecordBodyError,
+  TranscriptStreamItem,
+  TranscriptSystemPayload,
+  TranscriptToolCall,
+  TranscriptToolDisplay,
+  TranscriptToolStatus,
+  TranscriptUsage,
+} from "@smart-tools/qwen-cli-extended-chat/contracts";

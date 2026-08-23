@@ -1,4 +1,5 @@
 import { type TimestampFormat } from "@t3tools/contracts/settings";
+import { L, getLocale, durationUnitsRu, localeDateFormat } from "@ru-code/localization"; // ru-code: bilingual duration/date seams
 
 export function getTimestampFormatOptions(
   timestampFormat: TimestampFormat,
@@ -59,16 +60,24 @@ function getTimestampFormatter(
   timestampFormat: TimestampFormat,
   includeSeconds: boolean,
 ): Intl.DateTimeFormat {
-  const cacheKey = `${timestampFormat}:${includeSeconds ? "seconds" : "minutes"}`;
+  // ru-code: cache key includes the locale so a locale switch doesn't serve a stale formatter
+  const locale = getLocale();
+  const cacheKey = `${locale}:${timestampFormat}:${includeSeconds ? "seconds" : "minutes"}`;
   const cachedFormatter = timestampFormatterCache.get(cacheKey);
   if (cachedFormatter) {
     return cachedFormatter;
   }
 
-  const formatter = new Intl.DateTimeFormat(
-    timestampLocale,
-    getTimestampFormatOptions(timestampFormat, includeSeconds),
-  );
+  // ru-code: the app's language wins when it is Russian (I08 — a Russian UI must not print an
+  // American clock); otherwise defer verbatim to the host tag t3 resolves (#6190/#7081), so an
+  // en-GB desktop keeps 15:44 and the numeric date below stays in the same locale.
+  const formatter =
+    locale === "ru"
+      ? localeDateFormat("ru", getTimestampFormatOptions(timestampFormat, includeSeconds))
+      : new Intl.DateTimeFormat(
+          timestampLocale,
+          getTimestampFormatOptions(timestampFormat, includeSeconds),
+        );
   timestampFormatterCache.set(cacheKey, formatter);
   return formatter;
 }
@@ -84,10 +93,18 @@ export function formatTimestamp(isoDate: string, timestampFormat: TimestampForma
   return getTimestampFormatter(timestampFormat, true).format(date);
 }
 
-// Deliberately not the host locale: the tooltip's ordinal suffix and
-// day-before-month order below are English, so a localized month alone would
-// read "4th Juni 2026". Localizing the whole label is a separate change.
-const monthNameFormatter = new Intl.DateTimeFormat(undefined, { month: "long" });
+// ru-code: was a module-level `const` frozen at load with an `undefined` locale — made
+// lazy/per-locale so a runtime locale switch is reflected instead of frozen at import time.
+const monthNameFormatterCache = new Map<string, Intl.DateTimeFormat>();
+function getMonthNameFormatter(): Intl.DateTimeFormat {
+  const locale = getLocale();
+  let formatter = monthNameFormatterCache.get(locale);
+  if (!formatter) {
+    formatter = localeDateFormat(locale, { month: "long" });
+    monthNameFormatterCache.set(locale, formatter);
+  }
+  return formatter;
+}
 
 function ordinalSuffix(day: number): string {
   const lastTwo = day % 100;
@@ -115,8 +132,18 @@ export function formatChatTimestampTooltip(
   const date = parseTimestampDate(isoDate);
   if (!date) return "";
   const time = formatShortTimestamp(isoDate, timestampFormat);
+  if (getLocale() === "ru") {
+    // ru-code: Russian long dates have no ordinal-suffix convention ("4th June" has no
+    // Russian equivalent shape) — use the platform's own long-date formatting instead.
+    const longDate = localeDateFormat(getLocale(), {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(date);
+    return `${time}, ${longDate}`;
+  }
   const day = date.getDate();
-  const month = monthNameFormatter.format(date);
+  const month = getMonthNameFormatter().format(date);
   const year = date.getFullYear();
   return `${time}, ${day}${ordinalSuffix(day)} ${month} ${year}`;
 }
@@ -180,15 +207,21 @@ export function formatRelativeTime(isoDate: string): RelativeTimeParts | null {
   const date = parseTimestampDate(isoDate);
   if (!date) return null;
   const diffMs = Date.now() - date.getTime();
-  if (diffMs < 0) return { value: "just now", suffix: null };
+  // ru-code: bilingual duration-unit seams (durationUnitsRu map)
+  if (diffMs < 0) return { value: L("just now", durationUnitsRu.justNow), suffix: null };
   const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) return { value: "just now", suffix: null };
+  if (seconds < 60) return { value: L("just now", durationUnitsRu.justNow), suffix: null };
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return { value: `${minutes}m`, suffix: "ago" };
+  if (minutes < 60)
+    return {
+      value: `${minutes}${L("m", durationUnitsRu.m)}`,
+      suffix: L("ago", durationUnitsRu.ago),
+    };
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return { value: `${hours}h`, suffix: "ago" };
+  if (hours < 24)
+    return { value: `${hours}${L("h", durationUnitsRu.h)}`, suffix: L("ago", durationUnitsRu.ago) };
   const days = Math.floor(hours / 24);
-  return { value: `${days}d`, suffix: "ago" };
+  return { value: `${days}${L("d", durationUnitsRu.d)}`, suffix: L("ago", durationUnitsRu.ago) };
 }
 
 export function formatRelativeTimeLabel(isoDate: string) {
@@ -212,20 +245,21 @@ export function formatElapsedDurationLabel(isoDate: string, nowMs: number = Date
   const date = parseTimestampDate(isoDate);
   if (!date) return "";
   const diffMs = nowMs - date.getTime();
-  if (diffMs <= 0) return "just now";
+  // ru-code: bilingual duration-unit seams (durationUnitsRu map)
+  if (diffMs <= 0) return L("just now", durationUnitsRu.justNow);
 
   const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 5) return "just now";
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 5) return L("just now", durationUnitsRu.justNow);
+  if (seconds < 60) return `${seconds}${L("s", durationUnitsRu.s)}`;
 
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) return `${minutes}${L("m", durationUnitsRu.m)}`;
 
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return `${hours}${L("h", durationUnitsRu.h)}`;
 
   const days = Math.floor(hours / 24);
-  return `${days}d`;
+  return `${days}${L("d", durationUnitsRu.d)}`;
 }
 
 /**
@@ -235,16 +269,29 @@ export function formatRelativeTimeUntil(isoDate: string): RelativeTimeParts | nu
   const date = parseTimestampDate(isoDate);
   if (!date) return null;
   const diffMs = date.getTime() - Date.now();
-  if (diffMs <= 0) return { value: "Expired", suffix: null };
+  // ru-code: bilingual duration-unit seams (durationUnitsRu map)
+  if (diffMs <= 0) return { value: L("Expired", durationUnitsRu.expired), suffix: null };
   const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 5) return { value: "Soon", suffix: null };
-  if (seconds < 60) return { value: `${seconds}s`, suffix: "left" };
+  if (seconds < 5) return { value: L("Soon", durationUnitsRu.soon), suffix: null };
+  if (seconds < 60)
+    return {
+      value: `${seconds}${L("s", durationUnitsRu.s)}`,
+      suffix: L("left", durationUnitsRu.left),
+    };
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return { value: `${minutes}m`, suffix: "left" };
+  if (minutes < 60)
+    return {
+      value: `${minutes}${L("m", durationUnitsRu.m)}`,
+      suffix: L("left", durationUnitsRu.left),
+    };
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return { value: `${hours}h`, suffix: "left" };
+  if (hours < 24)
+    return {
+      value: `${hours}${L("h", durationUnitsRu.h)}`,
+      suffix: L("left", durationUnitsRu.left),
+    };
   const days = Math.floor(hours / 24);
-  return { value: `${days}d`, suffix: "left" };
+  return { value: `${days}${L("d", durationUnitsRu.d)}`, suffix: L("left", durationUnitsRu.left) };
 }
 
 export function formatRelativeTimeUntilLabel(isoDate: string): string {
@@ -261,16 +308,24 @@ export function formatExpiresInLabel(isoDate: string, nowMs: number = Date.now()
   const date = parseTimestampDate(isoDate);
   if (!date) return "";
   const diffMs = date.getTime() - nowMs;
-  if (diffMs <= 0) return "Expired";
+  // ru-code: bilingual duration-unit seams (durationUnitsRu map)
+  if (diffMs <= 0) return L("Expired", durationUnitsRu.expired);
 
   const totalSeconds = Math.floor(diffMs / 1000);
-  if (totalSeconds < 5) return "Expires in a moment";
-  if (totalSeconds < 60) return `Expires in ${totalSeconds}s`;
+  const expiresIn = L("Expires in", durationUnitsRu.expiresIn);
+  const s = L("s", durationUnitsRu.s);
+  const m = L("m", durationUnitsRu.m);
+  const h = L("h", durationUnitsRu.h);
+  const d = L("d", durationUnitsRu.d);
+  if (totalSeconds < 5) return L("Expires in a moment", durationUnitsRu.expiresInAMoment);
+  if (totalSeconds < 60) return `${expiresIn} ${totalSeconds}${s}`;
 
   if (totalSeconds < 3600) {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
-    return seconds === 0 ? `Expires in ${minutes}m` : `Expires in ${minutes}m ${seconds}s`;
+    return seconds === 0
+      ? `${expiresIn} ${minutes}${m}`
+      : `${expiresIn} ${minutes}${m} ${seconds}${s}`;
   }
 
   if (totalSeconds < 86_400) {
@@ -278,22 +333,24 @@ export function formatExpiresInLabel(isoDate: string, nowMs: number = Date.now()
     const rem = totalSeconds % 3600;
     const minutes = Math.floor(rem / 60);
     const seconds = rem % 60;
-    const parts = [`${hours}h`];
-    if (minutes > 0) parts.push(`${minutes}m`);
-    if (seconds > 0) parts.push(`${seconds}s`);
-    return `Expires in ${parts.join(" ")}`;
+    const parts = [`${hours}${h}`];
+    if (minutes > 0) parts.push(`${minutes}${m}`);
+    if (seconds > 0) parts.push(`${seconds}${s}`);
+    return `${expiresIn} ${parts.join(" ")}`;
   }
 
   const days = Math.floor(totalSeconds / 86_400);
   const remAfterDays = totalSeconds % 86_400;
-  if (remAfterDays === 0) return `Expires in ${days}d`;
+  if (remAfterDays === 0) return `${expiresIn} ${days}${d}`;
   const hours = Math.floor(remAfterDays / 3600);
   const rem = remAfterDays % 3600;
   const minutes = Math.floor(rem / 60);
   const seconds = rem % 60;
   const tail: string[] = [];
-  if (hours > 0) tail.push(`${hours}h`);
-  if (minutes > 0) tail.push(`${minutes}m`);
-  if (seconds > 0) tail.push(`${seconds}s`);
-  return tail.length > 0 ? `Expires in ${days}d ${tail.join(" ")}` : `Expires in ${days}d`;
+  if (hours > 0) tail.push(`${hours}${h}`);
+  if (minutes > 0) tail.push(`${minutes}${m}`);
+  if (seconds > 0) tail.push(`${seconds}${s}`);
+  return tail.length > 0
+    ? `${expiresIn} ${days}${d} ${tail.join(" ")}`
+    : `${expiresIn} ${days}${d}`;
 }

@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - install-flow: drives the real installer over a PTY.
 // ru-code: THE MATRIX. Runs every flow-affecting combination through the real bash installer under a
 // PTY (truecolor), ASSERTS each case's terminal STATE + the exact recommendation set it must show,
-// and — as a side effect on every run — writes a colored gallery to <repoRoot>/install-cards.html so
+// and — as a side effect on every run — writes a colored gallery to <repoRoot>/SPECS/e2e-runs/terminal-cards/install-cards.html so
 // the whole surface can be eyeballed. The interacting core is node×git×cli (3×3×5 = 45); the rest are
 // orthogonal singles (crash / rc / starter / update / already-installed / uninstall).
 import * as NodeFS from "node:fs";
@@ -414,8 +414,14 @@ it("matrix: every install combination renders + asserts, and writes install-card
   });
 
   // Always write the gallery (even on failures — the FAIL badges show which cards broke).
-  const dest = NodePath.resolve(INSTALL_SCRIPT, "..", "install-cards.html");
+  const dest = NodePath.resolve(
+    INSTALL_SCRIPT,
+    "..",
+    "SPECS/e2e-runs/terminal-cards",
+    "install-cards.html",
+  );
   try {
+    NodeFS.mkdirSync(NodePath.dirname(dest), { recursive: true });
     NodeFS.writeFileSync(dest, buildGalleryPage(panels));
   } catch {
     /* best-effort artifact */

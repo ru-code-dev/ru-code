@@ -31,7 +31,8 @@ test("a token-free fresh browser reaches the app, and survives a cookie wipe", a
   // ru-code: re-anchored off the default sidebar's "New project" affordance —
   // `sidebar-add-project-trigger` only exists on LegacySidebar (A31/A37 drift,
   // not S; see WORKFLOW/briefs/12-porter.md dispatch, 2026-08-16).
-  const appShell = page.getByRole("button", { name: "New project" }).first();
+  // ru-code: bilingual — the shipped bundle localizes this label.
+  const appShell = page.getByRole("button", { name: /New project|Новый проект/ }).first();
 
   // 1. Plain URL, no token fragment, empty storage: the app must come up
   //    authenticated — never the /pair screen — and the silent exchange must

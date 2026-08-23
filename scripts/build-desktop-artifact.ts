@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
+// @effect-diagnostics multipleCatchTag:off -- ru-code: pristine upstream file; style-only suggestion noise
 
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";

@@ -220,18 +220,20 @@ type AddProjectCloneFlow =
       readonly remoteUrl: string;
     };
 
+// ru-code[HEAVY]: only local + Git URL; provider-hosted sources commented out
 const REMOTE_PROJECT_SOURCES: ReadonlyArray<AddProjectRemoteSource> = [
   "url",
-  "github",
-  "gitlab",
-  "bitbucket",
-  "azure-devops",
+  // "github",
+  // "gitlab",
+  // "bitbucket",
+  // "azure-devops",
 ];
+// ru-code[HEAVY]: provider-hosted sources commented out (see REMOTE_PROJECT_SOURCES above)
 const REMOTE_PROJECT_PROVIDER_SOURCES: ReadonlyArray<AddProjectRemoteProviderKind> = [
-  "github",
-  "gitlab",
-  "bitbucket",
-  "azure-devops",
+  // "github",
+  // "gitlab",
+  // "bitbucket",
+  // "azure-devops",
 ];
 
 function remoteProjectSourceLabel(source: AddProjectRemoteSource): string {

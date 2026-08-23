@@ -74,7 +74,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { isElectron } from "../env";
-import { GlobalPanelNav } from "../ru-code/skills-agents/rightGlobalPanel";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -158,7 +157,7 @@ import {
 import {
   resolveSnoozePresets,
   snoozeWakeDescription,
-  snoozeWakeLabel,
+  translatedSnoozeWakeLabel,
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -175,13 +174,7 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
-import {
-  SidebarContent,
-  SidebarGroup,
-  SidebarMenu,
-  SidebarMenuButton,
-  useSidebar,
-} from "./ui/sidebar";
+import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -192,7 +185,7 @@ import {
   type ComposerThreadDraftState,
   type DraftSessionState,
 } from "../composerDraftStore";
-import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
+import { L, Lp, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -260,7 +253,13 @@ function WorkingDuration(props: { startedAt: string | null }) {
 }
 
 function terminalProcessLabel(count: number): string {
-  return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
+  // ru-code: bilingual plural seam (Lp) — English has only a 2-way singular/plural split, but
+  // Russian needs a 3-form (one/few/many) agreement the build transform cannot synthesize.
+  return `${count} ${Lp(
+    count,
+    ["terminal process running", "terminal processes running"],
+    ["процесс терминала работает", "процесса терминала работают", "процессов терминала работают"],
+  )}`;
 }
 
 function SidebarThreadTooltip({
@@ -496,7 +495,13 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   const preview =
     promptPreview.length > 0
       ? promptPreview
-      : `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`;
+      : // ru-code: bilingual plural seam (Lp) — same 2-way-English/3-form-Russian gap as
+        // terminalProcessLabel above
+        `${attachmentCount} ${Lp(
+          attachmentCount,
+          ["attachment", "attachments"],
+          ["вложение", "вложения", "вложений"],
+        )}`;
   const handleActivate = useCallback(() => onNavigate(draftId), [draftId, onNavigate]);
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
@@ -2896,10 +2901,22 @@ export default function Sidebar() {
                 title:
                   failedCount > 0
                     ? `Snoozed ${snoozedCount} of ${selectedThreads.length} threads`
-                    : `Snoozed ${snoozedCount} thread${snoozedCount === 1 ? "" : "s"}`,
+                    : // ru-code: bilingual count-safe seam — "Отложено диалогов: N" sidesteps
+                      // Russian noun-count agreement (English's 2-way "thread/threads" ternary
+                      // has no clean Russian equivalent per count); same invariant shape used
+                      // in the description branch below
+                      L(
+                        `Snoozed ${snoozedCount} thread${snoozedCount === 1 ? "" : "s"}`,
+                        `Отложено диалогов: ${snoozedCount}`,
+                      ),
                 description:
                   failedCount > 0
-                    ? `${failedCount} thread${failedCount === 1 ? "" : "s"} couldn't be snoozed.`
+                    ? // ru-code: bilingual count-safe seam — same invariant-phrase approach as
+                      // the title above
+                      L(
+                        `${failedCount} thread${failedCount === 1 ? "" : "s"} couldn't be snoozed.`,
+                        `Не удалось отложить диалогов: ${failedCount}.`,
+                      )
                     : undefined,
                 timeout: 5_000,
                 actionProps: {
@@ -3574,12 +3591,7 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
-        {/* ru-code: skills/agents global-panel nav — sits between Поиск and Проекты. */}
-        <SidebarGroup className="px-2 pt-1 pb-1">
-          <SidebarMenu>
-            <GlobalPanelNav />
-          </SidebarMenu>
-        </SidebarGroup>
+        {/* ru-code: skills/agents global-panel nav moved to SidebarChromeFooter */}
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
@@ -3698,7 +3710,8 @@ export default function Sidebar() {
                         sortable={sortable}
                         snoozeWakeLabelText={
                           section === "snoozed" && thread.snoozedUntil != null
-                            ? snoozeWakeLabel(thread.snoozedUntil, {
+                            ? // ru-code: translated wrapper, see Sidebar.snooze.ts
+                              translatedSnoozeWakeLabel(thread.snoozedUntil, {
                                 now: new Date().toISOString(),
                               })
                             : null

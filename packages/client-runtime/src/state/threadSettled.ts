@@ -305,8 +305,11 @@ export interface SnoozePreset {
   readonly snoozedUntil: string;
 }
 
-function snoozeTimeOfDayLabel(date: Date): string {
-  return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+// ru-code: `locale` is a plain optional string, not the @ru-code/localization `Locale` type —
+// this package must not depend on @ru-code/localization (R1); the app-side caller
+// (Sidebar.snooze.ts) threads its own getLocale() result through this parameter.
+function snoozeTimeOfDayLabel(date: Date, locale?: string): string {
+  return date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
 }
 
 function snoozeAtHour(base: Date, hour: number): Date {
@@ -329,14 +332,16 @@ function addSnoozeDays(base: Date, days: number): Date {
  * appears while it is meaningfully before evening; after that the calendar
  * choices start at "Tomorrow".
  */
-export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
+// ru-code: `locale` threaded through (see snoozeTimeOfDayLabel above) — no
+// @ru-code/localization dependency added to this package.
+export function resolveSnoozePresets(now: Date, locale?: string): ReadonlyArray<SnoozePreset> {
   const inAnHour = new Date(now.getTime() + HOUR_MS);
   const inThreeHours = new Date(now.getTime() + 3 * HOUR_MS);
   const presets: SnoozePreset[] = [
     {
       id: "hour",
       label: "In 1 hour",
-      whenLabel: snoozeTimeOfDayLabel(inAnHour),
+      whenLabel: snoozeTimeOfDayLabel(inAnHour, locale),
       snoozedUntil: inAnHour.toISOString(),
     },
     {
@@ -352,7 +357,7 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
     presets.push({
       id: "evening",
       label: "This evening",
-      whenLabel: snoozeTimeOfDayLabel(evening),
+      whenLabel: snoozeTimeOfDayLabel(evening, locale),
       snoozedUntil: evening.toISOString(),
     });
   }
@@ -361,7 +366,7 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
   presets.push({
     id: "tomorrow",
     label: "Tomorrow",
-    whenLabel: snoozeTimeOfDayLabel(tomorrow),
+    whenLabel: snoozeTimeOfDayLabel(tomorrow, locale),
     snoozedUntil: tomorrow.toISOString(),
   });
 
@@ -370,7 +375,7 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
   presets.push({
     id: "next-week",
     label: "Next week",
-    whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${snoozeTimeOfDayLabel(nextWeek)}`,
+    whenLabel: `${nextWeek.toLocaleDateString(locale, { weekday: "short" })} ${snoozeTimeOfDayLabel(nextWeek, locale)}`,
     snoozedUntil: nextWeek.toISOString(),
   });
 

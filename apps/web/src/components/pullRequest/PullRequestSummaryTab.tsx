@@ -1,3 +1,4 @@
+// oxlint-disable react/no-array-index-key -- ru-code: pristine upstream file; style-only lint noise
 import type {
   EnvironmentId,
   PullRequestActor,

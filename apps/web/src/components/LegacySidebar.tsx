@@ -73,7 +73,6 @@ import {
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { isElectron } from "../env";
-import { GlobalPanelNav } from "../ru-code/skills-agents/rightGlobalPanel";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform } from "../lib/utils";
@@ -2896,12 +2895,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       }
     >
-      {/* ru-code: skills/agents global-panel nav — sits between Поиск and Проекты. */}
-      <SidebarGroup className="px-2 pt-1 pb-1">
-        <SidebarMenu>
-          <GlobalPanelNav />
-        </SidebarMenu>
-      </SidebarGroup>
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
         <SidebarGroup className="px-2 pt-2 pb-0">
           <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">

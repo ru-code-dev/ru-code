@@ -324,15 +324,19 @@ describe("serverSettings helpers", () => {
       automaticGitFetchInterval: Duration.seconds(15),
     });
 
+    // ru-code: the base profile here is whatever the fork DEFAULTS to, and that default is
+    // `battery-saver` (DEFAULT_BACKGROUND_ACTIVITY_PROFILE, contracts/settings.ts —
+    // «ru-code[HEAVY]: economy default»). The case is about a legacy interval patch becoming
+    // a custom override on top of the default base, not about which preset the default is.
     expect(next.backgroundActivity).toEqual({
       schemaVersion: 1,
       profile: "custom",
-      baseProfile: "balanced",
+      baseProfile: "battery-saver",
       overrides: {
         automaticGitFetchInterval: Duration.seconds(15),
       },
     });
-    expect(resolveServerBackgroundActivitySettings(next).profile).toBe("balanced");
+    expect(resolveServerBackgroundActivitySettings(next).profile).toBe("battery-saver");
     expect(
       Duration.toMillis(resolveServerBackgroundActivitySettings(next).automaticGitFetchInterval),
     ).toBe(15_000);
@@ -417,19 +421,22 @@ describe("serverSettings helpers", () => {
     const custom = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       automaticGitFetchInterval: Duration.seconds(15),
     });
-    // ru-code: Balanced's automaticGitFetchInterval is 0 (background fetch off by
-    // default, boot-performance.md / decisions row for auto-update); the value that
-    // now "matches the preset" is 0, not the pre-fork 30s default.
+    // ru-code: the fork's DEFAULT profile is `battery-saver`, whose
+    // automaticGitFetchInterval is 0 (background fetch off by default, boot-performance.md /
+    // decisions row for auto-update); the value that now "matches the preset" is 0, not the
+    // pre-fork 30s default. Reconciliation therefore collapses back to that same default
+    // preset — the case pins «override equal to the base ⇒ no override left», not a
+    // particular preset name.
     const next = applyServerSettingsPatch(custom, {
       automaticGitFetchInterval: Duration.seconds(0),
     });
 
     expect(next.backgroundActivity).toEqual({
       schemaVersion: 1,
-      profile: "balanced",
+      profile: "battery-saver",
       overrides: {},
     });
-    expect(next.backgroundActivityProfile).toBe("balanced");
+    expect(next.backgroundActivityProfile).toBe("battery-saver");
     expect(Duration.toMillis(next.automaticGitFetchInterval)).toBe(0);
   });
 

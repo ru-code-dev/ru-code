@@ -92,16 +92,18 @@ export function agoRu(epochMs: number, now: number): string {
   return `${day} ${Lp(day, ["day", "days"], ["день", "дня", "дней"])} ${L("ago", "назад")}`;
 }
 
-/** "now" / "in 40 min" / "in 6 h" / "in 7 d" — for the next scheduled check. */
+/** "now" / "in 40 minutes" / "in 6 hours" / "in 7 days" — for the next scheduled check. */
 export function inRu(epochMs: number, now: number): string {
   const delta = epochMs - now;
-  if (delta <= 30_000) return "now";
+  if (delta <= 30_000) return L("now", "сейчас");
   const min = Math.round(delta / MINUTE);
-  if (delta < HOUR) return `in ${min} min`;
+  if (delta < HOUR)
+    return `${L("in", "через")} ${min} ${Lp(min, ["minute", "minutes"], ["минуту", "минуты", "минут"])}`;
   const hr = Math.round(delta / HOUR);
-  if (delta < DAY) return `in ${hr} h`;
+  if (delta < DAY)
+    return `${L("in", "через")} ${hr} ${Lp(hr, ["hour", "hours"], ["час", "часа", "часов"])}`;
   const day = Math.round(delta / DAY);
-  return `in ${day} d`;
+  return `${L("in", "через")} ${day} ${Lp(day, ["day", "days"], ["день", "дня", "дней"])}`;
 }
 
 /** "Just now" / "Today, 09:14" / "Yesterday, 21:14" / "21 July, 21:14". */

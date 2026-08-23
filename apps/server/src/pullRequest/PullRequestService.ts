@@ -1,3 +1,4 @@
+// oxlint-disable unicorn/prefer-set-has -- ru-code: pristine upstream file; style-only lint noise
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";

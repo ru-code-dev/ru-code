@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { type SlowRpcAckRequest, useSlowRpcAckRequests } from "../rpc/requestLatencyState";
 import { toastManager } from "./ui/toast";
-import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
+import { L, getLocale, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 function describeSlowRequests(requests: ReadonlyArray<SlowRpcAckRequest>): string {
   const count = requests.length;
@@ -28,7 +28,8 @@ function SlowRequestDetails({ requests }: { requests: ReadonlyArray<SlowRpcAckRe
         >
           <div className="wrap-break-word font-medium text-foreground">{request.tag}</div>
           <div className="mt-0.5 text-[10px] opacity-75">
-            Started {new Date(request.startedAt).toLocaleTimeString()}
+            {/* ru-code: locale-aware toLocaleTimeString instead of undefined */}
+            Started {new Date(request.startedAt).toLocaleTimeString(getLocale())}
           </div>
         </li>
       ))}

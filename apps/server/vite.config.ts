@@ -22,52 +22,20 @@ import packageJson from "./package.json" with { type: "json" };
 // for them, and localization would throw ERR_UNKNOWN_FILE_EXTENSION on node 22);
 // `shouldBundleCliDependency` returns true for both, since neither appears in
 // CLI_EXTERNAL_PACKAGE_PREFIXES. Verified by executing the predicate per package.
+//
+// ru-code: @smart-tools/* MUST stay inlined too. Dev-linked, they resolve `effect` from their
+// own worktree when external, so a thin build loads TWO effect instances: effect 4.0.0-beta.103
+// then loses a schema's transforms across instances (TrimmedString yields "", every isNonEmpty
+// rejects) — seen as an empty MCP catalog and a corrupted ws handshake. `shouldBundleCliDependency`
+// returns true for them today because no @smart-tools prefix is exempted; adding one would
+// re-break this. (The single instance itself comes from `.pnpmfile.cjs` installing them as
+// `file:`, one dependency tree — if that ever reverts to `link:`, re-check this.)
 import {
   isExternalCliDependency,
   shouldBundleCliDependency,
 } from "../../scripts/lib/cli-external-packages.ts";
 
 export { shouldBundleCliDependency };
-
-// ru-code: the ONLY deps that cannot be inlined into cli.js — native N-API
-// modules (they load a platform `.node`) plus the Bun runtime builtins. In the
-// release bundle everything else (effect, provider SDKs, shiki, react-dom, …) is
-// bundled INTO cli.js; these ship as prebuilt node_modules (see prepare-release).
-const RELEASE_NATIVE_PACKAGES = [
-  "node-pty",
-  "@ff-labs/fff-node",
-  "ffi-rs",
-  "msgpackr-extract",
-  "bufferutil",
-  "utf-8-validate",
-];
-
-export function isReleaseExternal(id: string): boolean {
-  if (id === "bun" || id.startsWith("bun:")) return true;
-  return RELEASE_NATIVE_PACKAGES.some((name) => id === name || id.startsWith(`${name}/`));
-}
-
-// External matchers for the release bundle: the natives (+ subpaths) and Bun
-// builtins. Everything else is force-bundled via alwaysBundle.
-const RELEASE_NEVER_BUNDLE: RegExp[] = [
-  /^bun(:|$)/,
-  ...RELEASE_NATIVE_PACKAGES.map(
-    (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|$)`),
-  ),
-];
-
-// prepare-release sets RU_CODE_RELEASE_BUNDLE=1 → self-contained cli.js: bundle
-// every JS dep, externalize only the natives + Bun builtins. Default build keeps
-// the normal (thin) externalization for dev / desktop / npx.
-const releaseBundle = process.env.RU_CODE_RELEASE_BUNDLE === "1";
-
-// Release: bundle EVERY JS dep into cli.js (alwaysBundle everything that is not a
-// native / Bun builtin); the natives stay external and ship as prebuilt
-// node_modules (see prepare-release). Default: thin externalization for dev /
-// desktop / npx. Same `deps` shape vite-plus honors in both branches.
-const packDeps = releaseBundle
-  ? { alwaysBundle: /[\s\S]/, neverBundle: RELEASE_NEVER_BUNDLE, onlyBundle: false as const }
-  : { alwaysBundle: shouldBundleCliDependency, onlyBundle: false as const };
 
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
@@ -77,12 +45,6 @@ export default mergeConfig(
   defineConfig({
     // ru-code: inject Russian translations into server display strings at build time.
     plugins: [ruCodeLocalizationPlugin()],
-    resolve: {
-      // ru-code: the dev-link (`ru-code-packages` symlink + .pnpmfile.cjs → `link:` deps)
-      // makes linked @smart-tools packages resolve `effect` from THEIR repo's node_modules —
-      // dedupe forces the host's single (patched) copy in dev/test/bundle alike.
-      dedupe: ["effect"],
-    },
     run: {
       tasks: {
         build: {

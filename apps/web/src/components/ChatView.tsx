@@ -31,6 +31,8 @@ import {
   deriveRevertTurnCountByUserMessageId,
   deriveTurnDiffSummaryByAssistantMessageId,
 } from "../ru-code/chat/turnDiffAttachment"; // ru-code
+import { THREAD_SETTLE_STATE_LABEL_RU } from "../ru-code/chat/threadSettleStateLabels"; // ru-code
+import { L, Lp } from "@ru-code/localization"; // ru-code: bilingual plural/structural seams
 // ru-code: single-source default provider/model constants.
 import { DEFAULT_PROVIDER_INSTANCE_ID, QWEN_KIND } from "@ru-code/branding";
 import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashCommands"; // ru-code
@@ -4559,7 +4561,13 @@ function ChatViewContent(props: ChatViewProps) {
       ),
       title: working
         ? liveCount > 0
-          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working in the background`
+          ? // ru-code: bilingual plural seam (Lp) — English 2-way ternary has no clean 3-form
+            // Russian equivalent per count
+            `${liveCount} ${Lp(
+              liveCount,
+              ["agent working in the background", "agents working in the background"],
+              ["агент работает в фоне", "агента работают в фоне", "агентов работают в фоне"],
+            )}`
           : "Background work running"
         : "Monitoring in the background",
       actions: (
@@ -4609,11 +4617,18 @@ function ChatViewContent(props: ChatViewProps) {
       return null;
     }
     const isSnoozed = activeThreadSnoozed;
+    // ru-code: bilingual seam — settled/snoozed state word via THREAD_SETTLE_STATE_LABEL_RU,
+    // mirroring the THREAD_STATUS_LABEL_RU convention (Sidebar.logic.ts). Kept OUTSIDE the
+    // template literal below (not `L(...)` inline in the interpolation) so the sentence itself
+    // stays a plain, dict-auto-bound `tpl` unit: "This thread is {0}" -> "Диалог {0}".
+    const settleStateWord = isSnoozed
+      ? L("snoozed", THREAD_SETTLE_STATE_LABEL_RU.snoozed)
+      : L("settled", THREAD_SETTLE_STATE_LABEL_RU.settled);
     return {
       id: `thread-${isSnoozed ? "snoozed" : "settled"}:${activeThread?.id ?? "unknown"}`,
       variant: "info",
       icon: isSnoozed ? <AlarmClockIcon /> : <CheckCircle2Icon />,
-      title: `This thread is ${isSnoozed ? "snoozed" : "settled"}`,
+      title: `This thread is ${settleStateWord}`,
       description: isSnoozed
         ? "Sending a message wakes it and moves it back to Active in the sidebar."
         : "Sending a message moves it back to Active in the sidebar.",
@@ -4681,7 +4696,10 @@ function ChatViewContent(props: ChatViewProps) {
         icon: <GitBranchIcon />,
         title: (
           <span className="flex min-w-0 items-baseline gap-1.5">
-            <span className="shrink-0 font-normal text-muted-foreground">Branch changed — was</span>
+            <span className="shrink-0 font-normal text-muted-foreground">
+              {/* ru-code: bilingual fragment seam (round 12) */}
+              {L("Branch changed — was", "Ветка изменилась — была")}
+            </span>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -4691,8 +4709,12 @@ function ChatViewContent(props: ChatViewProps) {
                 }
               />
               <TooltipPopup side="top" className="max-w-80">
-                This thread last ran on {localCheckoutBranchMismatch.threadBranch}. Sending will
-                continue on {localCheckoutBranchMismatch.currentBranch}.
+                {/* ru-code: bilingual fragment seams (round 12) — {0}/{1} below are the JSX
+                    children (branch names), not template slots */}
+                {L("This thread last ran on", "Последний запуск на")}{" "}
+                {localCheckoutBranchMismatch.threadBranch}
+                {L(". Sending will continue on", ". Отправка продолжится на")}{" "}
+                {localCheckoutBranchMismatch.currentBranch}.
               </TooltipPopup>
             </Tooltip>
           </span>
@@ -6839,7 +6861,8 @@ function ChatViewContent(props: ChatViewProps) {
               <AlertDialogPopup>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    Switch to{" "}
+                    {/* ru-code: bilingual fragment seam (round 12) */}
+                    {L("Switch to", "Переключиться на")}{" "}
                     <code className="font-medium">
                       {localCheckoutBranchMismatch?.threadBranch ?? ""}
                     </code>

@@ -43,7 +43,8 @@ async function openFreshThread(page: Page): Promise<void> {
   });
   await page
     .locator('[data-testid="sidebar-row-card"], [data-testid="sidebar-row-slim"]')
-    .filter({ hasText: "New thread" })
+    // ru-code: bilingual — the shipped bundle localizes this row.
+    .filter({ hasText: /New thread|Новый поток/ })
     .first()
     .click();
   await expect(page.locator(COMPOSER).first()).toBeVisible({ timeout: 20_000 });
@@ -97,7 +98,11 @@ async function switchToExtended(page: Page): Promise<void> {
   // extended view shows its own empty state) — asserted after the first send.
 }
 
-async function send(page: Page, text: string): Promise<void> {
+async function send(
+  page: Page,
+  text: string,
+  options?: { readonly beforeEnter?: () => Promise<void> },
+): Promise<void> {
   const input = page.locator(COMPOSER).first();
   // VERIFY-BEFORE-ENTER: under CPU throttle the click's focus can land AFTER
   // the keystrokes start — characters silently go to <body> and Enter sends
@@ -115,6 +120,11 @@ async function send(page: Page, text: string): Promise<void> {
     }
   }
   await expect(input).toContainText(text.slice(-12), { timeout: 5_000 });
+  // Fires once, immediately before the FIRST Enter keypress below — never
+  // before a retry — so a caller that starts the scroll recorder here gets
+  // the narrowest possible pre-send window (structural fix, case5-verdict.md
+  // optional hardening).
+  await options?.beforeEnter?.();
   // VERIFY-AFTER-ENTER: a successful send CLEARS the composer. Under throttle
   // the app can still be settling the previous turn when Enter lands and
   // swallows it — the text stays put; re-press until the composer empties.
@@ -276,6 +286,55 @@ async function waitForTimelineQuiet(page: Page): Promise<void> {
   });
 }
 
+/** STRENGTHENED settle gate for post-reload restores (case 5 only — see
+ *  WORKFLOW/current/analyses/case5-verdict.md). Resolves once the recorder's
+ *  target node held the same `scrollTop` AND `scrollHeight`, with no new
+ *  traced scroll-writer call, for 30 consecutive rAF polls. `scrollHeight` is
+ *  the causal signal (LegendList's post-restore `scrollAdjust` fires because
+ *  content size changed); the writer-count clause observes the app's scroll
+ *  COMMANDS directly rather than their side effects. Byte-proven from the
+ *  failing trace: `waitForTimelineQuiet`'s 12-frame threshold resolves INSIDE
+ *  the 251ms gap between the mount-settle burst and the restore's `scrollBy`
+ *  burst, so it would not have closed this race — 30 frames plus the two extra
+ *  clauses clears it with ~1.8s margin. Node resolution mirrors
+ *  `__startScrollRecorder` (fixtures.ts) exactly so the gate and the recorder
+ *  agree on the element. */
+async function waitForScrollSettled(page: Page): Promise<void> {
+  await page.waitForFunction(
+    (timelineSelector) => {
+      const w = window as unknown as {
+        __settleProbe?: { top: number; height: number; writers: number; frames: number };
+        __scrollWriters?: unknown[];
+      };
+      const host = document.querySelector(timelineSelector);
+      const node = (host?.querySelector('[data-testid="extended-chat-scroller"]') ??
+        host?.querySelector('[class*="overscroll-y-contain"]') ??
+        host) as HTMLElement | null;
+      if (!node) return false;
+      const top = node.scrollTop;
+      const height = node.scrollHeight;
+      const writers = w.__scrollWriters?.length ?? 0;
+      if (
+        w.__settleProbe !== undefined &&
+        w.__settleProbe.top === top &&
+        w.__settleProbe.height === height &&
+        w.__settleProbe.writers === writers
+      ) {
+        w.__settleProbe.frames += 1;
+      } else {
+        w.__settleProbe = { top, height, writers, frames: 0 };
+      }
+      return w.__settleProbe.frames >= 30;
+    },
+    TIMELINE,
+    // OWNER-SET FAIL-FAST CONTRACT: settle must be quick — worst measured ~1.2s.
+    { timeout: 2_000, polling: "raf" },
+  );
+  await page.evaluate(() => {
+    delete (window as unknown as { __settleProbe?: unknown }).__settleProbe;
+  });
+}
+
 async function waitForScrollStable(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
@@ -302,11 +361,17 @@ async function instrumentedSend(
   response: string,
   label: string,
 ): Promise<SendEvidence> {
-  await page.evaluate((selector) => window.__startScrollRecorder?.(selector), TIMELINE);
   // Realistic CLI latency — the user's live repro runs against a 2-5s CLI and
   // the jerk shows between the send and the response records landing.
   writeFakeControl(state(), { delayMs: 1_200, responseText: response });
-  await send(page, text);
+  // Recorder starts in send()'s beforeEnter hook, immediately before the first
+  // Enter keypress — the measured window IS the send window (case5-verdict.md
+  // optional hardening: structural cure for the whole instrumentedSend class).
+  await send(page, text, {
+    beforeEnter: async () => {
+      await page.evaluate((selector) => window.__startScrollRecorder?.(selector), TIMELINE);
+    },
+  });
   // Upper bound only (resolves the moment it renders) — generous enough for a
   // 10×-throttled commit; the INSTANT-render guarantee is case 2's assertion.
   const bubble = page.locator(TIMELINE).getByText(text);
@@ -556,6 +621,15 @@ test("case 5: F5 → the next send still scrolls (user repro)", async ({ page })
     timeout: 10_000,
   });
   await expect(page.locator(TIMELINE)).toBeVisible({ timeout: 10_000 });
+  // POST-RELOAD SETTLE GATE (case5-verdict.md): LegendList re-measures the
+  // restored rows and issues compensating scrollBy calls AFTER the timeline
+  // mounts but BEFORE this point; gate on the restored turn's content, then on
+  // scroll quiet, so the recorder's window in instrumentedSend opens only once
+  // that restore transient is over — never a wall-clock sleep.
+  await expect(page.locator(TIMELINE).getByText("вопрос до перезагрузки")).toBeVisible({
+    timeout: 10_000,
+  });
+  await waitForScrollSettled(page);
   const evidence = await instrumentedSend(
     page,
     "вопрос после F5 — скролл обязан работать",

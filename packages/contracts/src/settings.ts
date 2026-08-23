@@ -642,7 +642,7 @@ export const BackgroundActivityProfile = Schema.Literals([
   "battery-saver",
 ]);
 export type BackgroundActivityProfile = typeof BackgroundActivityProfile.Type;
-export const DEFAULT_BACKGROUND_ACTIVITY_PROFILE: BackgroundActivityProfile = "balanced";
+export const DEFAULT_BACKGROUND_ACTIVITY_PROFILE: BackgroundActivityProfile = "battery-saver"; // ru-code[HEAVY]: economy default
 
 export const BackgroundActivityProfileSelection = Schema.Literals([
   "balanced",
@@ -805,10 +805,10 @@ export const ServerSettings = Schema.Struct({
     // Auto-recheck intervals (minutes; 0 = that transport never auto re-checks).
     // Per transport — local stdio re-spawns are heavier than remote calls.
     recheckLocalMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
-      Schema.withDecodingDefault(Effect.succeed(30)),
+      Schema.withDecodingDefault(Effect.succeed(0)), // ru-code[HEAVY]: default 0 (check once)
     ),
     recheckRemoteMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
-      Schema.withDecodingDefault(Effect.succeed(30)),
+      Schema.withDecodingDefault(Effect.succeed(0)), // ru-code[HEAVY]: default 0 (check once)
     ),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // ru-code: preview toggles. Port scanning spawns child processes on a poll loop, which

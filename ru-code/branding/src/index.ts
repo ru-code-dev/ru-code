@@ -79,7 +79,7 @@ export const releaseTarballName = (version: string): string => `${APP_COMMAND}-$
 // dictionary, so until every patch has landed it necessarily overshoots the partial
 // source tree and the gate would fail on translations that are merely early, not wrong.
 // Flip to `true` only once the series is complete.
-export const FAIL_ON_LOCALIZATION_ERROR = false;
+export const FAIL_ON_LOCALIZATION_ERROR = true;
 
 /**
  * CREATE_STARTER_PROJECT — when `true`, the server registers the pre-made

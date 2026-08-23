@@ -1,3 +1,4 @@
+// oxlint-disable unicorn/no-useless-fallback-in-spread -- ru-code: pristine upstream file; style-only lint noise
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";

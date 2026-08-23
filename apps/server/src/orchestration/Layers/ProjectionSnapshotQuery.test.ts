@@ -2406,6 +2406,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       const detailWithPinnedRequests = yield* snapshotQuery.getThreadDetailById(threadW);
       assert.equal(detailWithPinnedRequests._tag, "Some");
       if (detailWithPinnedRequests._tag === "Some") {
+        // oxlint-disable-next-line unicorn/prefer-set-has -- ru-code: preexisting upstream line; style-only lint noise
         const ids = detailWithPinnedRequests.value.activities.map((activity) => activity.id);
         assert.equal(detailWithPinnedRequests.value.activities.length, 503);
         assert.equal(ids.includes(asEventId("approval-old")), true);
@@ -2419,6 +2420,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       });
       assert.equal(windowWithPinnedRequests._tag, "Some");
       if (windowWithPinnedRequests._tag === "Some") {
+        // oxlint-disable-next-line unicorn/prefer-set-has -- ru-code: preexisting upstream line; style-only lint noise
         const ids = windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id);
         assert.equal(windowWithPinnedRequests.value.thread.activities.length, 503);
         assert.equal(ids.includes(asEventId("approval-old")), true);

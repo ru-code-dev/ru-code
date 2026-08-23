@@ -625,12 +625,19 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         backgroundActivity: {
           schemaVersion: 1,
           profile: "custom",
-          baseProfile: "balanced",
+          // ru-code: the fork DEFAULTS to `battery-saver`
+          // (DEFAULT_BACKGROUND_ACTIVITY_PROFILE — «ru-code[HEAVY]: economy default»), so a
+          // legacy interval patch lands as a custom override on THAT base.
+          baseProfile: "battery-saver",
           overrides: {
             automaticGitFetchInterval: 10_000,
           },
         },
         automaticGitFetchInterval: 10_000,
+        // ru-code: battery-saver's providerHealthRefreshInterval is 15 min while the legacy
+        // default constant is 5 min, so the resolved value is no longer the legacy default
+        // and this writer — which persists exactly the non-default settings — writes it.
+        providerHealthRefreshInterval: 900_000,
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );

@@ -1,3 +1,4 @@
+// @effect-diagnostics unnecessaryFailYieldableError:off -- ru-code: pristine upstream file; style-only suggestion noise
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

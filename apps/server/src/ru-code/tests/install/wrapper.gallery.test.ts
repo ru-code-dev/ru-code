@@ -2,7 +2,7 @@
 // ru-code: THE WRAPPER GALLERY. `<appRoot>/cli.js` — the FROZEN launcher every user and every script
 // actually runs — is the last thing standing between a broken install and a blank terminal. This
 // file executes the REAL emitted source (`makeWrapperSource`, unmodified) against fixture layouts,
-// asserts what it prints in each failure mode, and writes <repoRoot>/wrapper-cards.html so the five
+// asserts what it prints in each failure mode, and writes <repoRoot>/SPECS/e2e-runs/terminal-cards/wrapper-cards.html so the five
 // terminal states can be eyeballed the same way the installer cards are.
 //
 // Runs under a PTY (`script`), because the wrapper's palette is TTY-gated: captured any other way
@@ -189,8 +189,14 @@ it("wrapper: the frozen launcher's five boot states render + assert, and write w
       panels.push({ label: c.label, ok: reason === null, html: ansiToHtml(runs[i]!.raw) });
     });
 
-    const dest = NodePath.resolve(INSTALL_SCRIPT, "..", "wrapper-cards.html");
+    const dest = NodePath.resolve(
+      INSTALL_SCRIPT,
+      "..",
+      "SPECS/e2e-runs/terminal-cards",
+      "wrapper-cards.html",
+    );
     try {
+      NodeFS.mkdirSync(NodePath.dirname(dest), { recursive: true });
       NodeFS.writeFileSync(dest, buildGalleryPage(panels, "Wrapper cards"));
     } catch {
       /* best-effort artifact */

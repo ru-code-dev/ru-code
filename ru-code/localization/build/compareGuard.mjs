@@ -226,6 +226,7 @@ export function runCompareGuard() {
     }
     const rel = NodePath.relative(REPO_ROOT, file);
     const isTest = /\.test\.|(^|\/)tests?\//.test(rel);
+    if (isTest) continue;
     const lines = src.split("\n");
     for (let ln = 0; ln < lines.length; ln++) {
       const line = lines[ln];
@@ -264,27 +265,26 @@ export function runCompareGuard() {
         const expr = normalizeExpr(c.expr);
         const key = `${rel} | ${expr}`;
         const tier = match === "substring-of" || isPhrase(value) ? "REAL" : "WORD";
-        violations.push({ rel, line: ln + 1, expr, key, value, match, tier, isTest, ...info });
+        violations.push({ rel, line: ln + 1, expr, key, value, match, tier, ...info });
       }
     }
   }
 
-  const active = violations.filter((v) => !v.isTest && !allow.has(v.key));
+  const active = violations.filter((v) => !allow.has(v.key));
   return {
     violations,
     active,
-    allowlisted: violations.filter((v) => !v.isTest && allow.has(v.key)),
-    tests: violations.filter((v) => v.isTest),
+    allowlisted: violations.filter((v) => allow.has(v.key)),
   };
 }
 
 // ---- CLI / build integration ----------------------------------------------
-export function report({ active, allowlisted, tests }) {
+export function report({ active, allowlisted }) {
   const real = active.filter((v) => v.tier === "REAL");
   const word = active.filter((v) => v.tier === "WORD");
   const lines = [];
   lines.push(
-    `compare-guard: ${active.length} unresolved (${real.length} REAL phrase/substring, ${word.length} single-word), ${allowlisted.length} allowlisted, ${tests.length} in tests (advisory)`,
+    `compare-guard: ${active.length} unresolved (${real.length} REAL phrase/substring, ${word.length} single-word), ${allowlisted.length} allowlisted`,
   );
   lines.push("");
   const emit = (title, list) => {
@@ -306,13 +306,6 @@ export function report({ active, allowlisted, tests }) {
     );
   if (word.length)
     emit("SINGLE-WORD — allowlist if it is a stable enum/tag/DOM value, else fix", word);
-  if (tests.length) {
-    lines.push(
-      `########## TESTS — advisory (asserting localized text; not build-failing) ##########`,
-    );
-    for (const v of tests) lines.push(`  ${v.rel}:${v.line}  ${v.expr}`);
-    lines.push("");
-  }
   return lines.join("\n");
 }
 

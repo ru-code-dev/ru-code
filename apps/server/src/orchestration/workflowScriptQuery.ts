@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off unnecessaryFailYieldableError:off
 /**
  * Read-only access to persisted workflow scripts for the Agents surface's
  * "{} script" affordance.

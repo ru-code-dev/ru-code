@@ -1,3 +1,4 @@
+// oxlint-disable unicorn/prefer-set-has -- ru-code: pristine upstream file; style-only lint noise
 import type {
   PullRequestActor,
   PullRequestCheck,

@@ -1,9 +1,12 @@
 import {
   ArrowLeftIcon,
-  ChartNoAxesColumnIcon,
+  // ru-code: parked together with the Usage button in the footer below — restore = uncomment
+  // ChartNoAxesColumnIcon,
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
+// ru-code: the fork's single footer seam (auto-update pill + feature rows).
+import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
 import { APP_NAME } from "@ru-code/branding"; // ru-code
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -31,8 +34,6 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
-// ru-code: auto-update availability pill.
-import { SidebarAutoUpdatePill } from "../../ru-code/auto-update-ui/notify/SidebarAutoUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -135,12 +136,13 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
-  const handleUsageClick = useCallback(() => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({ to: "/usage" });
-  }, [isMobile, navigate, setOpenMobile]);
+  // ru-code: parked with the Usage button in the footer below — restore = uncomment
+  // const handleUsageClick = useCallback(() => {
+  //   if (isMobile) {
+  //     setOpenMobile(false);
+  //   }
+  //   void navigate({ to: "/usage" });
+  // }, [isMobile, navigate, setOpenMobile]);
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
@@ -151,8 +153,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
-      {/* ru-code: auto-update availability pill (mirrors the provider pill). */}
-      <SidebarAutoUpdatePill />
+      <RuCodeFeaturesMenu /> {/* ru-code */}
       <SidebarMenu className="flex-row items-center">
         {currentFooterPage ? (
           <SidebarMenuItem className="min-w-0 flex-1">
@@ -197,6 +198,9 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 </Tooltip>
               </SidebarMenuItem>
             ) : null}
+            {/* ru-code: Usage parked, not deleted — restore = delete this comment wrapper (and
+                uncomment `ChartNoAxesColumnIcon` in the lucide import and `handleUsageClick`
+                above). The /usage route itself is untouched (apps/web/src/routes/usage.tsx:5).
             <SidebarMenuItem className="shrink-0">
               <Tooltip>
                 <TooltipTrigger
@@ -209,6 +213,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 <TooltipPopup side="top">Usage</TooltipPopup>
               </Tooltip>
             </SidebarMenuItem>
+            */}
           </>
         )}
         <SidebarUpdatePill />

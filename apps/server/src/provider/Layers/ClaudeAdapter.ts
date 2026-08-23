@@ -1,3 +1,4 @@
+// oxlint-disable unicorn/no-useless-spread -- ru-code: pristine upstream file; style-only lint noise
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
  *

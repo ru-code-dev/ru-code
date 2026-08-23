@@ -1,4 +1,4 @@
-// ru-code: globalSetup — boots the REAL app (server + web via scripts/dev-runner.ts)
+// ru-code: globalSetup — builds the app and boots the REAL built bundle (apps/server/dist/bin.mjs)
 // with the fake ACP as the qwen CLI and a fully isolated HOME/T3CODE_HOME. The
 // resolved web URL + pids land in .artifacts/harness-state.json for the specs.
 //
@@ -29,13 +29,73 @@ const FAKE_ACP_ENTRY = NodePath.join(
 );
 // ru-code: the mock WEB update source the auto-update specs drive (see mockUpdateServer.ts).
 const MOCK_UPDATE_ENTRY = NodePath.join(import.meta.dirname, "mockUpdateServer.ts");
+// ru-code: the BUILT server bundle, by ABSOLUTE path — the teardown sweep matches process
+// command lines scoped to THIS worktree, and a relative argv never matches (the pattern was
+// dead). The suite drives the artifact the app actually ships (`vp pack` output), not the
+// dev runner: dev runs the server as raw `node --watch src/bin.ts`, so nothing dedupes the
+// dev-linked @smart-tools packages' own `effect` copy and TWO effect instances load in one
+// process — under effect 4.0.0-beta.103 a schema built by one and decoded by the other loses
+// its transforms (empty MCP catalog). The bundle resolves one instance via
+// apps/server/vite.config.ts `bundledPackagePrefixes`, and it is what the owner smoke-tests.
+const BUILT_APP_ENTRY = NodePath.join(REPO_ROOT, "apps/server/dist/bin.mjs");
 
 const BOOT_TIMEOUT_MS = 240_000;
-// Any port — the fetch-until-200 probe below is the real readiness gate.
-const WEB_URL_PATTERN = /https?:\/\/localhost:(\d+)/;
-// ru-code: the dev-runner logs `serverPort=<n>` — the SERVER (not the vite web
-// port) is where /healthz lives; the auto-update specs fetch it there.
-const SERVER_PORT_PATTERN = /serverPort=(\d+)/;
+
+// ── WARMUP BUDGET ─────────────────────────────────────────────────────────────────────
+//
+// A boot that DIES is cheap to diagnose; a boot that HANGS used to cost the full timeout and
+// then said only «never served», with the real cause sitting in a log nobody was told to
+// read. Twice this suite sat for minutes on a wedged boot.
+//
+// So each warmup wait — the app serving its URL — gets a HARD
+// 20 s budget, and the clock starts at the process's FIRST OUTPUT, not at spawn: the app's
+// ~30 s build is silent by design and must never count against it. Blown budget ⇒ throw
+// immediately, naming what stalled and quoting the last line it managed to write. Not a
+// heuristic and not something a human watches: the harness cannot hang past it.
+const WARMUP_BUDGET_MS = 20_000;
+
+function lastLineOf(path: string): string {
+  try {
+    const lines = NodeFS.readFileSync(path, "utf8").trimEnd().split("\n");
+    return lines[lines.length - 1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** What a warmup wait remembers between polls: when its log first spoke, and last changed. */
+interface WarmupClock {
+  readonly firstOutputAt: number;
+  readonly mtimeMs: number;
+}
+
+/**
+ * Enforces the warmup budget. The clock starts at the log's FIRST byte — before that there is
+ * nothing to judge (the app's silent build) and the caller's own deadline still applies.
+ * Once it has spoken, the process has `WARMUP_BUDGET_MS` to finish warming up; blowing it
+ * throws here rather than letting the caller wait out a multi-minute deadline.
+ */
+function assertWithinWarmupBudget(
+  logPath: string,
+  what: string,
+  clock: WarmupClock | null,
+): WarmupClock | null {
+  let mtimeMs: number;
+  try {
+    mtimeMs = NodeFS.statSync(logPath).mtimeMs;
+  } catch {
+    return clock; // not spoken yet — the budget has not started.
+  }
+  const now = Date.now();
+  if (clock === null) return { firstOutputAt: now, mtimeMs };
+  const elapsed = now - clock.firstOutputAt;
+  if (elapsed < WARMUP_BUDGET_MS) return { firstOutputAt: clock.firstOutputAt, mtimeMs };
+  throw new Error(
+    `${what} did not finish warming up within ${String(Math.round(WARMUP_BUDGET_MS / 1000))}s ` +
+      `(${String(Math.round(elapsed / 1000))}s elapsed since its first output). ` +
+      `Last line: ${JSON.stringify(lastLineOf(logPath))}. Full log: ${logPath}`,
+  );
+}
 // ru-code: the version the mock update source advertises — strictly newer than the
 // baked apps/server package.json version so `checkNow` yields an `available` hero.
 const NEWER_VERSION = "999.0.0";
@@ -50,7 +110,9 @@ export interface HarnessState {
   readonly projectCwd: string;
   readonly transcriptFile: string;
   // ── ru-code: auto-update harness facts ──────────────────────────────────────
-  /** Origin of the SERVER process (where /healthz lives) — distinct from webUrl (vite). */
+  /** Origin of the SERVER process (where /healthz lives). The built app serves the web bundle
+   *  from that same origin, so this equals `webUrl`; both are kept because the specs read them
+   *  by meaning, and a future split boot would diverge them again. */
   readonly serverUrl: string;
   /** The sandbox install layout root (RU_CODE_APP_ROOT); the install spec asserts current.json/journal here. */
   readonly appRoot: string;
@@ -72,13 +134,15 @@ const sanitizeCwd = (cwd: string): string => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 export default async function bootApp(): Promise<void> {
   NodeFS.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
-  // Vite's dep-optimizer hash is lockfile-keyed, NOT content-keyed — a rebuilt
-  // @smart-tools package dist (or a patched node_modules dep) would be served
-  // STALE from the cache. Every boot starts from a clean optimizer cache.
-  NodeFS.rmSync(NodePath.join(REPO_ROOT, "apps/web/node_modules/.vite"), {
-    recursive: true,
-    force: true,
-  });
+  // A state file that survived the previous run describes processes THIS run does not
+  // own. Reclaim what is still alive, then drop the files: from here on the
+  // only state on disk is this boot's.
+  reclaimPreviousRun();
+
+  // The suite drives the BUILT app, so every run rebuilds it first: a stale `dist` would test
+  // yesterday's code and report it as today's. `pnpm build` covers the web bundle the server
+  // serves and the server bundle itself.
+  buildApp();
 
   const tmpRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ru-code-e2e-"));
   const homeDir = NodePath.join(tmpRoot, "home");
@@ -138,15 +202,27 @@ export default async function bootApp(): Promise<void> {
     RU_CODE_UPDATE_TEST_NO_RELAUNCH: "1",
   };
 
+  // ONE port, chosen here: the built app serves the web bundle itself, so there is no second
+  // (vite) port and nothing to scrape out of the boot log — the URL is known before the spawn.
+  const appPort = await reserveFreePort();
+  const appUrl = `http://localhost:${String(appPort)}`;
+
   const runner = NodeChildProcess.spawn(
     "node",
     [
-      "scripts/dev-runner.ts",
-      "dev",
+      // Absolute entry path: `reclaimStaleProcesses` matches a leaked server by this exact
+      // string in its argv (BUILT_APP_ENTRY needle), so the spawn must use the same form.
+      BUILT_APP_ENTRY,
+      "start",
+      // The bundle daemonizes by default; the harness owns this child's lifetime and reads
+      // its stdout, so it must stay in the foreground.
+      "--foreground",
       "--no-browser",
       "--auto-bootstrap-project-from-cwd",
+      "--port",
+      String(appPort),
       // ru-code e2e: per-boot server state — fresh DB => pristine bootstrap thread, no cross-run session bindings.
-      "--home-dir",
+      "--base-dir",
       NodePath.join(tmpRoot, "base"),
     ],
     { cwd: REPO_ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
@@ -163,32 +239,9 @@ export default async function bootApp(): Promise<void> {
   runner.stdout?.on("data", onChunk);
   runner.stderr?.on("data", onChunk);
 
-  const webUrl = await new Promise<string>((resolve, reject) => {
-    const startedAt = Date.now();
-    const poll = setInterval(() => {
-      const match = WEB_URL_PATTERN.exec(output);
-      if (match) {
-        clearInterval(poll);
-        resolve(match[0]);
-        return;
-      }
-      if (runner.exitCode !== null) {
-        clearInterval(poll);
-        reject(
-          new Error(
-            `dev runner exited (${runner.exitCode}) before a web URL appeared — see ${logPath}`,
-          ),
-        );
-        return;
-      }
-      if (Date.now() - startedAt > BOOT_TIMEOUT_MS) {
-        clearInterval(poll);
-        reject(new Error(`no web URL within ${BOOT_TIMEOUT_MS}ms — see ${logPath}`));
-      }
-    }, 250);
-  });
-
-  // Wait until the web dev server actually serves HTML.
+  // Wait until the app actually serves HTML on its own port. A dead child is reported as
+  // itself rather than as a timeout — an exited server never becomes ready.
+  const webUrl = appUrl;
   const deadline = Date.now() + BOOT_TIMEOUT_MS;
   for (;;) {
     try {
@@ -197,55 +250,45 @@ export default async function bootApp(): Promise<void> {
     } catch {
       // still starting
     }
+    if (runner.exitCode !== null) {
+      throw new Error(
+        `the app exited (${String(runner.exitCode)}) before serving — see ${logPath}`,
+      );
+    }
     if (Date.now() > deadline) {
-      throw new Error(`web server at ${webUrl} never became ready — see ${logPath}`);
+      throw new Error(`app at ${webUrl} never became ready — see ${logPath}`);
     }
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  // Pair once with the one-time token the runner prints; the session cookie
-  // lands in auth.json (playwright storageState) for every spec's context. The
-  // pairing line can lag behind web readiness (server boots slower than vite) —
-  // poll for it.
-  const pairingDeadline = Date.now() + BOOT_TIMEOUT_MS;
-  let pairingMatch: RegExpExecArray | null = null;
-  for (;;) {
-    pairingMatch = /pairingUrl:\s*(\S+)/.exec(output);
-    if (pairingMatch) break;
-    if (Date.now() > pairingDeadline) {
-      throw new Error(`no pairingUrl in runner output — see ${logPath}`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  // No pairing step: a loopback server auto-authenticates a fresh browser (the acceptance
+  // pinned by tests/localAutoAuth.e2e.test.ts), so the boot context reaches the app by
+  // visiting it. The storage state below is still captured — the specs need the environment
+  // registration in IndexedDB, not a session token.
   const { chromium } = await import("@playwright/test");
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    // RETRY the navigation until the app actually serves it. This boot wipes
-    // `apps/web/node_modules/.vite` on purpose (the dep-optimizer hash is lockfile-keyed, not
-    // content-keyed, so a rebuilt dist would otherwise be served stale), which means the first
-    // navigation of every run races a COLD dependency optimize. Vite does not answer until that
-    // finishes, and on a loaded machine it can outlast any single navigation timeout — one long
-    // `goto` then fails the entire run before a single spec has executed, with a timeout as the
-    // only clue.
-    //
-    // A retry loop waits for the FACT (the page was served) instead of betting on a duration: it
-    // returns the moment vite is ready, and its ceiling only has to exceed the worst cold optimize.
-    const navigationDeadline = Date.now() + 240_000;
+    // RETRY the navigation until the app actually serves it. The readiness probe above proves
+    // the HTTP listener answers; a first navigation can still land while the runtime is
+    // finishing startup, so wait for the FACT (the page was served) instead of betting on a
+    // single timeout.
+    const navigationDeadline = Date.now() + BOOT_TIMEOUT_MS;
+    let appWarmup: WarmupClock | null = null;
     for (;;) {
       const navigated = await page
-        .goto(pairingMatch[1]!, { timeout: 30_000 })
+        .goto(webUrl, { timeout: 30_000 })
         .then(() => true)
         .catch(() => false);
       if (navigated) break;
+      // Fail on the STALL, not on the deadline: a wedged app is diagnosed in ~20 s with its
+      // own last log line attached, instead of 4 minutes of silence and a generic message.
+      appWarmup = assertWithinWarmupBudget(logPath, `app boot (${webUrl})`, appWarmup);
       if (Date.now() > navigationDeadline) {
-        throw new Error(
-          `the web client never served ${pairingMatch[1]!} — see ${logPath} (vite dep optimize?)`,
-        );
+        throw new Error(`the app never served ${webUrl} — see ${logPath}`);
       }
     }
-    await page.waitForURL((url) => !url.pathname.startsWith("/pair"), { timeout: 60_000 });
     // WAIT FOR THE APP TO BE LIVE, then capture. This was a 2 s `waitForTimeout`, and what it
     // guards is the reason every spec in the run exists: if it under-waits, `auth.json` is
     // captured before the environment registration is written and every spec fails with «нет
@@ -294,10 +337,9 @@ export default async function bootApp(): Promise<void> {
     await browser.close();
   }
 
-  // ru-code: the SERVER port (where /healthz lives) — the dev-runner logs it well
-  // before vite prints the web URL, so it is already in `output` by now.
-  const serverPortMatch = SERVER_PORT_PATTERN.exec(output);
-  const serverUrl = serverPortMatch !== null ? `http://localhost:${serverPortMatch[1]}` : "";
+  // ru-code: the built app serves the web bundle and the API from ONE port, so the origin the
+  // auto-update specs fetch /healthz on is the same one the browser uses.
+  const serverUrl = webUrl;
 
   const state: HarnessState = {
     webUrl,
@@ -323,6 +365,119 @@ export default async function bootApp(): Promise<void> {
   runner.unref();
   runner.stdout?.unref?.();
   runner.stderr?.unref?.();
+}
+
+/**
+ * Rebuild the app the suite is about to drive. Synchronous on purpose: nothing may boot
+ * against a half-written `dist`. A failed build fails the run here, with the build's own
+ * output attached, rather than as an unexplained boot timeout.
+ */
+function buildApp(): void {
+  const startedAt = Date.now();
+  const build = NodeChildProcess.spawnSync("pnpm", ["build"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: process.env,
+  });
+  const buildLog = NodePath.join(ARTIFACTS_DIR, "app-build.log");
+  NodeFS.writeFileSync(buildLog, `${build.stdout ?? ""}${build.stderr ?? ""}`);
+  if (build.status !== 0) {
+    throw new Error(`the app build failed (status ${String(build.status)}) — see ${buildLog}`);
+  }
+  if (!NodeFS.existsSync(BUILT_APP_ENTRY)) {
+    throw new Error(`the build produced no ${BUILT_APP_ENTRY} — see ${buildLog}`);
+  }
+  console.log(`[boot] built the app in ${String(Date.now() - startedAt)}ms`);
+}
+
+/**
+ * Reserve a free TCP port by binding one and reading it back. The listener is closed before
+ * the app spawns; the window between close and bind is the same one every port-picking
+ * harness accepts, and a lost race surfaces as the app's own EADDRINUSE exit, not a hang.
+ */
+async function reserveFreePort(): Promise<number> {
+  const net = await import("node:net");
+  return await new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close(() => {
+          reject(new Error("could not reserve a port for the app"));
+        });
+        return;
+      }
+      const { port } = address;
+      server.close(() => {
+        resolve(port);
+      });
+    });
+  });
+}
+
+// ── ru-code: stale-state guard ─────────────────────────────────────────────────
+
+/** The pid files a previous run may have left behind, with the argv needle that proves a
+ *  pid is still the process that wrote it (pids are recycled). */
+interface StaleRecord {
+  readonly pid: number;
+  readonly needle: string;
+}
+
+/**
+ * Kill whatever a previous, un-torn-down run left running, then delete its state files.
+ * Only pids whose command line still matches the needle are signalled — a recycled pid
+ * belongs to somebody else and must never be touched.
+ */
+function reclaimPreviousRun(): void {
+  const stale: StaleRecord[] = [];
+  const read = (path: string): Record<string, unknown> | null => {
+    try {
+      return JSON.parse(NodeFS.readFileSync(path, "utf8")) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  };
+  const previous = read(STATE_FILE);
+  if (previous !== null) {
+    stale.push({ pid: Number(previous["mockServerPid"] ?? -1), needle: MOCK_UPDATE_ENTRY });
+    stale.push({ pid: Number(previous["runnerPid"] ?? -1), needle: BUILT_APP_ENTRY });
+  }
+  for (const record of stale) killIfStillOurs(record.pid, record.needle);
+  NodeFS.rmSync(STATE_FILE, { force: true });
+}
+
+/**
+ * SIGKILL a pid's process group, but only after `ps` confirms the process is still the
+ * one we started (its argv carries `needle`). If `ps` itself cannot be consulted the kill
+ * proceeds: a leaked server holding a hardcoded port is the worse failure, and the pid
+ * came from a file this harness wrote minutes ago.
+ */
+export function killIfStillOurs(pid: number, needle: string): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    const args = NodeChildProcess.execFileSync("ps", ["-p", String(pid), "-o", "args="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    // `ps` exits non-zero when the pid is gone, so reaching here with a non-matching
+    // command line means the pid was RECYCLED — leave it alone.
+    if (!args.includes(needle)) return;
+  } catch (error: unknown) {
+    // status is set when ps RAN and said "no such process"; anything else (ENOENT — no ps
+    // on this machine) leaves it undefined and the kill goes ahead.
+    if (typeof (error as { status?: unknown }).status === "number") return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
 }
 
 // ── ru-code: auto-update harness setup ─────────────────────────────────────────

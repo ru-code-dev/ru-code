@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - install-flow: drives the real installer over a PTY.
 // ru-code: THE LAUNCH GALLERY. The installer's FINAL step — starting the app it just installed — has
 // exactly four outcomes (§3.5), and this file runs all four through the real bash installer under a
-// PTY, asserts each banner, and writes <repoRoot>/launch-cards.html so they can be eyeballed side by
+// PTY, asserts each banner, and writes <repoRoot>/SPECS/e2e-runs/terminal-cards/launch-cards.html so they can be eyeballed side by
 // side. Deliberately SEPARATE from matrix.gallery.test.ts: `install-cards.html` stays a pure
 // installer-output matrix (its base env turns the launch off), this one is only about the launch.
 //
@@ -191,8 +191,14 @@ it("launch: the four launch states render + assert, and write launch-cards.html"
     panels.push({ label: c.label, ok: reason === null, html: ansiToHtml(runs[i]!.raw) });
   });
 
-  const dest = NodePath.resolve(INSTALL_SCRIPT, "..", "launch-cards.html");
+  const dest = NodePath.resolve(
+    INSTALL_SCRIPT,
+    "..",
+    "SPECS/e2e-runs/terminal-cards",
+    "launch-cards.html",
+  );
   try {
+    NodeFS.mkdirSync(NodePath.dirname(dest), { recursive: true });
     NodeFS.writeFileSync(dest, buildGalleryPage(panels, "Launch cards"));
   } catch {
     /* best-effort artifact */

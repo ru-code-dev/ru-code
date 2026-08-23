@@ -54,10 +54,12 @@ describe("agoRu", () => {
 
 describe("inRu", () => {
   it("maps representative future deltas", () => {
+    // ru-code (round 12): inRu's shape now matches agoRu's (full plural nouns, not
+    // abbreviations) — was "in 40 min" / "in 6 h" / "in 7 d".
     expect(inRu(NOW + 10_000, NOW)).toBe("now");
-    expect(inRu(NOW + 40 * MIN, NOW)).toBe("in 40 min");
-    expect(inRu(NOW + 6 * HOUR, NOW)).toBe("in 6 h");
-    expect(inRu(NOW + 7 * DAY, NOW)).toBe("in 7 d");
+    expect(inRu(NOW + 40 * MIN, NOW)).toBe("in 40 minutes");
+    expect(inRu(NOW + 6 * HOUR, NOW)).toBe("in 6 hours");
+    expect(inRu(NOW + 7 * DAY, NOW)).toBe("in 7 days");
   });
 });
 
@@ -386,7 +388,9 @@ describe("wireToUi — facts / schedule / history", () => {
     expect(ui.installDir).toBe("~/.ru-code/bin");
     expect(ui.entryPoint).toBe("~/.ru-code/bin/cli.js · pid 48213 · port 7777");
     expect(ui.address).toBe("127.0.0.1:7777");
-    expect(ui.nextCheckIn).toBe("in 6 h");
+    // ru-code (round 12): inRu's shape now matches agoRu's (full plural nouns, not
+    // abbreviations) — was "in 6 h".
+    expect(ui.nextCheckIn).toBe("in 6 hours");
     expect(ui.status).toEqual({ phase: "up-to-date", lastCheckedAgo: "2 hours ago" });
     expect(ui.history[0]?.detail).toBe("manifest.json · found v1.4.2");
     expect(ui.history[1]?.detail).toBe("git ls-remote · v1.4.1 — latest");

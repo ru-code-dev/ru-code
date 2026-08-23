@@ -1,3 +1,4 @@
+// oxlint-disable no-unused-vars -- ru-code: preexisting upstream lint noise (unused upstream import EnvironmentId)
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

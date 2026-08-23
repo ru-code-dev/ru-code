@@ -29,6 +29,7 @@ import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
+import { Lp } from "@ru-code/localization"; // ru-code: bilingual plural seam
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -567,14 +568,23 @@ export function AgentsPanel({
         </div>
       </ScrollArea>
       <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-[.7rem] text-muted-foreground">
+        {/* ru-code: bilingual plural seams (Lp) below — English collapses each counter to one
+            steady-state word, but Russian needs 3-form (one/few/many) agreement the build
+            transform cannot synthesize; see Sidebar.tsx's terminalProcessLabel for the same
+            pattern. */}
         <span className="flex items-center gap-2">
           {model.runningCount + model.waitingCount > 0 ? (
             <span className="text-info-foreground">
-              ● {model.runningCount + model.waitingCount} working
+              ●{" "}
+              {`${model.runningCount + model.waitingCount} ${Lp(model.runningCount + model.waitingCount, ["working", "working"], ["в работе", "в работе", "в работе"])}`}
             </span>
           ) : null}
-          {model.idleCount > 0 ? <span>{model.idleCount} idle</span> : null}
-          {model.settledCount > 0 ? <span>{model.settledCount} settled</span> : null}
+          {model.idleCount > 0 ? (
+            <span>{`${model.idleCount} ${Lp(model.idleCount, ["idle", "idle"], ["ожидает", "ожидают", "ожидают"])}`}</span>
+          ) : null}
+          {model.settledCount > 0 ? (
+            <span>{`${model.settledCount} ${Lp(model.settledCount, ["settled", "settled"], ["завершён", "завершены", "завершены"])}`}</span>
+          ) : null}
         </span>
         <span className="tabular-nums">Σ {formatSubagentTokenCount(model.totalTokens)} tok</span>
       </footer>

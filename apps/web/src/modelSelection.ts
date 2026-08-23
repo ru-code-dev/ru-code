@@ -134,8 +134,6 @@ function applyInstanceModelPreferences(
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
   builtInModelSlugs: ReadonlySet<string>,
-  // ru-code: default normalization provider from the single-source default-provider id (no codex).
-  provider: ProviderDriverKind = ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID),
 ): string[] {
   const normalizedModels: string[] = [];
   const seen = new Set<string>();

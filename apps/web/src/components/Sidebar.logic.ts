@@ -12,6 +12,7 @@ import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import { L, durationUnitsRu } from "@ru-code/localization"; // ru-code: bilingual duration-unit seam
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -641,10 +642,11 @@ export function resolveWorkingStartedAt(
 
 export function formatWorkingDurationLabel(elapsedMs: number): string {
   const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1000)) : 0;
-  if (seconds < 60) return `${seconds}s`;
+  // ru-code: bilingual duration-unit seams (durationUnitsRu map)
+  if (seconds < 60) return `${seconds}${L("s", durationUnitsRu.s)}`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  if (minutes < 60) return `${minutes}${L("m", durationUnitsRu.m)}`;
+  return `${Math.floor(minutes / 60)}${L("h", durationUnitsRu.h)} ${minutes % 60}${L("m", durationUnitsRu.m)}`;
 }
 
 export function resolveThreadStatusPill(input: {

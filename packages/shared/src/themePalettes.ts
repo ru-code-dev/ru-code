@@ -94,7 +94,7 @@ export type ThemeDefinition = Readonly<{
 
 export const T3_CHAT_THEME: ThemeDefinition = {
   id: "t3-chat",
-  label: "T3 Chat",
+  label: "Pink", // ru-code[HEAVY]: renamed from "T3 Chat"
   appearance: "light",
   colors: {
     canvas: "oklch(0.982446 0.010114 325.653)",

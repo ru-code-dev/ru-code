@@ -132,6 +132,14 @@ describe("background activity settings restore", () => {
       baseProfile: "battery-saver",
       overrides: {
         automaticGitFetchInterval,
+        // ru-code: materializing against `battery-saver` surfaces TWO overrides, not one.
+        // The fork's legacy default `providerHealthRefreshInterval` is 5 min
+        // (DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL, = `balanced`'s value) while
+        // battery-saver's preset is 15 min — so the legacy value differs from the target
+        // base and is correctly written down as an override. That is exactly what this
+        // case is named for: legacy advanced values are MATERIALIZED before the shared
+        // policy changes, so switching profiles never silently rewrites them.
+        providerHealthRefreshInterval: Duration.minutes(5),
       },
     });
   });

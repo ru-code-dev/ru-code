@@ -18,7 +18,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
-// ru-code: single-source default-provider instance id.
+// ru-code: single-source default-provider kind.
 import { QWEN_KIND } from "@ru-code/branding";
 import { buildComposerSlashCommandMenuItems } from "../../ru-code/slash-commands/composerSlashMenu"; // ru-code
 import { ComposerViewSwitcher } from "../../ru-code/extended-chat/extendedChatHost"; // ru-code

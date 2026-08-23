@@ -5,9 +5,6 @@ import { normalizeProjectPathForComparison } from "./lib/projectPaths";
 
 export const PERSISTED_STATE_KEY = `${APP_SCOPE}:ui-state:v1`;
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 1;
-// ru-code: upstream's `t3code:renderer-state` v4–v8 migration chain is dropped —
-// those installs never existed for this fork (new installs only).
-const LEGACY_PERSISTED_STATE_KEYS: ReadonlyArray<string> = [];
 
 export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;

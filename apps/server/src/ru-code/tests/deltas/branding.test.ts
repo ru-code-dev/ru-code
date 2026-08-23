@@ -6,6 +6,8 @@ import {
   AUTH_METHODS,
   AUTH_METHOD_IDS,
   asAuthMethodId,
+  CONTEXT_COMPACTION_TASK_PREFIX,
+  CONTEXT_COMPACTION_TASK_TYPE,
   PREFLIGHT_CLI_PROBE_DIRNAME,
   QWEN_KIND,
   CLI_PROFILES,
@@ -21,6 +23,22 @@ describe("@ru-code/branding — CLI kind + config dir", () => {
 
   it("PREFLIGHT_CLI_PROBE_DIRNAME is the .qwen preflight probe dir", () => {
     expect(PREFLIGHT_CLI_PROBE_DIRNAME).toBe(".qwen");
+  });
+});
+
+describe("@ru-code/branding — context-compaction wire identifiers", () => {
+  it("the taskId prefix is the persisted `context-compaction:` literal", () => {
+    expect(CONTEXT_COMPACTION_TASK_PREFIX).toBe("context-compaction:");
+  });
+
+  it("the taskType is `context_compaction` — the literal INERT_TASK_TYPES lists", () => {
+    expect(CONTEXT_COMPACTION_TASK_TYPE).toBe("context_compaction");
+  });
+
+  it("prefix and taskType are distinct identifiers (one keys rows, one classifies them)", () => {
+    // A single constant cannot serve both: the prefix must match `taskId.startsWith`,
+    // the taskType must be an exact member of a classification set.
+    expect(CONTEXT_COMPACTION_TASK_TYPE.startsWith(CONTEXT_COMPACTION_TASK_PREFIX)).toBe(false);
   });
 });
 

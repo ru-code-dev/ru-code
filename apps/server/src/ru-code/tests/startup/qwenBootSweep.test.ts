@@ -31,6 +31,7 @@ import {
 import {
   CANCELLED_APPROVAL_TEXT,
   CANCELLED_USER_INPUT_TEXT,
+  INTERRUPTED_AGENT_TEXT,
   INTERRUPTED_COMPACTION_TEXT,
   makeSweepThreadStateReader,
   planQwenBootSweepRows,
@@ -102,6 +103,63 @@ describe("planQwenBootSweepRows", () => {
       makeActivity("task.completed", { taskId: TASK_ID, status: "completed" }),
       makeActivity("approval.requested", { requestId: "req-a", requestKind: "command" }),
       makeActivity("approval.resolved", { requestId: "req-a" }),
+    ]);
+    expect(rows).toEqual([]);
+  });
+
+  // ru-code (P2 zombie settle, boot-sweep half): the dead-process complement to
+  // settleOpenSubAgentAsStopped (QwenAdapter.ts) — a hard kill (SIGKILL, power
+  // loss) never runs abortSession, so only the next boot's sweep can close the
+  // row. Classification reads the `agentKind` ingestion already stamped on the
+  // open row (the schema-widening's whole point): a background shell/monitor/
+  // compaction start must NOT be settled here.
+  const AGENT_TASK_ID = "call-agent-1";
+  it("closes a dangling open AGENT task with a stopped terminal row", () => {
+    const rows = planQwenBootSweepRows(THREAD_QWEN, [
+      makeActivity("task.started", {
+        taskId: AGENT_TASK_ID,
+        taskType: "subagent",
+        agentKind: "agent",
+      }),
+    ]);
+    expect(rows).toEqual([
+      {
+        threadId: THREAD_QWEN,
+        kind: "task.completed",
+        tone: "info",
+        summary: INTERRUPTED_AGENT_TEXT,
+        payload: { taskId: AGENT_TASK_ID, status: "stopped", detail: INTERRUPTED_AGENT_TEXT },
+      },
+    ]);
+  });
+
+  it("an agent whose task.started already has a terminal row needs no closing row", () => {
+    const rows = planQwenBootSweepRows(THREAD_QWEN, [
+      makeActivity("task.started", {
+        taskId: AGENT_TASK_ID,
+        taskType: "subagent",
+        agentKind: "agent",
+      }),
+      makeActivity("task.completed", {
+        taskId: AGENT_TASK_ID,
+        status: "completed",
+        agentKind: "agent",
+      }),
+    ]);
+    expect(rows).toEqual([]);
+  });
+
+  it("a background shell/monitor start is NEVER settled as an agent", () => {
+    const rows = planQwenBootSweepRows(THREAD_QWEN, [
+      // A background shell's task.started — agentKind stamped "background".
+      makeActivity("task.started", {
+        taskId: "shell-1",
+        taskType: "shell",
+        agentKind: "background",
+      }),
+      // An UNSTAMPED task.started — no agentKind at all (pre-P1 or a kind the
+      // sweep must not guess is an agent from taskId shape alone).
+      makeActivity("task.started", { taskId: "unstamped-1", taskType: "monitor" }),
     ]);
     expect(rows).toEqual([]);
   });

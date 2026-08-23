@@ -3,6 +3,8 @@
 // mobile button) consults the same signals; keeping the decision here means
 // a new blocking signal (e.g. the hidden context compaction) cannot be wired
 // into one entry point and silently forgotten in another.
+import { QWEN_KIND } from "@ru-code/branding";
+
 export interface ComposerSendGateInput {
   readonly isSendBusy: boolean;
   readonly isConnecting: boolean;
@@ -36,4 +38,40 @@ export function shouldBlockComposerSend(input: ComposerSendGateInput): boolean {
     input.noProviderAvailable === true ||
     input.threadDetailLoading === true
   );
+}
+
+/** Inputs of {@link isQwenRunningTurn}; all of them exist in ChatView already. */
+export interface QwenRunningTurnInput {
+  /** `activeProviderStatus?.driver` — the driver behind the active thread. */
+  readonly providerDriver: string | null | undefined;
+  /** `derivePhase(session)` — "running" is the streaming phase. */
+  readonly phase: string;
+  readonly pendingApprovalCount: number;
+  readonly pendingUserInputCount: number;
+  readonly hasPendingPlanApproval: boolean;
+}
+
+/**
+ * ru-code: the qwen-only "a turn is streaming" signal for
+ * {@link ComposerSendGateInput.isRunningTurn}.
+ *
+ * qwen has no steering: a prompt sent during a running turn ABORTS the in-flight
+ * one at the CLI, so Enter silently truncates the answer. Every other driver
+ * folds a mid-turn send into the running turn (Claude / OpenCode / Cursor / Grok
+ * all implement steering), so a blanket rule here would delete a real capability
+ * from four providers — hence the driver check, not a bare `phase === "running"`.
+ *
+ * Parked states are a deliberate exception: while a held approval, a plan
+ * approval or a user-input question is open, the session status is still
+ * "running" but nothing is streaming, and the send is what settles the parked
+ * Deferred server-side. Those keep Enter working.
+ */
+export function isQwenRunningTurn(input: QwenRunningTurnInput): boolean {
+  if (input.providerDriver !== QWEN_KIND) return false;
+  if (input.phase !== "running") return false;
+  const parkedOnUser =
+    input.pendingApprovalCount > 0 ||
+    input.pendingUserInputCount > 0 ||
+    input.hasPendingPlanApproval;
+  return !parkedOnUser;
 }

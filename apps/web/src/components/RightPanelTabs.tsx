@@ -1,4 +1,4 @@
-import { APP_NAME } from "@ru-code/branding"; // ru-code
+import { APP_NAME, PR_STATUS_LOOKUP_ENABLED } from "@ru-code/branding"; // ru-code
 import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
@@ -223,16 +223,22 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddDiff,
       badgeCount: 0,
     },
-    {
-      label: "Pull request",
-      description: "Open this branch's pull request.",
-      icon: GitPullRequest,
-      shortcut: "P",
-      available: props.pullRequestAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
-      onClick: props.onAddPullRequest,
-      badgeCount: 0,
-    },
+    // ru-code: PR status lookup kill switch (@ru-code/branding). Card removed entirely
+    // (not merely disabled) when the fork's automatic PR lookup is off, default OFF.
+    ...(PR_STATUS_LOOKUP_ENABLED
+      ? [
+          {
+            label: "Pull request",
+            description: "Open this branch's pull request.",
+            icon: GitPullRequest,
+            shortcut: "P",
+            available: props.pullRequestAvailable,
+            disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
+            onClick: props.onAddPullRequest,
+            badgeCount: 0,
+          },
+        ]
+      : []),
     {
       label: "Agents",
       description: "Follow subagents and workflows.",
@@ -743,14 +749,17 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <FileDiff />
                     Diff
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.pullRequestAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.pullRequest}
-                    onClick={props.onAddPullRequest}
-                  >
-                    <GitPullRequest />
-                    Pull request
-                  </SurfaceMenuItem>
+                  {/* ru-code: hidden entirely with the PR status lookup kill switch. */}
+                  {PR_STATUS_LOOKUP_ENABLED ? (
+                    <SurfaceMenuItem
+                      available={props.pullRequestAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.pullRequest}
+                      onClick={props.onAddPullRequest}
+                    >
+                      <GitPullRequest />
+                      Pull request
+                    </SurfaceMenuItem>
+                  ) : null}
                   <SurfaceMenuItem
                     available={props.agentsAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.agents}

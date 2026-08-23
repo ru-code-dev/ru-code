@@ -24,6 +24,7 @@ import {
   selectChangedFilePreview,
   summarizeChangedFileScopes,
 } from "./changedFilesPresentation";
+import { Lp } from "@ru-code/localization"; // ru-code: bilingual plural seam
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 
@@ -86,7 +87,15 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
             />
             <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-medium text-foreground text-xs leading-4">
               <span>
-                {files.length} changed file{files.length === 1 ? "" : "s"}
+                {/* ru-code: bilingual plural seam (Lp) — Russian noun agreement
+                    (файл/файла/файлов) the build transform cannot synthesize from JSX
+                    text + expr; Sidebar.tsx:255-262 shape. */}
+                {files.length}{" "}
+                {Lp(
+                  files.length,
+                  ["changed file", "changed files"],
+                  ["изменённый файл", "изменённых файла", "изменённых файлов"],
+                )}
               </span>
               {hasNonZeroStat(summaryStat) && (
                 <DiffStatLabel
@@ -200,7 +209,18 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
               className="rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => onExpandedChange(true)}
             >
-              Show all {files.length} files
+              {/* ru-code: bilingual plural seam (Lp) — full-phrase form; EN identity matches
+                  today's "Show all {n} files" for n>1 (n=1 corrected to singular "file"),
+                  Sidebar.tsx:255-262 shape. */}
+              {Lp(
+                files.length,
+                [`Show all ${files.length} file`, `Show all ${files.length} files`],
+                [
+                  `Показать весь ${files.length} файл`,
+                  `Показать все ${files.length} файла`,
+                  `Показать все ${files.length} файлов`,
+                ],
+              )}
             </button>
           </div>
         </div>

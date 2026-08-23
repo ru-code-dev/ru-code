@@ -30,6 +30,7 @@ import { orchestrationEnvironment } from "~/state/orchestration";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
 import { Lp } from "@ru-code/localization"; // ru-code: bilingual plural seam
+import { AgentRowExpander } from "~/ru-code/agents/AgentRowExpander"; // ru-code: per-agent expander seam
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -189,6 +190,16 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
       <span className="sr-only">{visuals.label}</span>
     </div>
   );
+}
+
+/**
+ * ru-code: the ONE seam every roster row goes through. `AgentRow` above is
+ * upstream and unchanged — it is handed in as the collapsed body, so its
+ * height invariant and its flat look survive; the zone component adds the
+ * unfold that renders the fold's otherwise-dead fields.
+ */
+function ExpandableAgentRow({ agent }: { agent: RuntimeSubagent }) {
+  return <AgentRowExpander agent={agent} row={<AgentRow agent={agent} />} />;
 }
 
 function workflowIsLive(group: AgentPanelWorkflowGroup): boolean {
@@ -369,7 +380,10 @@ function PhaseSection({
           </span>
         ) : null}
       </button>
-      {open ? phase.members.map((member) => <AgentRow key={member.id} agent={member} />) : null}
+      {/* ru-code: expander seam */}
+      {open
+        ? phase.members.map((member) => <ExpandableAgentRow key={member.id} agent={member} />)
+        : null}
     </div>
   );
 }
@@ -441,11 +455,12 @@ function ExpandedWorkflowSection({
       {group.phases.map((phase) => (
         <PhaseSection key={phase.index} phase={phase} defaultOpen={!workflowIsLive(group)} />
       ))}
+      {/* ru-code: expander seam */}
       {group.unphasedMembers.map((member) => (
-        <AgentRow key={member.id} agent={member} />
+        <ExpandableAgentRow key={member.id} agent={member} />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
-        <AgentRow agent={group.workflow} />
+        <ExpandableAgentRow agent={group.workflow} /> /* ru-code: expander seam */
       ) : null}
     </section>
   );
@@ -560,8 +575,9 @@ export function AgentsPanel({
               <div className="px-1.5 pt-1 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground">
                 Direct spawns
               </div>
+              {/* ru-code: expander seam */}
               {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
+                <ExpandableAgentRow key={agent.id} agent={agent} />
               ))}
             </section>
           ) : null}

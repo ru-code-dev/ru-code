@@ -6,7 +6,7 @@
  *   - the ONE morphing timeline row (collapse key + warning tone),
  *   - the "compression in progress" flag that blocks send / "Compact context".
  */
-import { CONTEXT_COMPACTION_TASK_PREFIX } from "@ru-code/branding";
+import { CONTEXT_COMPACTION_TASK_PREFIX, CONTEXT_COMPACTION_TASK_TYPE } from "@ru-code/branding";
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
 /** "Compacting context" — send-button tooltip while a compaction runs. */
@@ -65,6 +65,29 @@ export function shouldMorphCompactionPair(
     previousCollapseKey !== undefined &&
     previousCollapseKey === nextCollapseKey
   );
+}
+
+/**
+ * True for the compaction lifecycle's OWN task rows (`task.progress` /
+ * `task.completed` under a prefixed taskId, or carrying the adapter's
+ * `taskType` stamp — both rows carry both, so either identifies the row even
+ * if one field is ever dropped upstream).
+ *
+ * Why it exists: upstream ingestion stamps `title` on every `task.progress`
+ * payload, and the timeline's heading prefers `toolTitle` over `label`. On a
+ * morphing compaction row that pins the heading to «Идет сжатие контекста…»
+ * forever and demotes the outcome to a `- suffix`. Compaction rows REPLACE
+ * their text, so they must keep the label as their heading. Scoped strictly
+ * to compaction: every other task/tool row keeps its title untouched.
+ */
+export function isCompactionTaskRow(
+  activityKind: OrchestrationThreadActivity["kind"],
+  payload: Record<string, unknown> | null,
+): boolean {
+  if (activityKind !== "task.progress" && activityKind !== "task.completed") return false;
+  const taskId = payload?.["taskId"];
+  if (typeof taskId === "string" && taskId.startsWith(CONTEXT_COMPACTION_TASK_PREFIX)) return true;
+  return payload?.["taskType"] === CONTEXT_COMPACTION_TASK_TYPE;
 }
 
 /**

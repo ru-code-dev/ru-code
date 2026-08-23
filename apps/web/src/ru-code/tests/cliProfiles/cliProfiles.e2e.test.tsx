@@ -132,3 +132,68 @@ describe("brand profiles — e2e: server state → UI projection → rendered ic
     expect(byId(withAdded, "qwen").profile).toBe("custom");
   });
 });
+
+describe("brand profiles — e2e: thread row (sidebar / command palette) icon resolution", () => {
+  // ru-code: models the exact fix at Sidebar.tsx / CommandPalette.tsx — a thread
+  // row looks up its provider instance by id in a map built from the settings-
+  // overlaid projection (part B), then renders ProviderInstanceIcon with the
+  // entry's resolved `profile` (part A). Revert either half and these go red;
+  // see icon-identity-analysis.md §2.3's executed proof for why both are needed.
+  const threadRowMark = (
+    snaps: ServerProvider[],
+    cfg: Pick<ServerSettings, "providerInstances" | "providers">,
+    instanceId: string,
+  ): string => {
+    const byInstanceId = new Map(
+      project(snaps, cfg).map((entry) => [entry.instanceId as string, entry] as const),
+    );
+    const entry = byInstanceId.get(instanceId)!;
+    return renderToStaticMarkup(
+      <ProviderInstanceIcon
+        driverKind={entry.driverKind}
+        profile={entry.profile}
+        displayName={entry.displayName}
+      />,
+    );
+  };
+
+  it("a custom-fork thread row resolves the fork mark", () => {
+    const mark = threadRowMark(
+      [snapshot("qwen", "Custom Code"), snapshot("qwen_stock", "Qwen Code")],
+      settings({ qwen: envelope("custom"), qwen_stock: envelope("qwen") }),
+      "qwen",
+    );
+    expect(mark).toContain('data-cli-profile="custom"');
+  });
+
+  it("a stock-qwen thread row resolves the qwen mark", () => {
+    const mark = threadRowMark(
+      [snapshot("qwen", "Custom Code"), snapshot("qwen_stock", "Qwen Code")],
+      settings({ qwen: envelope("custom"), qwen_stock: envelope("qwen") }),
+      "qwen_stock",
+    );
+    expect(mark).toContain('data-cli-profile="qwen"');
+  });
+
+  it("a codex thread row still resolves OpenAI (the non-qwen invariant)", () => {
+    const codexSnapshot: ServerProvider = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex",
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    };
+    const mark = threadRowMark([codexSnapshot], settings({}), "codex");
+    // OpenAI's mark is the only one in the app using this viewBox; a non-qwen
+    // driver must never resolve through the brand-profile map.
+    expect(mark).toContain('viewBox="0 0 256 260"');
+    expect(mark).not.toContain("data-cli-profile");
+  });
+});

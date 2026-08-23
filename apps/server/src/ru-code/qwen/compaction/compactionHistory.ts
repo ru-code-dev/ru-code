@@ -125,6 +125,48 @@ export function findDanglingCompactionTaskIds(
   return [...openTaskIds];
 }
 
+// ru-code (P2 zombie settle, boot-sweep half): unlike compaction, a subagent
+// taskId carries no stamp-independent prefix (it is qwen's raw toolCallId) —
+// the ONLY handle is the `agentKind` ingestion already stamped onto the
+// persisted `task.started` row. So classification happens ONLY on the open
+// row; a close row is correlated by taskId alone (a close for a taskId this
+// pass never opened is a no-op set-delete, harmless).
+const subAgentTaskId = (activity: SweepActivityInput): string | null => {
+  if (
+    activity.kind !== "task.started" &&
+    activity.kind !== "task.updated" &&
+    activity.kind !== "task.completed"
+  ) {
+    return null;
+  }
+  const record = asRecord(activity.payload);
+  const taskId = record?.["taskId"];
+  if (typeof taskId !== "string") return null;
+  if (activity.kind === "task.started" && record?.["agentKind"] !== "agent") return null;
+  return taskId;
+};
+
+/**
+ * Real agent tasks (`agentKind: "agent"`, i.e. NOT a background shell,
+ * monitor, or compaction row) with a `task.started` but no terminal
+ * `task.completed` / `task.updated` — the dead-process half of the P2
+ * zombie-agent fix. `settleOpenSubAgentAsStopped` (QwenAdapter.ts) settles
+ * an agent open at a graceful/forced teardown; this settles one whose
+ * process never reached teardown at all (SIGKILL, power loss).
+ */
+export function findDanglingSubAgentTaskIds(
+  activities: ReadonlyArray<SweepActivityInput>,
+): ReadonlyArray<string> {
+  const openTaskIds = new Set<string>();
+  for (const activity of activities) {
+    const taskId = subAgentTaskId(activity);
+    if (taskId === null) continue;
+    if (activity.kind === "task.started") openTaskIds.add(taskId);
+    else openTaskIds.delete(taskId);
+  }
+  return [...openTaskIds];
+}
+
 const PARKED_REQUEST_LIFECYCLE: ReadonlyArray<{
   readonly kind: DanglingParkedRequest["kind"];
   readonly opened: string;
@@ -146,10 +188,14 @@ const PARKED_REQUEST_LIFECYCLE: ReadonlyArray<{
  * Every activity kind the dangling derivations above can react to — the boot
  * sweep's lean SQL filters on exactly this list, so it lives HERE, next to the
  * functions that define it (single source). `compactionTaskId` is kind-gated
- * to the first two entries; the rest are the parked-request open/close pairs.
+ * to `task.progress`/`task.completed`; `subAgentTaskId` additionally needs
+ * `task.started` (its open row) and `task.updated` (a possible terminal); the
+ * rest are the parked-request open/close pairs.
  */
 export const SWEEP_ACTIVITY_KINDS: ReadonlyArray<string> = [
+  "task.started",
   "task.progress",
+  "task.updated",
   "task.completed",
   ...PARKED_REQUEST_LIFECYCLE.flatMap((lifecycle) => [lifecycle.opened, ...lifecycle.closed]),
 ];

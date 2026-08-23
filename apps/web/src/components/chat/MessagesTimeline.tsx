@@ -124,7 +124,7 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
-import { L, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
+import { L, Lp, pluralRu } from "@ru-code/localization"; // ru-code: bilingual plural/structural seam
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -2169,15 +2169,41 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
   // stalled agents read as working; only settled states differentiate.
   const working = running + waiting;
   const dotClass = live ? "bg-info" : failed > 0 ? "bg-destructive" : "bg-success";
+  // ru-code: bilingual plural seam (Lp) — full-phrase forms; English keeps its 2-way
+  // singular/plural split (EN identity matches `Kicked off ${n} subagent${n===1?"":"s"}` /
+  // `Ran ${n} subagent${n===1?"":"s"}` at n=1/n>1), Russian needs one/few/many agreement
+  // the build transform cannot synthesize from a template literal (Sidebar.tsx:255-262 shape).
   const lead = live
-    ? `Kicked off ${agentCount} subagent${agentCount === 1 ? "" : "s"}`
-    : `Ran ${agentCount} subagent${agentCount === 1 ? "" : "s"}`;
+    ? Lp(
+        agentCount,
+        [`Kicked off ${agentCount} subagent`, `Kicked off ${agentCount} subagents`],
+        [
+          `Запущен ${agentCount} субагент`,
+          `Запущено ${agentCount} субагента`,
+          `Запущено ${agentCount} субагентов`,
+        ],
+      )
+    : Lp(
+        agentCount,
+        [`Ran ${agentCount} subagent`, `Ran ${agentCount} subagents`],
+        [
+          `Отработал ${agentCount} субагент`,
+          `Отработало ${agentCount} субагента`,
+          `Отработало ${agentCount} субагентов`,
+        ],
+      );
   const status = live
     ? livePhase
-      ? `${livePhase.title} · ${livePhase.activeCount} working`
+      ? // ru-code: bilingual plural seam (Lp) — "working" needs Russian verb agreement
+        // (работает/работают) the build transform cannot synthesize from a template literal.
+        `${livePhase.title} · ${livePhase.activeCount} ${Lp(livePhase.activeCount, ["working", "working"], ["работает", "работают", "работают"])}`
       : working > 0
-        ? `${working} working`
-        : "working"
+        ? // ru-code: bilingual plural seam (Lp) — same working-verb agreement as above.
+          `${working} ${Lp(working, ["working", "working"], ["работает", "работают", "работают"])}`
+        : // ru-code: bilingual dict seam (L, inline not dict-listed) — "working" is also a
+          // stable internal status/enum value across the codebase (compare-guard flags a
+          // dict entry for the bare word); keeping the pair inline avoids that collision.
+          L("working", "в работе")
     : failed > 0
       ? `${failed} failed`
       : "✓ completed";
@@ -2199,7 +2225,13 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
         {totalTokens > 0 ? (
           <span className="tabular-nums">Σ {formatSubagentTokenCount(totalTokens)}</span>
         ) : null}
-        <span className="text-info-foreground">{live ? "Open Agents ▸" : "View ▸"}</span>
+        <span className="text-info-foreground">
+          {/* ru-code: bilingual seams — live branch is a whole-phrase dict swap ("Open Agents ▸"
+              is unique enough not to collide with a status comparison); settled branch pairs
+              just the word via inline L (L, inline not dict-listed) and keeps the glyph literal
+              in the template. */}
+          {live ? "Open Agents ▸" : `${L("View", "Открыть")} ▸`}
+        </span>
       </span>
     </button>
   );

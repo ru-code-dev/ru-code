@@ -57,6 +57,7 @@ import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessio
 import {
   findDanglingCompactionTaskIds,
   findDanglingParkedRequests,
+  findDanglingSubAgentTaskIds,
   SWEEP_ACTIVITY_KINDS,
   type SweepActivityInput,
 } from "../qwen/compaction/compactionHistory.ts";
@@ -72,13 +73,20 @@ export interface QwenBootSweepRowSpec {
 export const INTERRUPTED_COMPACTION_TEXT = "Compaction interrupted by a server restart.";
 export const CANCELLED_APPROVAL_TEXT = "Approval request cancelled by a server restart.";
 export const CANCELLED_USER_INPUT_TEXT = "Question cancelled by a server restart.";
+// ru-code (P2 zombie settle, boot-sweep half): mirrors the adapter-side
+// settle's "Stopped by the user." detail — this is the dead-process case, so
+// the text says restart instead.
+export const INTERRUPTED_AGENT_TEXT = "Agent interrupted by a server restart.";
 
 /**
  * The whole sweep decision for one thread, pure: which closing rows its
  * history needs. Compaction closures reuse the morphing row's task pair
  * (`task.completed{stopped}` under the same taskId — the web merges it into
  * the spinner row and unblocks send); request closures reuse the exact kinds
- * the pending-panel derivations already treat as terminal.
+ * the pending-panel derivations already treat as terminal. Sub-agent closures
+ * (P2 zombie settle) are the boot-time complement to the adapter's teardown
+ * settle — an agent open when the process was SIGKILLed / lost power never
+ * ran `abortSession`, so only the next boot can close its row.
  */
 export function planQwenBootSweepRows(
   threadId: ThreadId,
@@ -92,6 +100,15 @@ export function planQwenBootSweepRows(
       tone: "info",
       summary: INTERRUPTED_COMPACTION_TEXT,
       payload: { taskId, status: "stopped", detail: INTERRUPTED_COMPACTION_TEXT },
+    });
+  }
+  for (const taskId of findDanglingSubAgentTaskIds(activities)) {
+    rows.push({
+      threadId,
+      kind: "task.completed",
+      tone: "info",
+      summary: INTERRUPTED_AGENT_TEXT,
+      payload: { taskId, status: "stopped", detail: INTERRUPTED_AGENT_TEXT },
     });
   }
   for (const request of findDanglingParkedRequests(activities)) {
@@ -214,6 +231,12 @@ const SweepActivityRowSchema = Schema.Struct({
   kind: Schema.String,
   taskId: Schema.NullOr(Schema.String),
   requestId: Schema.NullOr(Schema.String),
+  // ru-code (P2 zombie settle, boot-sweep half): `findDanglingSubAgentTaskIds`
+  // must only settle a `task.started` row ingestion already stamped
+  // `agentKind: "agent"` — without this column the sweep cannot tell a real
+  // agent's open row from a background shell/monitor/compaction row sharing
+  // the same kind, and would settle (and phantom-CTA) all of them.
+  agentKind: Schema.NullOr(Schema.String),
 });
 
 const toSweepReadError =
@@ -261,7 +284,8 @@ export const makeSweepThreadStateReader = (
         SELECT
           kind,
           json_extract(payload_json, '$.taskId') AS "taskId",
-          json_extract(payload_json, '$.requestId') AS "requestId"
+          json_extract(payload_json, '$.requestId') AS "requestId",
+          json_extract(payload_json, '$.agentKind') AS "agentKind"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
           AND ${sql.in("kind", SWEEP_ACTIVITY_KINDS)}
@@ -310,6 +334,7 @@ export const makeSweepThreadStateReader = (
           payload: {
             ...(row.taskId !== null ? { taskId: row.taskId } : {}),
             ...(row.requestId !== null ? { requestId: row.requestId } : {}),
+            ...(row.agentKind !== null ? { agentKind: row.agentKind } : {}),
           },
         })),
       } satisfies QwenSweepThreadState;

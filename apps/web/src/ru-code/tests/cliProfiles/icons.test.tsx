@@ -97,10 +97,12 @@ describe("ProviderInstanceIcon — profile-aware (e2e through the real hub compo
     expect(markup).toContain('data-cli-profile="qwen"');
   });
 
-  it("no profile → the kind mark (no cli-profile marker); non-qwen unaffected", () => {
+  it("no profile → qwen falls to the default-profile mark (never OpenAI); non-qwen unaffected", () => {
+    // ru-code: the kind-level fallback for qwen now wears the default-profile
+    // mark instead of a competitor's brand (OpenAI) — see providerIconUtils.ts:11.
     expect(
       renderToStaticMarkup(<ProviderInstanceIcon driverKind={QWEN} displayName="Qwen" />),
-    ).not.toContain("data-cli-profile");
+    ).toContain('data-cli-profile="custom"');
     expect(
       renderToStaticMarkup(<ProviderInstanceIcon driverKind={OPENCODE} displayName="OpenCode" />),
     ).not.toContain("data-cli-profile");

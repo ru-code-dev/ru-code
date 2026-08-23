@@ -1,6 +1,11 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
 import { ClaudeAI, CursorIcon, GrokIcon, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { PROVIDER_OPTIONS } from "../../session-logic";
+// ru-code: kind-level fallback for qwen must wear a qwen mark, not a competitor's
+// brand (OpenAI) — used by the three consumers that can never carry a profile
+// (e.g. the update toast). See icon-identity-analysis.md §4 option C.
+import { DEFAULT_CLI_PROFILE_ID } from "@ru-code/branding";
+import { iconForProfile } from "~/ru-code/cliProfiles/icons";
 
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("codex")]: OpenAI,
@@ -8,7 +13,8 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("opencode")]: OpenCodeIcon,
   [ProviderDriverKind.make("cursor")]: CursorIcon,
   [ProviderDriverKind.make("grok")]: GrokIcon,
-  [ProviderDriverKind.make("qwen")]: OpenAI, // ru-code: qwen uses OpenAI-compatible auth; reuse the OpenAI mark
+  // ru-code: default-profile mark (not OpenAI) — profile-less qwen still wears its own brand.
+  [ProviderDriverKind.make("qwen")]: iconForProfile(DEFAULT_CLI_PROFILE_ID),
 };
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {

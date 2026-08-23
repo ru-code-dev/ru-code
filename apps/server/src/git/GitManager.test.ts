@@ -5,6 +5,7 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { expect, vi } from "vite-plus/test";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -15,7 +16,6 @@ import * as PlatformError from "effect/PlatformError";
 import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { expect } from "vite-plus/test";
 import type {
   GitActionProgressEvent,
   GitPreparePullRequestThreadInput,
@@ -40,6 +40,20 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitManager from "./GitManager.ts";
+
+// ru-code: SEAM PREMISE FIX, not a feature test. This file's ~20 PR-lookup tests below
+// predate the fork's PR status lookup kill switch (@ru-code/branding
+// PR_STATUS_LOOKUP_ENABLED, default OFF) and assume the lookup always runs — that premise
+// is now broken by the kill switch defaulting off, which would make every one of them fail
+// for a reason unrelated to what they're actually checking. Forcing the const back to true
+// here restores the premise this upstream port file was written under, so it keeps testing
+// what it always tested. It intentionally adds no new cases (RULES 8.1); the kill switch's
+// own OFF-path pin lives in the fork's zone test:
+// apps/server/src/ru-code/tests/git/prStatusLookupGate.test.ts.
+vi.mock("@ru-code/branding", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@ru-code/branding")>()),
+  PR_STATUS_LOOKUP_ENABLED: true,
+}));
 
 interface FakeGhScenario {
   prListSequence?: string[];

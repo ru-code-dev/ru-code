@@ -8,7 +8,13 @@
  *
  * @module QwenAdapterLive
  */
-import { CONTEXT_COMPACTION_TASK_PREFIX, QWEN_KIND } from "@ru-code/branding";
+import {
+  CLI_ERROR_TASK_PREFIX,
+  CLI_ERROR_TASK_TYPE,
+  CONTEXT_COMPACTION_TASK_PREFIX,
+  CONTEXT_COMPACTION_TASK_TYPE,
+  QWEN_KIND,
+} from "@ru-code/branding";
 import {
   ApprovalRequestId,
   defaultInstanceIdForDriver,
@@ -23,6 +29,7 @@ import {
   type RuntimeMode,
   RuntimeRequestId,
   RuntimeTaskId,
+  type RuntimeTaskStatus, // ru-code (sub-agents): the row's waiting marker
   type ThreadId,
   TurnId,
   type UserInputQuestion,
@@ -85,6 +92,22 @@ import {
   mapAcpToAdapterError,
 } from "./acp/QwenAcpAdapterSupport.ts";
 import { type AcpSessionRuntimeShape } from "./acp/QwenAcpSessionRuntime.ts";
+// ru-code: qwen sub-agent attribution — reads the `_meta` qwen stamps on every
+// sub-agent frame and turns it into the canonical agent surface. See the module
+// header for why nothing in provider/acp/ needs to change.
+import {
+  appendQwenAgentText,
+  classifyQwenToolCallFrame,
+  formatQwenAgentPlanLine,
+  formatQwenAgentToolLine,
+  formatQwenAgentWaitingLine,
+  isQwenSubAgentFrame,
+  openQwenAgentWindow,
+  QWEN_SUBAGENT_TASK_TYPE,
+  type QwenAgentWindow,
+  takeQwenAgentLine,
+  withQwenAgentAttribution,
+} from "./acp/QwenAcpSubAgents.ts";
 // ru-code (warm engine): the warm CLI process pool — take at startSession,
 // refill after a successful bind (acp-process-pool §2.3). Extracted to the
 // external package (generic over the slot runtime; host supplies the spawn).
@@ -340,6 +363,15 @@ interface QwenSessionContext {
   // and stashes the outcome here instead; compactContext reads it after the
   // prompt settles to emit the timeline row / fail the call.
   hiddenCompressActive?: boolean;
+  // ru-code (sub-agents): the ONE root-agent window that can be open at a time
+  // (qwen awaits each `agent` tool call before starting the next —
+  // qwen-code Session.ts:353-359/:881). While it is set, every UNSTAMPED frame
+  // belongs to that child: text goes to the row's live line instead of the chat,
+  // the child's plan is parked on the row instead of replacing the parent's, and
+  // a permission prompt marks the row as waiting. Opened by AgentRootStarted,
+  // cleared by AgentRootSettled; a session that dies mid-window is swept by the
+  // client's sessionLive:false pass (subagentRuntime.ts:650-661).
+  subAgentWindow?: QwenAgentWindow | undefined;
   hiddenCompressOutcome?:
     | { readonly kind: "success"; readonly preTokens: number; readonly postTokens: number }
     | { readonly kind: "error"; readonly message: string }
@@ -840,6 +872,87 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
 
+    /**
+     * ru-code (sub-agents): the agent row's LIVE LINE. `task.progress.summary`
+     * is the only channel the panel row prefers (subagentRuntime.ts:519-527 is
+     * the sole writer of `RuntimeSubagent.progress`, and AgentsPanel.tsx:122-140
+     * reads it first) — the qwen path emitted zero of these before, which is
+     * exactly why every qwen agent row rendered one truncated line. Shape is
+     * deliberate parity with the Claude feed (ClaudeAdapter.ts:3263-3274):
+     * description + summary + lastToolName + role. Every call also re-stamps the
+     * agent linkage so a fold that never saw the start row still classifies the
+     * task as an agent (`taskType` → ingestion's `agentKind: "agent"`).
+     */
+    const offerAgentProgress = (
+      ctx: QwenSessionContext,
+      window: QwenAgentWindow,
+      fields: {
+        readonly summary?: string;
+        readonly lastToolName?: string;
+        readonly status?: RuntimeTaskStatus;
+      },
+    ) =>
+      Effect.flatMap(makeEventStamp(), (stamp) =>
+        offerRuntimeEvent({
+          type: "task.progress",
+          ...stamp,
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(window.taskId),
+            description: window.description,
+            taskType: QWEN_SUBAGENT_TASK_TYPE,
+            toolUseId: window.taskId,
+            ...(window.role ? { role: window.role } : {}),
+            ...(fields.summary ? { summary: fields.summary } : {}),
+            ...(fields.lastToolName ? { lastToolName: fields.lastToolName } : {}),
+            ...(fields.status ? { status: fields.status } : {}),
+          },
+        }),
+      );
+
+    /**
+     * ru-code (P2 zombie settle): the ONLY `task.completed` a sub-agent open
+     * at teardown ever gets when its own `AgentRootSettled` loses the race —
+     * teardown interrupts the notification fiber, so that frame (if qwen was
+     * about to send it) is never drained. Mirrors `AgentRootSettled`
+     * (:2250-2291) field-for-field: flush the pending narration line first
+     * (often the only thing the row ever shows on a cancelled run), then
+     * close the task terminal with `status: "stopped"`.
+     *
+     * Idempotency guard: clearing `ctx.subAgentWindow` FIRST (before any
+     * yield) means a real `AgentRootSettled` that already closed the window
+     * makes this a no-op, and a second teardown call is also a no-op —
+     * mirrors Claude's `liveTaskIds.delete` guard (ClaudeAdapter.ts).
+     */
+    const settleOpenSubAgentAsStopped = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const window = ctx.subAgentWindow;
+        if (window === undefined) return;
+        ctx.subAgentWindow = undefined;
+        const tail = takeQwenAgentLine(window);
+        if (tail !== undefined) {
+          yield* offerAgentProgress(ctx, window, { summary: tail });
+        }
+        yield* offerRuntimeEvent({
+          type: "task.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(window.taskId),
+            status: "stopped",
+            taskType: QWEN_SUBAGENT_TASK_TYPE,
+            toolUseId: window.toolUseId,
+            ...(window.title ? { title: window.title } : {}),
+            ...(window.role ? { role: window.role } : {}),
+            detail: "Stopped by the user.",
+          },
+        });
+      });
+
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
         const existing = current.get(threadId);
@@ -1056,6 +1169,10 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
 
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        // ru-code (P2 zombie settle): before either teardown branch below
+        // interrupts the notification fiber — the real `AgentRootSettled`
+        // (if any) would otherwise be lost and the agent row would zombie.
+        yield* settleOpenSubAgentAsStopped(ctx);
 
         // ru-code (warm engine): instant-settle stop. An end-force teardown
         // with a prompt actually in flight settles the turn CLIENT-SIDE at
@@ -1605,6 +1722,17 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 }
               }),
             );
+            // ru-code: read through a function call, not a bare `ctx?.stopped`
+            // comparison — the guard below is re-checked at 4 sites inside ONE
+            // callback invocation, and TypeScript's control-flow analysis narrows
+            // a repeated `ctx?.stopped === true` to a statically-false comparison
+            // after the first early-return, since it cannot see that a CONCURRENT
+            // fiber (the Stop path, `abortSessionTeardown:1125`) mutates `ctx.stopped`
+            // during this callback's suspension points (`yield* cryptoUuid`,
+            // `yield* Deferred.make`) — exactly the race Fix 1 exists to close.
+            // The function-call boundary defeats that (incorrect, for this case)
+            // narrowing.
+            const isCtxStopped = () => ctx?.stopped === true;
             yield* acp.handleRequestPermission((params) =>
               Effect.gen(function* () {
                 yield* logNative(
@@ -1630,9 +1758,37 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   rawParams: params,
                 });
 
+                // ru-code: ingress guard — a permission RPC that arrives after
+                // the Stop button has already flipped ctx.stopped must be
+                // refused before any side effect (sub-agent `waiting` marker,
+                // `turn.proposed.completed`, request registration) fires, or a
+                // tail request survives the warm-path detached teardown grace
+                // with no live session left to close it. See the atomic
+                // re-checks at each `pendingApprovals`/`pendingUserInputs.set`
+                // site below for the interleaving window this alone does not
+                // close.
+                if (isCtxStopped()) {
+                  return { outcome: { outcome: "cancelled" as const } };
+                }
+
                 // Branch 1 — ask_user_question: surface as a structured
                 // user-input request the existing Cursor/OpenCode UI handles.
                 const toolName = readToolName(params);
+                // ru-code (sub-agents): a permission request inside a root-agent
+                // window is the CHILD asking. It is NOT suppressed and NOT parked
+                // — the child's prompt() is blocked on the answer, so hiding it
+                // would deadlock the run; it keeps every existing surface below
+                // untouched. What the window adds is the missing half: the agent
+                // row is marked `waiting` with a wordless pause line, so the panel
+                // says WHICH agent is holding for you instead of reading "Working"
+                // while nothing happens. Any later child frame moves it back to
+                // running (subagentRuntime.ts:515-521), so no un-marking is owed.
+                if (ctx?.subAgentWindow !== undefined) {
+                  yield* offerAgentProgress(ctx, ctx.subAgentWindow, {
+                    summary: formatQwenAgentWaitingLine(toolName),
+                    status: "waiting",
+                  });
+                }
                 const questionsPayload = readAskQuestionsPayload(params);
                 if (toolName === "ask_user_question" || questionsPayload) {
                   if (!questionsPayload) {
@@ -1642,6 +1798,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   const requestId = ApprovalRequestId.make(yield* cryptoUuid);
                   const runtimeRequestId = RuntimeRequestId.make(requestId);
                   const answersDeferred = yield* Deferred.make<ProviderUserInputAnswers>();
+                  // ru-code: atomic re-check — no suspension point between
+                  // this read and the `.set` below, so a Stop that flips
+                  // ctx.stopped either lands before this line (refused here)
+                  // or after the `.set` (caught by settlePendingUserInputs...).
+                  if (isCtxStopped()) {
+                    return { outcome: { outcome: "cancelled" as const } };
+                  }
                   pendingUserInputs.set(requestId, {
                     answers: answersDeferred,
                     questionIndexById,
@@ -1730,6 +1893,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   const requestId = ApprovalRequestId.make(yield* cryptoUuid);
                   const runtimeRequestId = RuntimeRequestId.make(requestId);
                   const decision = yield* Deferred.make<ProviderApprovalDecision>();
+                  // ru-code: atomic re-check — see the note at the
+                  // ask_user_question `.set` site above; same shape here.
+                  if (isCtxStopped()) {
+                    return { outcome: { outcome: "cancelled" as const } };
+                  }
                   pendingApprovals.set(requestId, { decision, kind: "exit_plan_mode" });
                   // Surface the held-open RPC as a plan_approval request so the
                   // projection knows Cli is parked waiting for a plan decision.
@@ -1804,6 +1972,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 const requestId = ApprovalRequestId.make(yield* cryptoUuid);
                 const runtimeRequestId = RuntimeRequestId.make(requestId);
                 const decision = yield* Deferred.make<ProviderApprovalDecision>();
+                // ru-code: atomic re-check — see the note at the
+                // ask_user_question `.set` site above; same shape here.
+                if (isCtxStopped()) {
+                  return { outcome: { outcome: "cancelled" as const } };
+                }
                 pendingApprovals.set(requestId, {
                   decision,
                   kind: permissionRequest.kind,
@@ -2036,6 +2209,22 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    // ru-code (sub-agents): a `plan` frame inside a root-agent
+                    // window is the CHILD's todo list (PlanEmitter takes no meta,
+                    // so it arrives unstamped — window proof applies). Forwarding
+                    // it would REPLACE the user's own visible task list with the
+                    // child's, which is a corruption, not a leak. Parked on the
+                    // agent row instead: progress count + the live step, so
+                    // nothing the user needs is lost.
+                    const planWindow = ctx.subAgentWindow;
+                    if (planWindow !== undefined) {
+                      const planLine = formatQwenAgentPlanLine(event.payload);
+                      if (planLine !== undefined && planLine !== planWindow.emitted) {
+                        planWindow.emitted = planLine;
+                        yield* offerAgentProgress(ctx, planWindow, { summary: planLine });
+                      }
+                      return;
+                    }
                     yield* offerRuntimeEvent(
                       makeAcpPlanUpdatedEvent({
                         stamp: yield* makeEventStamp(),
@@ -2050,31 +2239,173 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     );
                     return;
                   }
-                  case "ToolCallUpdated":
+                  case "ToolCallUpdated": {
                     yield* logNative(
                       ctx.threadId,
                       "session/update",
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
-                    yield* offerRuntimeEvent(
-                      makeAcpToolCallEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        toolCall: event.toolCall,
-                        rawPayload: event.rawPayload,
-                      }),
-                    );
-                    return;
-                  case "ContentDelta":
+                    // ru-code: qwen tags sub-agent frames in `update._meta`. The item
+                    // event is built exactly as before; the classification decides what
+                    // ELSE the frame means for the Agents surface. A frame with no
+                    // sub-agent meta takes the default arm and is byte-identical to
+                    // today's behaviour.
+                    const agentFrame = classifyQwenToolCallFrame(event.toolCall, event.rawPayload);
+                    const itemEvent = makeAcpToolCallEvent({
+                      stamp: yield* makeEventStamp(),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      turnId: ctx.activeTurnId,
+                      toolCall: event.toolCall,
+                      rawPayload: event.rawPayload,
+                    });
+                    switch (agentFrame._tag) {
+                      case "AgentRootStarted": {
+                        // ru-code (sub-agents): open the attribution window. From
+                        // here until this call settles, every UNSTAMPED frame is
+                        // this child's — see the window proof in QwenAcpSubAgents.
+                        ctx.subAgentWindow = openQwenAgentWindow(agentFrame);
+                        // Open the task BEFORE its content: the chat's spawn-CTA row
+                        // anchors on the first task row of the batch, and the fold only
+                        // accepts tool.progress heartbeats for a task it already knows.
+                        yield* offerRuntimeEvent({
+                          type: "task.started",
+                          ...(yield* makeEventStamp()),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                          payload: {
+                            taskId: RuntimeTaskId.make(agentFrame.taskId),
+                            taskType: QWEN_SUBAGENT_TASK_TYPE,
+                            toolUseId: agentFrame.toolUseId,
+                            // `title` is what the panel row shows; `description` is what
+                            // ingestion turns into the row detail the CTA anchors on.
+                            ...(agentFrame.title
+                              ? { title: agentFrame.title, description: agentFrame.title }
+                              : {}),
+                            ...(agentFrame.role ? { role: agentFrame.role } : {}),
+                          },
+                        });
+                        yield* offerRuntimeEvent(
+                          withQwenAgentAttribution(itemEvent, agentFrame.taskId),
+                        );
+                        return;
+                      }
+                      case "AgentRootSettled": {
+                        // ru-code (sub-agents): flush whatever narration is still
+                        // under the quantum, then close the window. Without the
+                        // flush an agent that ends mid-sentence loses its last
+                        // words — and on a run with no result at all (a cancel)
+                        // that flushed line is the ONLY thing the row ever shows.
+                        const settlingWindow = ctx.subAgentWindow;
+                        if (settlingWindow?.taskId === agentFrame.taskId) {
+                          const tail = takeQwenAgentLine(settlingWindow);
+                          if (tail !== undefined) {
+                            yield* offerAgentProgress(ctx, settlingWindow, { summary: tail });
+                          }
+                          ctx.subAgentWindow = undefined;
+                        }
+                        // Close the task AFTER its content, mirroring the open above.
+                        yield* offerRuntimeEvent(
+                          withQwenAgentAttribution(itemEvent, agentFrame.taskId),
+                        );
+                        yield* offerRuntimeEvent({
+                          type: "task.completed",
+                          ...(yield* makeEventStamp()),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                          payload: {
+                            taskId: RuntimeTaskId.make(agentFrame.taskId),
+                            status: agentFrame.status,
+                            taskType: QWEN_SUBAGENT_TASK_TYPE,
+                            toolUseId: agentFrame.toolUseId,
+                            ...(agentFrame.summary ? { summary: agentFrame.summary } : {}),
+                            ...(agentFrame.title ? { title: agentFrame.title } : {}),
+                            ...(agentFrame.role ? { role: agentFrame.role } : {}),
+                            ...(agentFrame.typedUsage ? { typedUsage: agentFrame.typedUsage } : {}),
+                            // ru-code (sub-agents): qwen's own reason for an early
+                            // exit, on the contract's long-form body field.
+                            ...(agentFrame.terminateReason
+                              ? { detail: agentFrame.terminateReason }
+                              : {}),
+                          },
+                        });
+                        return;
+                      }
+                      case "AgentInnerTool": {
+                        // ru-code (sub-agents): the tool's RESULT, on the terminal
+                        // frame, is the single most informative thing the child
+                        // produces — and `tool.progress` cannot carry it (the fold
+                        // reads only taskId + toolName from that arm,
+                        // subagentRuntime.ts:610-623). So a settled inner call with
+                        // result text ALSO goes out as `task.progress`: the
+                        // heartbeat below is unchanged, and the extra row is what
+                        // puts the result into `progress` and the activity ring.
+                        // The agent's live activity line ("▸ read_file"). Ingestion keys
+                        // these under one stable id per task, so a long run costs one row.
+                        yield* offerRuntimeEvent({
+                          type: "tool.progress",
+                          ...(yield* makeEventStamp()),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                          payload: {
+                            taskId: RuntimeTaskId.make(agentFrame.taskId),
+                            ...(agentFrame.toolName ? { toolName: agentFrame.toolName } : {}),
+                            toolUseId: agentFrame.toolUseId,
+                            parentToolUseId: agentFrame.taskId,
+                          },
+                        });
+                        const innerWindow = ctx.subAgentWindow;
+                        const innerLine = agentFrame.settled
+                          ? formatQwenAgentToolLine(agentFrame.toolName, agentFrame.detail)
+                          : undefined;
+                        if (
+                          innerLine !== undefined &&
+                          innerWindow !== undefined &&
+                          innerWindow.taskId === agentFrame.taskId
+                        ) {
+                          innerWindow.emitted = innerLine;
+                          yield* offerAgentProgress(ctx, innerWindow, {
+                            summary: innerLine,
+                            ...(agentFrame.toolName ? { lastToolName: agentFrame.toolName } : {}),
+                          });
+                        }
+                        yield* offerRuntimeEvent(
+                          withQwenAgentAttribution(itemEvent, agentFrame.taskId),
+                        );
+                        return;
+                      }
+                      default:
+                        yield* offerRuntimeEvent(itemEvent);
+                        return;
+                    }
+                  }
+                  case "ContentDelta": {
                     yield* logNative(
                       ctx.threadId,
                       "session/update",
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    // ru-code (sub-agents): THE re-route. An unstamped text chunk
+                    // arriving inside a root-agent window is the child's narration
+                    // (qwen drops the meta at SubAgentTracker.ts:275; the window
+                    // proof in QwenAcpSubAgents.ts supplies the attribution). It
+                    // must never become a `content.delta`, or the child's whole
+                    // monologue is spliced into the parent's chat bubble. It
+                    // becomes the agent row's live line instead — the same channel
+                    // ClaudeAdapter.ts:3263 feeds for its children.
+                    const textWindow = ctx.subAgentWindow;
+                    if (textWindow !== undefined) {
+                      const line = appendQwenAgentText(textWindow, event.text);
+                      if (line !== undefined) {
+                        yield* offerAgentProgress(ctx, textWindow, { summary: line });
+                      }
+                      return;
+                    }
                     yield* offerRuntimeEvent(
                       makeAcpContentDeltaEvent({
                         stamp: yield* makeEventStamp(),
@@ -2095,6 +2426,7 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                       }),
                     );
                     return;
+                  }
                   case "UsageUpdated": {
                     yield* logNative(
                       ctx.threadId,
@@ -2102,6 +2434,14 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    // ru-code (sub-agents): qwen emits per-SUB-AGENT usage on its own
+                    // empty-text agent_message_chunk, distinguished only by
+                    // `_meta.parentToolCallId` (SubAgentTracker → emitUsageMetadata).
+                    // A child's prompt tokens are its own context, not the thread's:
+                    // letting them through moves the context meter AND feeds the
+                    // auto-compaction trigger, which reads the same counter. The frame
+                    // is still logged natively above — only the meter skips it.
+                    if (isQwenSubAgentFrame(event.rawPayload)) return;
                     // ru-code: live token feed. The parser emits UsageUpdated for
                     // EVERY agent_message_chunk carrying _meta.usage.inputTokens —
                     // including qwen's dedicated empty-text usage frame (which produces
@@ -2287,7 +2627,8 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 threadId: input.threadId,
                 turnId,
                 payload: {
-                  taskId: RuntimeTaskId.make(turnId),
+                  taskId: RuntimeTaskId.make(`${CLI_ERROR_TASK_PREFIX}${turnId}`),
+                  taskType: CLI_ERROR_TASK_TYPE,
                   status: "failed",
                   summary: timelineText,
                 },
@@ -2637,7 +2978,8 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                         threadId: input.threadId,
                         turnId,
                         payload: {
-                          taskId: RuntimeTaskId.make(turnId),
+                          taskId: RuntimeTaskId.make(`${CLI_ERROR_TASK_PREFIX}${turnId}`),
+                          taskType: CLI_ERROR_TASK_TYPE,
                           status: "failed",
                           summary: decision.text,
                         },
@@ -2851,7 +3193,10 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
               ...stamp,
               provider: PROVIDER,
               threadId,
-              payload: { taskId, ...payload },
+              // ru-code: same self-describing stamp as the progress row — every
+              // closing path of the compaction (success, warning, failure, live
+              // interrupt) funnels through completeTask, so one line covers them all.
+              payload: { taskId, taskType: CONTEXT_COMPACTION_TASK_TYPE, ...payload },
             }),
           ).pipe(
             Effect.tap(() =>
@@ -2866,7 +3211,15 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId,
-          payload: { taskId, description: "Compacting context…" },
+          // ru-code: taskType makes the row self-describing on the wire. Ingestion
+          // computes agentKind from it (it is never copied from the payload), and
+          // the literal is inert, so this pair stays out of the Agents surface and
+          // renders as the ordinary morphing chat row it is.
+          payload: {
+            taskId,
+            taskType: CONTEXT_COMPACTION_TASK_TYPE,
+            description: "Compacting context…",
+          },
         });
 
         yield* ctx.acp.prompt({ prompt: [{ type: "text", text: "/compress" }] }).pipe(
@@ -3209,6 +3562,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
               claimed.push({ ctx, latch });
               yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
               yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+              // ru-code (P2 zombie settle): stopAll's fast path bypasses
+              // abortSession/abortSessionTeardown entirely, so it needs its
+              // own call — before settleActiveTurnForTeardown interrupts the
+              // notification fiber.
+              yield* settleOpenSubAgentAsStopped(ctx);
               yield* settleActiveTurnForTeardown(ctx, MAINTENANCE_METHOD);
             }),
           { concurrency: "unbounded", discard: true },

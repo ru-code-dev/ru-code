@@ -6,6 +6,7 @@ import { localizeAcpFailureDetail } from "~/ru-code/error-system/acpFailureLocal
 import {
   compactionCollapseKey,
   isCompactionCollapseKey,
+  isCompactionTaskRow,
   isTaskWarningToneRow,
   shouldMorphCompactionPair,
 } from "~/ru-code/workLog/contextCompaction";
@@ -768,7 +769,7 @@ function isAgentTaskStartedActivity(activity: OrchestrationThreadActivity): bool
   if (!payload || typeof payload.taskId !== "string") {
     return false;
   }
-  return !isBackgroundTaskActivity(payload);
+  return !isBackgroundTaskActivity(payload, activity.turnId);
 }
 
 function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean {
@@ -798,7 +799,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
       const isAgentTaskRow =
         activity.kind !== "task.updated" &&
         typeof payload.taskId === "string" &&
-        !isBackgroundTaskActivity(payload);
+        !isBackgroundTaskActivity(payload, activity.turnId);
       return !isAgentTaskRow;
     }
     return false;
@@ -953,7 +954,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (changedFiles.length > 0) {
     entry.changedFiles = changedFiles;
   }
-  if (title) {
+  // ru-code: compaction rows morph in place, so their heading must stay the
+  // label — the upstream `title` on `task.progress` would pin it to the
+  // progress text and demote the outcome to a suffix. Compaction-scoped only.
+  if (title && !isCompactionTaskRow(activity.kind, payload)) {
     entry.toolTitle = title;
   }
   if (itemType === "mcp_tool_call") {
@@ -991,7 +995,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   ) {
     entry.isWorkflowCoordinator = true;
   }
-  if (isTaskActivity && payload && isBackgroundTaskActivity(payload)) {
+  if (isTaskActivity && payload && isBackgroundTaskActivity(payload, activity.turnId)) {
     entry.isBackgroundTask = true;
   }
   // ru-code: compaction task rows share a key so progress → completed morphs.

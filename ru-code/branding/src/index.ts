@@ -183,6 +183,20 @@ export const HIDE_USELESS_LOGS = true;
 export const CONTEXT_COMPACTION_TASK_PREFIX = "context-compaction:";
 
 /**
+ * CONTEXT_COMPACTION_TASK_TYPE — `taskType` stamped on the SAME two payloads.
+ * Ingestion classifies every task row from it (classifyTaskAgentKind → the
+ * persisted `agentKind`); the literal is listed in the contracts'
+ * INERT_TASK_TYPES so the hidden compaction reads as background bookkeeping,
+ * never as an agent. Lives here, beside the prefix, for the same reason the
+ * prefix does: one wire identifier, both sides, one home.
+ */
+export const CONTEXT_COMPACTION_TASK_TYPE = "context_compaction";
+
+/** ru-code: a turn-level CLI-error Timeline row is bookkeeping, never an agent. */
+export const CLI_ERROR_TASK_TYPE = "cli_error";
+export const CLI_ERROR_TASK_PREFIX = "cli-error:";
+
+/**
  * UPDATE_WEB_URL — the https(s) release-manifest address of the auto-update WEB
  * source (`<base>/manifest.json` + tarballs beside it). Baked at build time; the
  * ONLY way to change it on an install is a reinstall with a new bundle — there is
@@ -257,3 +271,15 @@ export * from "./auto-update.ts";
  * Kept as a switch so the previous behaviour stays reachable for comparison.
  */
 export const USE_NON_BLOCKIN_EDITORS_SCAN = true;
+
+/**
+ * PR_STATUS_LOOKUP_ENABLED — when `true`, the git status remote lookup resolves the
+ * open/merged/closed PR badge for the current branch (`GitManager.lookupStatusPr`), which
+ * is forge-dependent: it fills a cache via source-control provider detection and CLI/API
+ * probes against the remote host. `false` (default) short-circuits `lookupStatusPr` to
+ * `pr: null` before any of that runs — zero cache fill, zero git head-context calls, zero
+ * provider detection, zero CLI probes, zero WARN logs on failure. Ahead/behind polling and
+ * the user-initiated PullRequest panel are untouched by this switch. Flip to `true` to
+ * restore the feature.
+ */
+export const PR_STATUS_LOOKUP_ENABLED = false;

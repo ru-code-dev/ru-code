@@ -1,3 +1,17 @@
+// ru-code: the compaction task-type literal is a fork wire identifier and lives
+// in @ru-code/branding beside the taskId prefix it pairs with. Delegating to it
+// (R5 tier 1) keeps the fork's vocabulary out of the port's literal list.
+import {
+  CLI_ERROR_TASK_TYPE,
+  CONTEXT_COMPACTION_TASK_PREFIX,
+  CONTEXT_COMPACTION_TASK_TYPE,
+} from "@ru-code/branding";
+// ru-code: and re-exported from here, because PORT packages that must recognize
+// a compaction row cannot depend on @ru-code/branding themselves —
+// @t3tools/client-runtime is one (it reads the taskId prefix in
+// `isBackgroundTaskActivity`). Contracts is the seam those packages already
+// share, so the fork vocabulary crosses the boundary exactly once.
+export { CLI_ERROR_TASK_TYPE, CONTEXT_COMPACTION_TASK_PREFIX, CONTEXT_COMPACTION_TASK_TYPE };
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -519,7 +533,22 @@ export const MONITOR_TASK_TYPES: ReadonlySet<string> = new Set([
   "shell",
 ]);
 /** Task types that are neither agents nor watch loops (plan-mode bookkeeping). */
-export const INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
+export const INERT_TASK_TYPES: ReadonlySet<string> = new Set([
+  "plan",
+  "dream",
+  // ru-code: the hidden context compaction is bookkeeping, not an agent. Without
+  // this member classifyTaskAgentKind stamps agentKind "agent" on both compaction
+  // rows, which puts a fake «Compacting context…» agent in the Agents roster and
+  // collapses the chat row into a «Ran 1 subagent · ✓ completed · View ▸» CTA that
+  // renders neither the outcome text nor its warning tone.
+  CONTEXT_COMPACTION_TASK_TYPE,
+  // ru-code: the Qwen turn-level CLI-error row uses task.completed purely as a
+  // transport for the classified error text (Surface.Timeline). Without this
+  // member classifyTaskAgentKind stamps agentKind "agent" and the error text
+  // becomes a phantom subagent in the roster plus an «Отработал 1 субагент ·
+  // 1 с ошибкой» CTA with zero real agents.
+  CLI_ERROR_TASK_TYPE,
+]);
 
 /**
  * Agent-vs-background classification, stamped by ingestion as `agentKind` so

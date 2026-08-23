@@ -3,10 +3,10 @@
 // compaction derivation so the reload-proof block is a composite, not a
 // hand-fed boolean.
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
-import { CONTEXT_COMPACTION_TASK_PREFIX } from "@ru-code/branding";
+import { CONTEXT_COMPACTION_TASK_PREFIX, QWEN_KIND } from "@ru-code/branding";
 import { describe, expect, it } from "vite-plus/test";
 
-import { shouldBlockComposerSend } from "../../composer/sendGate";
+import { isQwenRunningTurn, shouldBlockComposerSend } from "../../composer/sendGate";
 import { deriveIsCompactingContext } from "../../workLog/contextCompaction";
 
 const OPEN = {
@@ -75,6 +75,56 @@ describe("shouldBlockComposerSend", () => {
       shouldBlockComposerSend({
         ...OPEN,
         isCompactingContext: deriveIsCompactingContext([progress, completed]),
+      }),
+    ).toBe(false);
+  });
+});
+
+const RUNNING = {
+  providerDriver: QWEN_KIND,
+  phase: "running",
+  pendingApprovalCount: 0,
+  pendingUserInputCount: 0,
+  hasPendingPlanApproval: false,
+} as const;
+
+describe("isQwenRunningTurn — the qwen-only streaming guard", () => {
+  it("blocks a send while a qwen turn streams", () => {
+    expect(isQwenRunningTurn(RUNNING)).toBe(true);
+  });
+
+  it("never fires for another driver — they steer instead of aborting", () => {
+    for (const driver of ["claude", "codex", "opencode", "cursor", "grok"]) {
+      expect(isQwenRunningTurn({ ...RUNNING, providerDriver: driver })).toBe(false);
+    }
+    expect(isQwenRunningTurn({ ...RUNNING, providerDriver: null })).toBe(false);
+    expect(isQwenRunningTurn({ ...RUNNING, providerDriver: undefined })).toBe(false);
+  });
+
+  it("never fires outside the running phase", () => {
+    for (const phase of ["ready", "connecting", "disconnected"]) {
+      expect(isQwenRunningTurn({ ...RUNNING, phase })).toBe(false);
+    }
+  });
+
+  it.each([
+    ["held approval", { pendingApprovalCount: 1 }],
+    ["user-input question", { pendingUserInputCount: 1 }],
+    ["plan approval", { hasPendingPlanApproval: true }],
+  ] as const)("releases the guard while parked on the user: %s", (_label, parked) => {
+    // Parked sessions still report phase "running", but nothing is streaming and
+    // the send is what settles the parked Deferred server-side.
+    expect(isQwenRunningTurn({ ...RUNNING, ...parked })).toBe(false);
+  });
+
+  it("composes into the gate exactly as ChatView.onSend calls it", () => {
+    expect(shouldBlockComposerSend({ ...OPEN, isRunningTurn: isQwenRunningTurn(RUNNING) })).toBe(
+      true,
+    );
+    expect(
+      shouldBlockComposerSend({
+        ...OPEN,
+        isRunningTurn: isQwenRunningTurn({ ...RUNNING, pendingApprovalCount: 1 }),
       }),
     ).toBe(false);
   });

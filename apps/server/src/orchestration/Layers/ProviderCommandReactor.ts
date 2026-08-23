@@ -1414,7 +1414,11 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
         summary: "Provider approval response failed",
-        detail: "No active provider session is bound to this thread.",
+        // ru-code: a stale-detail string (matched by all three clearing
+        // predicates) so a request tail-orphaned by a race with Stop can
+        // still be cleared client- and server-side, instead of a plain
+        // English sentence no predicate recognises.
+        detail: stalePendingRequestDetail("approval", event.payload.requestId),
         turnId: null,
         createdAt: event.payload.createdAt,
         requestId: event.payload.requestId,
@@ -1458,7 +1462,9 @@ const make = Effect.gen(function* () {
           threadId: event.payload.threadId,
           kind: "provider.user-input.respond.failed",
           summary: "Provider user input response failed",
-          detail: "No active provider session is bound to this thread.",
+          // ru-code: same stale-detail swap as the approval-response site
+          // above — see that comment.
+          detail: stalePendingRequestDetail("user-input", event.payload.requestId),
           turnId: null,
           createdAt: event.payload.createdAt,
           requestId: event.payload.requestId,

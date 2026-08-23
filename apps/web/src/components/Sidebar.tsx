@@ -164,11 +164,14 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
+  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../providerInstances";
-import { primaryServerProvidersAtom } from "../state/server";
+// ru-code: settings overlay so sidebar rows resolve the real qwen profile
+// (custom-fork vs stock-qwen), matching the composer's projection.
+import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
@@ -344,6 +347,8 @@ function SidebarThreadTooltip({
                 displayName={
                   providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
                 }
+                // ru-code: resolve custom-fork vs stock-qwen mark instead of the kind fallback.
+                profile={providerEntry?.profile}
                 accentColor={providerEntry?.accentColor}
                 // Initials would swallow a size-3 glyph: accent dot, name in label.
                 showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
@@ -1578,6 +1583,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         thread.session?.providerName ??
                         modelInstanceId
                       }
+                      // ru-code: resolve custom-fork vs stock-qwen mark instead of the kind fallback.
+                      profile={providerEntry?.profile}
                       accentColor={providerEntry?.accentColor}
                       showBadge={showInstanceBadge}
                       // Glyph dims, badge stays saturated; offset matches the composer trigger.
@@ -1877,14 +1884,19 @@ export default function Sidebar() {
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  // ru-code: settings overlay refines the stage-1 profile default down to the
+  // instance's persisted config, so qwen rows resolve custom-fork vs stock-qwen
+  // instead of always the fork mark (see icon-identity-analysis.md §2).
+  const serverSettings = useAtomValue(primaryServerSettingsAtom);
   const providerEntryByInstanceId = useMemo(
     () =>
       new Map(
-        deriveProviderInstanceEntries(serverProviders).map(
-          (entry) => [entry.instanceId as string, entry] as const,
-        ),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(serverProviders),
+          serverSettings,
+        ).map((entry) => [entry.instanceId as string, entry] as const),
       ),
-    [serverProviders],
+    [serverProviders, serverSettings],
   );
   const projectCwdByKey = useMemo(
     () =>

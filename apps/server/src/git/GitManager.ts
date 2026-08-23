@@ -45,6 +45,7 @@ import {
   isSshRemoteUrl,
   type ChangeRequestTerminology,
 } from "@t3tools/shared/sourceControl";
+import { PR_STATUS_LOOKUP_ENABLED } from "@ru-code/branding";
 
 import { GitManagerError, GitPullRequestMaterializationError } from "@t3tools/contracts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -1017,6 +1018,10 @@ export const make = Effect.gen(function* () {
     cwd: string,
     details: { branch: string; upstreamRef: string | null; isDefaultBranch: boolean },
   ) {
+    // ru-code: fork kill switch, default OFF (@ru-code/branding). Short-circuit BEFORE
+    // Cache.get so nothing downstream runs: no head-context git calls, no provider
+    // detection, no CLI/API probes, no WARN on failure.
+    if (!PR_STATUS_LOOKUP_ENABLED) return null;
     // Keyed by (cwd, branch) only: the upstream ref changing (e.g. a first
     // `push -u`) must not orphan the fallback value for the same branch.
     const branchKey = `${cwd}\u0000${details.branch}`;

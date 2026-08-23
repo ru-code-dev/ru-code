@@ -17,6 +17,9 @@
  * folding (completion can create an agent; a late start only fills
  * metadata).
  */
+// ru-code: the compaction taskId prefix, re-exported by contracts precisely so
+// this package can recognize a compaction row without depending on branding.
+import { CONTEXT_COMPACTION_TASK_PREFIX } from "@t3tools/contracts";
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
 export type RuntimeSubagentStatus =
@@ -116,7 +119,35 @@ const ROSTER_LIMIT = 100;
  * background by definition: they render in the ordinary work log, exactly
  * as they did before this feature existed.
  */
-export function isBackgroundTaskActivity(payload: Record<string, unknown>): boolean {
+export function isBackgroundTaskActivity(
+  payload: Record<string, unknown>,
+  turnId?: string | null, // ru-code: legacy CLI-error seam, see below
+): boolean {
+  // ru-code: the hidden context compaction is background bookkeeping, never an
+  // agent. Threads compacted before the taskType stamp shipped carry a
+  // server-stamped agentKind "agent" that is replayed on every reload and can
+  // never be re-classified, so those rows put a nameless agent in the roster
+  // and folded the pair into a subagent CTA. The taskId prefix is
+  // stamp-independent, so it settles old and new threads alike — and it must
+  // come BEFORE the agentKind read for exactly that reason.
+  const taskId = payload["taskId"];
+  if (typeof taskId === "string" && taskId.startsWith(CONTEXT_COMPACTION_TASK_PREFIX)) {
+    return true;
+  }
+  // ru-code: legacy Qwen CLI-error rows (pre-`cli_error` builds) reused the
+  // TURN id as the task id and were stamped agentKind "agent" by the
+  // classifier's fallback. The stamp is server-authoritative and unfixable
+  // after the fact; the id collision is not, and no real agent's taskId is
+  // ever its turn id.
+  if (
+    typeof taskId === "string" &&
+    turnId != null &&
+    taskId === turnId &&
+    payload["status"] === "failed" &&
+    payload["taskType"] === undefined
+  ) {
+    return true;
+  }
   return payload.agentKind !== "agent";
 }
 
@@ -136,6 +167,43 @@ function appendActivity(
   }
   const next = [...entries, { at, summary: boundedSummary }];
   return next.length > RECENT_ACTIVITY_LIMIT ? next.slice(-RECENT_ACTIVITY_LIMIT) : next;
+}
+
+// ru-code (livejitter): the ring markers a REAL transition line always opens
+// with — a tool result, a parked plan line, or a permission pause. Anything
+// else is narration-class: the child's own streamed words, re-published every
+// quantum by the SAME continuation.
+const ACTIVITY_TRANSITION_MARKERS = ["▸", "▤", "⏸"];
+
+function isNarrationActivitySummary(summary: string): boolean {
+  return !ACTIVITY_TRANSITION_MARKERS.some((marker) => summary.startsWith(marker));
+}
+
+/**
+ * Appends to the ring, EXCEPT while one streaming continuation is updating:
+ * when both the incoming summary and the ring's current newest entry are
+ * narration-class, the newest entry is REPLACED in place instead of stacking
+ * a near-identical row per quantum tick (the "recent activity keeps cycling"
+ * half of the live-line jitter). A real transition — a tool result, a plan
+ * line, a waiting pause, or the first narration line right after one of those
+ * — still appends, exactly as `appendActivity` always has.
+ */
+function appendOrReplaceActivity(
+  entries: ReadonlyArray<SubagentActivityEntry>,
+  at: string,
+  summary: string,
+): ReadonlyArray<SubagentActivityEntry> {
+  const last = entries[entries.length - 1];
+  if (
+    last === undefined ||
+    !isNarrationActivitySummary(summary) ||
+    !isNarrationActivitySummary(last.summary)
+  ) {
+    return appendActivity(entries, at, summary);
+  }
+  const boundedSummary = bounded(summary);
+  if (last.summary === boundedSummary) return entries;
+  return [...entries.slice(0, -1), { at, summary: boundedSummary }];
 }
 
 function asString(value: unknown): string | undefined {
@@ -476,7 +544,7 @@ export function foldSubagentActivities(
         // Only real agents join the roster. Shells, monitors, and plan-mode
         // tasks are background work — they render in the ordinary work log,
         // not the Agents surface (a "Run 12s stall" shell is not a subagent).
-        if (isBackgroundTaskActivity(payload)) break;
+        if (isBackgroundTaskActivity(payload, activity.turnId)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
         // Order-robustness: a start row arriving after a terminal state is a
@@ -505,7 +573,7 @@ export function foldSubagentActivities(
         // rows often carry only taskId+status, no marker fields) inherit the
         // first row's classification instead of being re-judged.
         const existed = agents.has(taskId);
-        if (!existed && isBackgroundTaskActivity(payload)) break;
+        if (!existed && isBackgroundTaskActivity(payload, activity.turnId)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
         if (agent.activationCount === 0) agent.activationCount = 1;
@@ -522,7 +590,9 @@ export function foldSubagentActivities(
         const summary = asString(payload.summary);
         if (summary) {
           agent.progress = bounded(summary);
-          agent.recentActivity = appendActivity(agent.recentActivity, at, summary);
+          // ru-code (livejitter): replace-not-append while the same narration
+          // continuation streams; see appendOrReplaceActivity.
+          agent.recentActivity = appendOrReplaceActivity(agent.recentActivity, at, summary);
         }
         const lastToolName = asString(payload.lastToolName);
         if (lastToolName) {
@@ -543,7 +613,7 @@ export function foldSubagentActivities(
         // Membership is sticky per taskId: rows after the first (terminal
         // rows often carry only taskId+status, no marker fields) inherit the
         // first row's classification instead of being re-judged.
-        if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
+        if (!agents.has(taskId) && isBackgroundTaskActivity(payload, activity.turnId)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
         // A task first seen via task.updated (start row aged out) has run at
@@ -571,7 +641,7 @@ export function foldSubagentActivities(
         // Membership is sticky per taskId: rows after the first (terminal
         // rows often carry only taskId+status, no marker fields) inherit the
         // first row's classification instead of being re-judged.
-        if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
+        if (!agents.has(taskId) && isBackgroundTaskActivity(payload, activity.turnId)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
         if (agent.activationCount === 0) agent.activationCount = 1;

@@ -49,11 +49,12 @@ describe("ModelListRow — profile-aware provider icon", () => {
     expect(markup).not.toContain('data-cli-profile="custom"');
   });
 
-  it("renders the kind glyph (no profile mark) when no profile is set", () => {
-    // qwen with no profile falls back to the kind map (the OpenAI mark) — the
-    // pre-fix behavior, retained as the fallback when a profile is unknown.
+  it("renders the default-profile mark (never OpenAI) when no profile is set", () => {
+    // ru-code: qwen with no profile falls back to the kind map, which now wears
+    // the default-profile mark instead of a competitor's brand (OpenAI) — see
+    // providerIconUtils.ts:11.
     const markup = renderRow({ driverKind: QWEN });
-    expect(markup).not.toContain("data-cli-profile");
+    expect(markup).toContain('data-cli-profile="custom"');
   });
 
   it("is unaffected for a non-profile driver (opencode → kind glyph)", () => {

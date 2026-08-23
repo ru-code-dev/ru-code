@@ -39,6 +39,15 @@ export interface FakeAcpTransportControls {
 export interface PromptSteps {
   /** Stream an assistant text chunk (`session/update` agent_message_chunk). */
   emitText(text: string): PromptSteps;
+  /**
+   * ru-code (sub-agents): the REAL qwen THOUGHT frame — `agent_thought_chunk`
+   * with NO `_meta` at all. qwen emits it for the parent AND for a sub-agent;
+   * the sub-agent variant loses its attribution at
+   * qwen-code SubAgentTracker.ts:275 exactly like the text chunk, so it reaches
+   * the wire indistinguishable from the parent's. Scripted so the flow test can
+   * prove the chat never shows a child's thinking.
+   */
+  emitThought(text: string): PromptSteps;
   /** ru-code(e2e): real wall-clock pause between steps — the stdio fake uses it to
    *  simulate qwen's spawn/think latency for the live browser harness. */
   sleep(ms: number): PromptSteps;
@@ -67,6 +76,46 @@ export interface PromptSteps {
    * This is the live task-list surface (distinct from exit_plan_mode approval).
    */
   emitPlan(entries: ReadonlyArray<{ content: string; status: string }>): PromptSteps;
+  /**
+   * ru-code: emit the REAL qwen `tool_call` frame. `_meta.toolName` always rides
+   * along (qwen-code ToolCallEmitter.ts:64-80); `subagentMeta`, when given, adds
+   * `{ parentToolCallId, subagentType }` — the exact bundle SubAgentTracker
+   * attaches to every frame a sub-agent produces (SubAgentTracker.ts:70-75).
+   */
+  emitToolCall(input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly title: string;
+    readonly status?: "pending" | "in_progress" | "completed" | "failed";
+    readonly kind?: AcpSchema.ToolKind;
+    readonly rawInput?: unknown;
+    readonly subagentMeta?: { readonly parentToolCallId: string; readonly subagentType: string };
+  }): PromptSteps;
+  /**
+   * ru-code: emit the REAL qwen `tool_call_update` frame (same `_meta` rules).
+   * `rawOutput` is qwen's result display — for the `agent` tool that is the
+   * AgentResultDisplay the adapter reads the final text and usage from
+   * (qwen-code ToolCallEmitter.ts:144-147, tools.ts:486-512).
+   */
+  emitToolCallUpdate(input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly status: "completed" | "failed";
+    readonly text?: string;
+    readonly rawOutput?: unknown;
+    readonly subagentMeta?: { readonly parentToolCallId: string; readonly subagentType: string };
+  }): PromptSteps;
+  /**
+   * ru-code: the SUB-AGENT variant of {@link emitUsageChunk} — same dedicated
+   * empty-text agent_message_chunk, but tagged with the sub-agent bundle
+   * (qwen-code SubAgentTracker.ts:247-259 → MessageEmitter.ts:77-101). The
+   * thread's context meter must ignore it.
+   */
+  emitSubAgentUsageChunk(input: {
+    readonly inputTokens: number;
+    readonly parentToolCallId: string;
+    readonly subagentType: string;
+  }): PromptSteps;
   /**
    * ru-code: send an agent→client `session/request_permission` and AWAIT the client's
    * choice (the adapter parks it behind a Deferred until the user responds). Chainable —
@@ -259,11 +308,37 @@ export interface FakeAcpScript {
 
 type FakeStep =
   | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "thought"; readonly text: string }
   | { readonly kind: "textWithUsage"; readonly text: string; readonly inputTokens: number }
   | { readonly kind: "usageChunk"; readonly inputTokens: number }
   | {
       readonly kind: "plan";
       readonly entries: ReadonlyArray<{ content: string; status: string }>;
+    }
+  | {
+      readonly kind: "toolCall";
+      readonly toolCallId: string;
+      readonly toolName: string;
+      readonly title: string;
+      readonly status: "pending" | "in_progress" | "completed" | "failed";
+      readonly toolKind: AcpSchema.ToolKind;
+      readonly rawInput: unknown;
+      readonly subagentMeta?: { readonly parentToolCallId: string; readonly subagentType: string };
+    }
+  | {
+      readonly kind: "toolCallUpdate";
+      readonly toolCallId: string;
+      readonly toolName: string;
+      readonly status: "completed" | "failed";
+      readonly text?: string;
+      readonly rawOutput?: unknown;
+      readonly subagentMeta?: { readonly parentToolCallId: string; readonly subagentType: string };
+    }
+  | {
+      readonly kind: "subAgentUsageChunk";
+      readonly inputTokens: number;
+      readonly parentToolCallId: string;
+      readonly subagentType: string;
     }
   | { readonly kind: "requestPermission"; readonly payload: AcpSchema.RequestPermissionRequest }
   | { readonly kind: "sleep"; readonly ms: number }
@@ -285,6 +360,10 @@ class PromptStepsRecorder implements PromptSteps {
     this.steps.push({ kind: "text", text });
     return this;
   }
+  emitThought(text: string): PromptSteps {
+    this.steps.push({ kind: "thought", text });
+    return this;
+  }
   sleep(ms: number): PromptSteps {
     this.steps.push({ kind: "sleep", ms });
     return this;
@@ -299,6 +378,54 @@ class PromptStepsRecorder implements PromptSteps {
   }
   emitPlan(entries: ReadonlyArray<{ content: string; status: string }>): PromptSteps {
     this.steps.push({ kind: "plan", entries });
+    return this;
+  }
+  emitToolCall(input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly title: string;
+    readonly status?: "pending" | "in_progress" | "completed" | "failed";
+    readonly kind?: AcpSchema.ToolKind;
+    readonly rawInput?: unknown;
+    readonly subagentMeta?: { readonly parentToolCallId: string; readonly subagentType: string };
+  }): PromptSteps {
+    this.steps.push({
+      kind: "toolCall",
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      title: input.title,
+      status: input.status ?? "in_progress",
+      toolKind: input.kind ?? "other",
+      rawInput: input.rawInput ?? {},
+      ...(input.subagentMeta ? { subagentMeta: input.subagentMeta } : {}),
+    });
+    return this;
+  }
+  emitToolCallUpdate(input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly status: "completed" | "failed";
+    readonly text?: string;
+    readonly rawOutput?: unknown;
+    readonly subagentMeta?: { readonly parentToolCallId: string; readonly subagentType: string };
+  }): PromptSteps {
+    this.steps.push({
+      kind: "toolCallUpdate",
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      status: input.status,
+      ...(input.text !== undefined ? { text: input.text } : {}),
+      ...(input.rawOutput !== undefined ? { rawOutput: input.rawOutput } : {}),
+      ...(input.subagentMeta ? { subagentMeta: input.subagentMeta } : {}),
+    });
+    return this;
+  }
+  emitSubAgentUsageChunk(input: {
+    readonly inputTokens: number;
+    readonly parentToolCallId: string;
+    readonly subagentType: string;
+  }): PromptSteps {
+    this.steps.push({ kind: "subAgentUsageChunk", ...input });
     return this;
   }
   requestPermission(payload: AcpSchema.RequestPermissionRequest): PromptSteps {
@@ -514,6 +641,17 @@ export const runFakeAcpAgent = (
                 },
               });
               break;
+            case "thought":
+              // ru-code (sub-agents): qwen's thought frame carries NO _meta —
+              // neither the parent's nor a child's (SubAgentTracker.ts:275).
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: {
+                  sessionUpdate: "agent_thought_chunk",
+                  content: { type: "text", text: step.text },
+                },
+              });
+              break;
             case "textWithUsage":
               yield* agent.client.sessionUpdate({
                 sessionId: request.sessionId,
@@ -562,6 +700,60 @@ export const runFakeAcpAgent = (
                     // FakeStep carries it as string, so narrow to the ACP PlanEntry union.
                     status: entry.status as "pending" | "in_progress" | "completed",
                   })),
+                },
+              });
+              break;
+            case "toolCall":
+              // ru-code: the REAL qwen tool_call frame — `_meta.toolName` always,
+              // plus the sub-agent bundle when the frame belongs to a child.
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: {
+                  sessionUpdate: "tool_call",
+                  toolCallId: step.toolCallId,
+                  status: step.status,
+                  title: step.title,
+                  content: [],
+                  locations: [],
+                  kind: step.toolKind,
+                  rawInput: step.rawInput,
+                  _meta: { toolName: step.toolName, ...step.subagentMeta },
+                },
+              });
+              break;
+            case "toolCallUpdate":
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: {
+                  sessionUpdate: "tool_call_update",
+                  toolCallId: step.toolCallId,
+                  status: step.status,
+                  content:
+                    step.text === undefined
+                      ? []
+                      : [{ type: "content", content: { type: "text", text: step.text } }],
+                  ...(step.rawOutput !== undefined ? { rawOutput: step.rawOutput } : {}),
+                  _meta: { toolName: step.toolName, ...step.subagentMeta },
+                },
+              });
+              break;
+            case "subAgentUsageChunk":
+              // ru-code: same frame as `usageChunk`, tagged as a child's usage.
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: "" },
+                  _meta: {
+                    usage: {
+                      inputTokens: step.inputTokens,
+                      outputTokens: 0,
+                      totalTokens: step.inputTokens,
+                    },
+                    durationMs: 0,
+                    parentToolCallId: step.parentToolCallId,
+                    subagentType: step.subagentType,
+                  },
                 },
               });
               break;

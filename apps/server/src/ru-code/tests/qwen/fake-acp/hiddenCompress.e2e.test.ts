@@ -12,7 +12,12 @@
 //   - sending a turn WHILE a compaction runs fails fast with the B5 text.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { CONTEXT_COMPACTION_TASK_PREFIX } from "@ru-code/branding";
+import {
+  CLI_ERROR_TASK_PREFIX,
+  CLI_ERROR_TASK_TYPE,
+  CONTEXT_COMPACTION_TASK_PREFIX,
+  CONTEXT_COMPACTION_TASK_TYPE,
+} from "@ru-code/branding";
 import { QwenSettings, ThreadId, type ProviderRuntimeEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -136,6 +141,11 @@ it.effect("compactContext: ONE morphing row — progress before the prompt, succ
     assert.isUndefined(completed!.payload.tone);
     // Raw numbers persist with the row — the breaker's restart-proof state.
     assert.deepStrictEqual(completed!.payload.usage, { preTokens: 200_000, postTokens: 12_345 });
+    // ru-code: the row is self-describing on the wire — ingestion classifies from
+    // this field, and without it the pair renders as a subagent CTA (see
+    // ru-code/tests/orchestration/compactionTaskClassification.test.ts).
+    assert.strictEqual(progress!.payload.taskType, CONTEXT_COMPACTION_TASK_TYPE);
+    assert.strictEqual(completed!.payload.taskType, CONTEXT_COMPACTION_TASK_TYPE);
 
     // Ordering: the row appears BEFORE the outcome (progress precedes completed).
     assert.isBelow(events.indexOf(progress!), events.indexOf(completed!));
@@ -307,6 +317,7 @@ it.effect(
       // The numbers ride the event — this is the breaker state the projection
       // persists and `getThreadCompactionState` re-derives after a restart.
       assert.deepStrictEqual(trip!.payload.usage, TRIPPED_COMPACTION);
+      assert.strictEqual(trip!.payload.taskType, CONTEXT_COMPACTION_TASK_TYPE);
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -606,6 +617,8 @@ it.effect("fiber interruption mid-compress: the row closes as stopped and send u
     assert.strictEqual(completed!.payload.taskId, progress!.payload.taskId);
     assert.strictEqual(completed!.payload.status, "stopped");
     assert.strictEqual(enText(completed!.payload.summary), "Compaction interrupted.");
+    assert.strictEqual(progress!.payload.taskType, CONTEXT_COMPACTION_TASK_TYPE);
+    assert.strictEqual(completed!.payload.taskType, CONTEXT_COMPACTION_TASK_TYPE);
 
     // The compress flag is released: the next send reaches the wire instead of
     // failing fast with B5.
@@ -699,16 +712,19 @@ it.effect(
       assert.strictEqual(turnCompleted!.payload.errorMessage, COMPRESS_IN_PROGRESS_DETAIL);
       assert.strictEqual(turnCompleted!.payload.showNotification, true);
 
-      // The failed-send row carries the turn's own id as taskId (the finalize
-      // path) — matched exactly, not by elimination.
+      // The failed-send row carries a `cli-error:`-prefixed taskId derived from
+      // the turn's own id (P1 FIX-1 — the bare turn id no longer masquerades as
+      // a task id), stamped `taskType: "cli_error"` so it classifies background
+      // (never a phantom agent) — matched exactly, not by elimination.
       const failedRow = events.find(
         (event): event is TaskCompletedEvent =>
           event.type === "task.completed" &&
-          String(event.payload.taskId) === String(turnCompleted!.turnId),
+          String(event.payload.taskId) === `${CLI_ERROR_TASK_PREFIX}${turnCompleted!.turnId}`,
       );
       assert.isDefined(failedRow, "no timeline row for the failed send");
       assert.strictEqual(failedRow!.payload.status, "failed");
       assert.strictEqual(failedRow!.payload.summary, COMPRESS_IN_PROGRESS_DETAIL);
+      assert.strictEqual(failedRow!.payload.taskType, CLI_ERROR_TASK_TYPE);
 
       // The guard fired BEFORE any prompt went to the wire — only the hidden
       // "/compress" ever reached the fake.

@@ -1,5 +1,7 @@
 import type { EnvironmentId, ProviderDriverKind } from "@t3tools/contracts";
 import { FolderGit2Icon, FolderIcon, GitBranchIcon } from "lucide-react";
+// ru-code: brand profile for custom-fork vs stock-qwen mark resolution.
+import type { CliProfileId } from "@ru-code/branding";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
@@ -44,6 +46,8 @@ export function ThreadCommandSubtitle(props: {
   isCurrent: boolean;
   driverKind?: ProviderDriverKind | null;
   providerDisplayName?: string | null;
+  // ru-code: resolve custom-fork vs stock-qwen mark instead of the kind fallback.
+  profile?: CliProfileId | undefined;
   variant?: ThreadCommandSubtitleVariant;
   className?: string;
 }) {
@@ -96,6 +100,8 @@ export function ThreadCommandSubtitle(props: {
           <ProviderInstanceIcon
             driverKind={props.driverKind}
             displayName={props.providerDisplayName ?? props.driverKind}
+            // ru-code: resolve custom-fork vs stock-qwen mark instead of the kind fallback.
+            profile={props.profile ?? undefined}
             iconClassName="size-3 shrink-0 opacity-70"
           />
         </>

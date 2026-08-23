@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 // ru-code: the fork's single footer seam (auto-update pill + feature rows).
 import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
-import { APP_NAME } from "@ru-code/branding"; // ru-code
+import { APP_NAME, PR_STATUS_LOOKUP_ENABLED } from "@ru-code/branding"; // ru-code
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -105,6 +105,13 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
+// ru-code: PR status lookup kill switch (@ru-code/branding). Pure decision — exported for
+// tests — mirrors isTerminalUiEnabledForOs's precedent for gating sidebar UI on a fork const
+// without standing up a router/provider render harness just to pin one boolean.
+export function isPullRequestsFooterTriggerVisible(pullRequestsSupported: boolean): boolean {
+  return pullRequestsSupported && PR_STATUS_LOOKUP_ENABLED;
+}
+
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -119,8 +126,13 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
   // the link to lead somewhere.
-  const pullRequestsSupported = environments.some(
-    (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+  // ru-code: PR_STATUS_LOOKUP_ENABLED folded in via isPullRequestsFooterTriggerVisible — the
+  // footer trigger for the standalone Pull Requests list is hidden entirely when the fork's
+  // automatic PR lookup is off, default OFF.
+  const pullRequestsSupported = isPullRequestsFooterTriggerVisible(
+    environments.some(
+      (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+    ),
   );
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {

@@ -34,6 +34,13 @@ import {
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "../../../provider/acp/AcpRuntimeModel.ts";
+// ru-code (sub-agents): the sub-agent `_meta` reader, shared with the adapter so
+// the gate below and `classifyQwenToolCallFrame` agree on what an agent frame is.
+import {
+  classifyQwenToolCallFrame,
+  QWEN_AGENT_TOOL_NAME,
+  readQwenFrameMeta,
+} from "./QwenAcpSubAgents.ts";
 
 // ru-code: how long `readChildExit` waits for the child's exit status before
 // concluding the child is still alive. On the B1 path the child has already
@@ -250,6 +257,14 @@ const makeAcpSessionRuntime = (
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
+    // ru-code (sub-agents): the open ROOT agent window's task id, or undefined.
+    // The adapter keeps the same window (it owns the routing); this copy exists
+    // for ONE decision the adapter cannot take — whether a text chunk may open an
+    // assistant SEGMENT. Segments are minted here, and a child's chunk that
+    // opened one would leave an empty assistant bubble in the chat even after the
+    // adapter re-routed the delta. Both copies are driven by the same two
+    // boundary frames through the same classifier, so they cannot disagree.
+    const agentWindowRef = yield* Ref.make<string | undefined>(undefined);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     // True while a session/load request is in flight. Per ACP spec, the agent
@@ -347,6 +362,7 @@ const makeAcpSessionRuntime = (
           modeStateRef,
           toolCallsRef,
           assistantSegmentRef,
+          agentWindowRef, // ru-code (sub-agents)
           params: notification,
           runtimeInstanceId,
         });
@@ -791,6 +807,7 @@ const handleSessionUpdate = ({
   modeStateRef,
   toolCallsRef,
   assistantSegmentRef,
+  agentWindowRef,
   params,
   runtimeInstanceId,
 }: {
@@ -798,6 +815,8 @@ const handleSessionUpdate = ({
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
+  /** ru-code (sub-agents): open root-agent window, see its declaration. */
+  readonly agentWindowRef: Ref.Ref<string | undefined>;
   readonly params: EffectAcpSchema.SessionNotification;
   readonly runtimeInstanceId: string;
 }): Effect.Effect<void> =>
@@ -825,7 +844,18 @@ const handleSessionUpdate = ({
           }
           return [{ previous, merged: nextToolCall }, next] as const;
         });
-        if (!shouldEmitToolCallUpdate(previous, merged)) {
+        // ru-code (sub-agents): window bookkeeping runs on EVERY tool-call frame,
+        // before the update filter — the boundary frames always pass that filter,
+        // but running first makes the two independent of each other. The same
+        // classifier the adapter uses decides, so the two copies agree by
+        // construction rather than by convention.
+        const agentFrame = classifyQwenToolCallFrame(merged, event.rawPayload);
+        if (agentFrame._tag === "AgentRootStarted") {
+          yield* Ref.set(agentWindowRef, agentFrame.taskId);
+        } else if (agentFrame._tag === "AgentRootSettled") {
+          yield* Ref.set(agentWindowRef, undefined);
+        }
+        if (!shouldEmitToolCallUpdate(previous, merged, event.rawPayload)) {
           continue;
         }
         yield* Queue.offer(queue, {
@@ -836,6 +866,16 @@ const handleSessionUpdate = ({
         continue;
       }
       if (event._tag === "ContentDelta") {
+        // ru-code (sub-agents): inside a root-agent window an unstamped text
+        // chunk is the CHILD's (see the window proof in QwenAcpSubAgents.ts).
+        // It must not mint an assistant segment: the adapter re-routes the delta
+        // to the agent row, and a segment opened here would survive as an empty
+        // assistant bubble in the parent chat. Handed on WITHOUT an itemId,
+        // which is exactly how the adapter recognises it as unhomed.
+        if ((yield* Ref.get(agentWindowRef)) !== undefined) {
+          yield* Queue.offer(queue, event);
+          continue;
+        }
         if (event.text.trim().length === 0) {
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {
@@ -874,14 +914,40 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
 function shouldEmitToolCallUpdate(
   previous: AcpToolCallState | undefined,
   next: AcpToolCallState,
+  rawPayload: unknown,
 ): boolean {
   if (next.status === "completed" || next.status === "failed") {
+    return true;
+  }
+  // ru-code (sub-agents): the `agent` tool call's OPENING frame is the only
+  // non-terminal frame qwen sends for it (impl spec §4.1: open + close, no
+  // intermediate updates), so it is the ONLY chance the Agents panel has to learn
+  // the run exists. It always arrives with an empty `detail`: makeToolCallState
+  // feeds the frame's own title in as the fallback detail
+  // (provider/acp/AcpRuntimeModel.ts:362) and deriveToolActivityPresentation drops
+  // a detail equivalent to the title (packages/shared/src/toolActivity.ts:261-270),
+  // because "Agent: <description>" carries no path or command to distinguish it.
+  // The `!next.detail` bail below therefore swallowed the frame and `task.started`
+  // never fired. Scoped to the FIRST frame of a ROOT agent call, so the
+  // repeat-suppression the bail exists for is untouched and a re-sent opening frame
+  // cannot double-open the task.
+  if (previous === undefined && isQwenAgentRootFrame(rawPayload)) {
     return true;
   }
   if (!next.detail) {
     return false;
   }
   return previous === undefined || previous.title !== next.title || previous.detail !== next.detail;
+}
+
+// ru-code (sub-agents): true only for the ROOT `agent` call — qwen stamps
+// `_meta.toolName: "agent"` and NO `parentToolCallId`. A sub-agent that itself
+// spawns an agent carries both and belongs to its parent, so the parent check comes
+// first here exactly as it does in classifyQwenToolCallFrame
+// (QwenAcpSubAgents.ts:154-170). Keep the two in step.
+function isQwenAgentRootFrame(rawPayload: unknown): boolean {
+  const meta = readQwenFrameMeta(rawPayload);
+  return meta.toolName === QWEN_AGENT_TOOL_NAME && meta.parentToolCallId === undefined;
 }
 
 const assistantItemId = (sessionId: string, runtimeInstanceId: string, segmentIndex: number) =>

@@ -135,6 +135,7 @@ import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import {
+  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   resolveDefaultProviderModelSelection,
   type ProviderInstanceEntry,
@@ -604,7 +605,17 @@ function OpenCommandPaletteDialog(props: {
       const environmentProviders =
         environment.serverConfig?.providers ??
         (environment.environmentId === primaryEnvironmentId ? providers : []);
-      for (const entry of deriveProviderInstanceEntries(environmentProviders)) {
+      // ru-code: settings overlay refines the stage-1 profile default down to the
+      // instance's persisted config, so qwen thread subtitles resolve custom-fork
+      // vs stock-qwen instead of always the fork mark (icon-identity-analysis.md §2).
+      const environmentSettings = environment.serverConfig?.settings;
+      const projectedEntries = environmentSettings
+        ? applyProviderInstanceSettings(
+            deriveProviderInstanceEntries(environmentProviders),
+            environmentSettings,
+          )
+        : deriveProviderInstanceEntries(environmentProviders);
+      for (const entry of projectedEntries) {
         map.set(`${environment.environmentId}:${entry.instanceId}`, entry);
       }
     }
@@ -1068,6 +1079,8 @@ function OpenCommandPaletteDialog(props: {
               providerDisplayName={
                 thread.session?.providerName ?? providerEntry?.displayName ?? modelInstanceId
               }
+              // ru-code: resolve custom-fork vs stock-qwen mark instead of the kind fallback.
+              profile={providerEntry?.profile}
             />
           );
         },

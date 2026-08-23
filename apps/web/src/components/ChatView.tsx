@@ -39,7 +39,7 @@ import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashComm
 // ru-code: live catalog custom-command slugs (dynamic allowlist) for the qwen submit guard.
 import { useCatalogCommandSlugs } from "../ru-code/skills-agents/composer/useCatalogCommandSlugs"; // ru-code
 import { providerCommandSource } from "@ru-code/provider-capabilities"; // ru-code
-import { shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
+import { isQwenRunningTurn, shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
 import { deriveIsCompactingContext } from "../ru-code/workLog/contextCompaction"; // ru-code
 import {
   connectionStatusTitle,
@@ -2135,7 +2135,16 @@ function ChatViewContent(props: ChatViewProps) {
               aria-hidden="true"
             />
           ),
-          title: `${unavailableConnection.phase === "connecting" ? "Connecting" : "Reconnecting"} to ${activeEnvironmentUnavailableState.label}`,
+          // ru-code: the ternary-in-template shape `${phase === "connecting" ? "Connecting" :
+          // "Reconnecting"} to ${label}` produces a generic "{0} to {1}" skeleton the dict
+          // transform can't usefully match, so the ternary selects between two whole-phrase
+          // template literals instead — each is its own unique "{0}"-skeleton tpl, dict-covered
+          // (dict/apps/web/src/components/ChatView.tsx.json: "Connecting to {0}" / "Reconnecting
+          // to {0}").
+          title:
+            unavailableConnection.phase === "connecting"
+              ? `Connecting to ${activeEnvironmentUnavailableState.label}`
+              : `Reconnecting to ${activeEnvironmentUnavailableState.label}`,
           description: "It may be finishing an update. One moment.",
         });
       } else {
@@ -5076,6 +5085,18 @@ function ChatViewContent(props: ChatViewProps) {
         isConnecting,
         isCompactingContext,
         isEnvironmentUnavailable: activeEnvironmentUnavailable,
+        // ru-code: Enter reaches this gate directly (ChatComposer's key handler
+        // calls submitComposer → onSend), bypassing the Stop button the toolbar
+        // shows while a turn runs. qwen aborts the in-flight prompt when a new
+        // one arrives, so the answer is cut short; the rule is qwen-scoped
+        // because the other drivers STEER instead of aborting.
+        isRunningTurn: isQwenRunningTurn({
+          providerDriver: activeProviderStatus?.driver,
+          phase,
+          pendingApprovalCount: pendingApprovals.length,
+          pendingUserInputCount: pendingUserInputs.length,
+          hasPendingPlanApproval,
+        }),
         sendInFlight: sendInFlightRef.current,
         threadDetailLoading,
       })

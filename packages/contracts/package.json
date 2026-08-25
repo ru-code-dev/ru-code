@@ -28,6 +28,7 @@
     "@ru-code/branding": "workspace:*",
     "@ru-code/localization": "workspace:*",
     "@smart-tools/qwen-cli-agents-manager": "catalog:",
+    "@smart-tools/qwen-cli-analytics": "catalog:",
     "@smart-tools/qwen-cli-commands-manager": "catalog:",
     "@smart-tools/qwen-cli-extended-chat": "catalog:",
     "@smart-tools/qwen-cli-mcp-manager": "catalog:",

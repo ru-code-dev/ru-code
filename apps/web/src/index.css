@@ -1,10 +1,11 @@
 @import "tailwindcss";
-/* ru-code: catalog skills/agents panel styles. */
+/* ru-code: feature-package styles (catalog panels, MCP, analytics). */
 @import "@smart-tools/qwen-cli-skill-manager/styles.css";
 @import "@smart-tools/qwen-cli-agents-manager/styles.css";
 @import "@smart-tools/qwen-cli-commands-manager/styles.css";
 @import "@smart-tools/qwen-cli-mcp-manager/styles.css";
 @import "@smart-tools/qwen-cli-extended-chat/styles.css";
+@import "@smart-tools/qwen-cli-analytics/styles.css";
 @import "./ru-code/extended-chat/transcript.css"; /* ru-code: extended-chat transcript scrollbars */
 
 @custom-variant dark (&:is(.dark, .dark *));

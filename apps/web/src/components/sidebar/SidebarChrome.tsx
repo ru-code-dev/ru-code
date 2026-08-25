@@ -1,13 +1,16 @@
 import {
   ArrowLeftIcon,
-  // ru-code: parked together with the Usage button in the footer below — restore = uncomment
-  // ChartNoAxesColumnIcon,
+  ChartNoAxesColumnIcon, // ru-code: analytics footer button (owner decision row 4)
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
 // ru-code: the fork's single footer seam (auto-update pill + feature rows).
 import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
+
+// ru-code: which whole-area page the bar is on (analytics added — owner decision row 4).
+import { resolveSidebarFooterPage } from "../../ru-code/sidebar/footerPage";
 import { APP_NAME, PR_STATUS_LOOKUP_ENABLED } from "@ru-code/branding"; // ru-code
+
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -115,13 +118,9 @@ export function isPullRequestsFooterTriggerVisible(pullRequestsSupported: boolea
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  // ru-code: which whole-area page the bar is on, via the shared helper (analytics added).
   const currentFooterPage = useLocation({
-    select: (location) =>
-      location.pathname === "/usage"
-        ? "usage"
-        : location.pathname === "/pull-requests"
-          ? "pull-requests"
-          : null,
+    select: (location) => resolveSidebarFooterPage(location.pathname),
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -148,13 +147,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
-  // ru-code: parked with the Usage button in the footer below — restore = uncomment
-  // const handleUsageClick = useCallback(() => {
-  //   if (isMobile) {
-  //     setOpenMobile(false);
-  //   }
-  //   void navigate({ to: "/usage" });
-  // }, [isMobile, navigate, setOpenMobile]);
+  // ru-code: analytics — the parked Usage slot, re-pointed (owner decision row 4).
+  const handleAnalyticsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/analytics" });
+  }, [closeMobileSidebar, navigate]);
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
@@ -210,22 +207,24 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 </Tooltip>
               </SidebarMenuItem>
             ) : null}
-            {/* ru-code: Usage parked, not deleted — restore = delete this comment wrapper (and
-                uncomment `ChartNoAxesColumnIcon` in the lucide import and `handleUsageClick`
-                above). The /usage route itself is untouched (apps/web/src/routes/usage.tsx:5).
+            {/* ru-code: the parked Usage slot, now the analytics entry (owner decision row 4).
+                The /usage route and its Back state are untouched. */}
             <SidebarMenuItem className="shrink-0">
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
+                    <SidebarMenuButton
+                      aria-label="Analytics"
+                      onClick={handleAnalyticsClick}
+                      size="icon"
+                    >
                       <ChartNoAxesColumnIcon />
                     </SidebarMenuButton>
                   }
                 />
-                <TooltipPopup side="top">Usage</TooltipPopup>
+                <TooltipPopup side="top">Analytics</TooltipPopup>
               </Tooltip>
             </SidebarMenuItem>
-            */}
           </>
         )}
         <SidebarUpdatePill />

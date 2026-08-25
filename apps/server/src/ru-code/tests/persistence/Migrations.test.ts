@@ -37,20 +37,21 @@ layer("ru-code fork migrations", (it) => {
       const executed = yield* runRuCodeMigrations();
       assert.deepStrictEqual(
         executed.map(([id, name]) => `${id}_${name}`),
-        ["1_Mcp", "2_ProjectionThreadsChatViewMode"],
+        ["1_Mcp", "2_ProjectionThreadsChatViewMode", "3_QwenUsage"],
       );
 
       const tables = yield* listTables;
       assert.include(tables, "mcp_catalog_server");
       assert.include(tables, "mcp_project_binding");
       assert.include(tables, "mcp_probe_cache");
+      assert.include(tables, "analytics_file_cache");
 
       const recorded = yield* sql<{ migration_id: number; name: string }>`
         SELECT migration_id, name FROM ru_code_migrations ORDER BY migration_id
       `;
       assert.deepStrictEqual(
         recorded.map((row) => `${row.migration_id}_${row.name}`),
-        ["1_Mcp", "2_ProjectionThreadsChatViewMode"],
+        ["1_Mcp", "2_ProjectionThreadsChatViewMode", "3_QwenUsage"],
       );
 
       // The fork's chat_view_mode column landed on the upstream table.
@@ -101,7 +102,7 @@ coexistenceLayer("ru-code fork migrations — coexistence with upstream", (it) =
       const executed = yield* runRuCodeMigrations();
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [1, 2],
+        [1, 2, 3],
       );
 
       const upstreamFirst = yield* sql<{ migration_id: number }>`

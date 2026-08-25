@@ -9,6 +9,7 @@
 //
 // Append-only: new fork migrations take the next id. NEVER renumber a shipped entry.
 
+import { analyticsMigration } from "@smart-tools/qwen-cli-analytics/server";
 import { mcpMigration } from "@smart-tools/qwen-cli-mcp-manager/server";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
@@ -22,6 +23,12 @@ export const ruCodeMigrationEntries = [
   [1, "Mcp", mcpMigration],
   // Per-thread chat-view choice column (extended-chat feature).
   [2, "ProjectionThreadsChatViewMode", projectionThreadsChatViewMode],
+  // Analytics transcript cache (DDL lives with the feature package). Named "QwenUsage",
+  // not "Analytics": upstream already owns an unrelated telemetry/AnalyticsService.ts, and
+  // a recorded migration name is append-only once shipped. The migrator keys on ID, so an
+  // install that already recorded "3_Analytics" simply never re-runs id 3 — the rename
+  // affects what NEW installs record, nothing else.
+  [3, "QwenUsage", analyticsMigration],
 ] as const;
 
 const loader = Migrator.fromRecord(

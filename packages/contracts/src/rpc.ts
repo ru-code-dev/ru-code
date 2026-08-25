@@ -227,6 +227,11 @@ export { TRANSCRIPT_WS_METHODS };
 import { autoUpdateRpcs, AUTO_UPDATE_METHODS } from "./ru-code/auto-update/index.ts";
 
 export { AUTO_UPDATE_METHODS };
+// ru-code: the analytics RPC surface (2 unary reads) — minted in its package,
+// spread into WsRpcGroup below.
+import { analyticsRpcs, ANALYTICS_METHODS } from "@smart-tools/qwen-cli-analytics/contracts";
+
+export { ANALYTICS_METHODS };
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1127,4 +1132,6 @@ export const WsRpcGroup = RpcGroup.make(
   ...mcpManagerRpcs,
   // ru-code: the 18 auto-update RPCs (channels/check/apply/credentials/rollback + stream).
   ...autoUpdateRpcs,
+  // ru-code: the 2 analytics RPCs (getSnapshot / refresh).
+  ...analyticsRpcs,
 );

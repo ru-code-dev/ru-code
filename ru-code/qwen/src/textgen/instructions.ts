@@ -1,8 +1,11 @@
-// ru-code: the instruction lines our text-generation calls send to the CLI. Kept here
-// as a single source so the Stats feature can recognize these one-shot calls in qwen's
-// transcripts (apps/server/src/ru-code/stats/serviceSignatures.ts) without the two
-// places drifting. A pure leaf module (plain strings, no deps) so importing it from the
-// pure stats parser pulls nothing heavy.
+// ru-code: the instruction lines our text-generation calls send to the CLI. Kept here as
+// a single source so the analytics category classifier can recognize these one-shot
+// calls in qwen's transcripts — the consumer is @smart-tools/qwen-cli-analytics
+// (core/serviceSignatures.ts), and the drift guard is
+// apps/server/src/ru-code/tests/analytics/serviceSignaturesDrift.test.ts, which asserts
+// every marker IS a substring of its instruction. Reword an instruction past its marker
+// and that test fails instead of sessions silently misclassifying. A pure leaf module
+// (plain strings, no deps) so importing it pulls nothing heavy.
 
 export const THREAD_TITLE_INSTRUCTION =
   "You write concise titles for coding conversations. Reply in Russian (Русский язык). Technical identifiers (file names, symbols) may stay in English.";

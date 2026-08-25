@@ -115,6 +115,16 @@ import {
 import { signalFirstClientConnected } from "./ru-code/startup/firstClientConnected.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
+// ru-code: analytics scanner + handlers (extracted to ru-code/analytics).
+import { AnalyticsScanner } from "@smart-tools/qwen-cli-analytics/server";
+import { AnalyticsError } from "@smart-tools/qwen-cli-analytics/contracts";
+import { AnalyticsHostLayer } from "./ru-code/analytics/analyticsPorts.ts";
+import {
+  buildAnalyticsRpcHandlers,
+  traceAnalyticsRpc,
+  type ObserveAnalyticsRpc,
+} from "./ru-code/analytics/analyticsRpcHandlers.ts"; // ru-code: ANALYTICS_RPC_SCOPES moved to auth/RpcAuthorization.ts (C-app-003)
+
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -485,6 +495,8 @@ const makeWsRpcLayer = (
       const qwenTranscript = yield* QwenTranscriptService;
       // ru-code: the auto-update engine (same memoized instance the runtime graph provides).
       const updateEngine = yield* UpdateEngine;
+      // ru-code: the analytics scanner (incremental reader of qwen's transcript tree).
+      const analyticsScanner = yield* AnalyticsScanner;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -579,6 +591,37 @@ const makeWsRpcLayer = (
             ),
           ),
           { "rpc.aggregate": "mcp" },
+        );
+      // ru-code: same encoding for the analytics RPCs — they declare ONLY `AnalyticsError`.
+      //
+      // `traceAnalyticsRpc` wraps the AUTHORIZED effect, i.e. it sits OUTSIDE
+      // `authorizeEffect`. That helper short-circuits with `Effect.fail` without running what
+      // it is given, so a trace nested inside it would go silent for exactly the
+      // scope-rejected requests where "did the request even arrive?" is the open question.
+      // `instrumentRpcEffect` emits a span + counter but no log line, so this is additive.
+      //
+      // Aggregate is "qwen-usage", not "analytics": upstream already owns an unrelated
+      // telemetry `AnalyticsService`, and this attribute is permanent once it reaches a
+      // dashboard.
+      const observeAnalyticsRpc: ObserveAnalyticsRpc = (method, effect) =>
+        instrumentRpcEffect(
+          method,
+          traceAnalyticsRpc(
+            method,
+            authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
+              // ru-code: rename followed the helper's move (C-app-004)
+              Effect.catchTag("EnvironmentAuthorizationError", (error) =>
+                Effect.fail(
+                  new AnalyticsError({
+                    reason: "unauthorized",
+                    detail: error.message,
+                    cause: error,
+                  }),
+                ),
+              ),
+            ),
+          ),
+          { "rpc.aggregate": "qwen-usage" },
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
         isOrchestrationDispatchCommandError(cause)
@@ -1614,6 +1657,11 @@ const makeWsRpcLayer = (
           observeRpcEffect,
           observeRpcStreamEffect,
         }),
+        // ru-code: analytics RPC handlers (extracted to ru-code/analytics).
+        ...buildAnalyticsRpcHandlers({
+          analyticsScanner,
+          observeAnalyticsRpc,
+        }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
@@ -2522,6 +2570,13 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                   Layer.provide(ProviderSessionRuntime.layer),
                 ),
               ),
+              // ru-code: the analytics scanner. This is a memo HIT onto the instance the
+              // long-lived runtime graph builds (server.ts), NOT a second scanner — layer
+              // memoization keys on layer object identity and AnalyticsHostLayer is a
+              // module-level const. Keep BOTH sites: this one supplies the RPC handlers,
+              // the graph one owns the scope the scan is forked into. Building it only
+              // here would close that scope before any RPC is served.
+              Layer.provide(AnalyticsHostLayer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS

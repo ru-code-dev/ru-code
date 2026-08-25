@@ -68,6 +68,9 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { SessionRespawnGateLive } from "./ru-code/skills-agents/SessionRespawnGate.ts";
 // ru-code: MCP manager host wiring (ports + package runtime services).
 import { McpManagerHostLayer } from "./ru-code/mcp/mcpPorts.ts";
+// ru-code: analytics host wiring. Built in the long-lived runtime graph below — see the
+// comment there; the ws route's provide is a memo hit onto this same instance.
+import { AnalyticsHostLayer } from "./ru-code/analytics/analyticsPorts.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -730,6 +733,7 @@ export const makeServerLayer = Layer.unwrap(
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
       AutoUpdateHostLayer, // ru-code: auto-update engine (boot probes + scheduler live with the app)
+      AnalyticsHostLayer, // ru-code: analytics scanner — long-lived, so its forked scan outlives any one request
     );
 
     return serverApplicationLayer.pipe(

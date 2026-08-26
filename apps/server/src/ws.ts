@@ -89,6 +89,16 @@ import {
 } from "@smart-tools/qwen-cli-mcp-manager/server";
 import { McpError } from "@smart-tools/qwen-cli-mcp-manager/contracts";
 import { McpManagerHostLayer } from "./ru-code/mcp/mcpPorts.ts";
+// ru-code: Pixso MCP assistant service + handlers (extracted to ru-code/pixso-assistant;
+// scopes live in auth/RpcAuthorization.ts alongside every other feature's).
+import { PixsoAssistant } from "@smart-tools/t3-code-pixso-mcp-assistant/server";
+import { PixsoAssistantError } from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
+import { PixsoAssistantHostLayer } from "./ru-code/pixso-assistant/ports.ts";
+import {
+  buildPixsoAssistantRpcHandlers,
+  type ObservePixsoAssistantRpc,
+  type ObservePixsoAssistantRpcStream,
+} from "./ru-code/pixso-assistant/rpcHandlers.ts";
 // ru-code: auto-update RPC handlers (logic in ru-code/auto-update; scopes live in
 // auth/RpcAuthorization.ts).
 import { buildAutoUpdateRpcHandlers } from "./ru-code/auto-update/rpcHandlers.ts";
@@ -497,6 +507,8 @@ const makeWsRpcLayer = (
       const updateEngine = yield* UpdateEngine;
       // ru-code: the analytics scanner (incremental reader of qwen's transcript tree).
       const analyticsScanner = yield* AnalyticsScanner;
+      // ru-code: the Pixso MCP assistant service (content-addressed scan store + MCP client).
+      const pixsoAssistant = yield* PixsoAssistant;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -572,6 +584,14 @@ const makeWsRpcLayer = (
       // ru-code: same encoding for the MCP RPCs — they declare ONLY `McpError`, so an auth
       // failure is folded into it (unary + stream variants; stream construction lives in the
       // package services, this seam stays a thin delegation).
+      //
+      // NOT consolidated with the pixso pair below into one generic factory (D-L17 tried):
+      // `catchTag` cannot narrow `E | EnvironmentAuthorizationError` while `E` is an
+      // unresolved type parameter — it widens the handler's argument to
+      // `{ readonly _tag: unknown } & E` and the fold stops type-checking. Concrete error
+      // types here are what make the narrowing exact, so the twenty duplicated lines buy
+      // real static safety. `observeCatalogRpc` above is a THIRD shape (per-call aggregate),
+      // not a fourth copy of this one.
       const observeMcpRpc: ObserveMcpRpc = (method, effect) =>
         instrumentRpcEffect(
           method,
@@ -622,6 +642,31 @@ const makeWsRpcLayer = (
             ),
           ),
           { "rpc.aggregate": "qwen-usage" },
+        );
+      // ru-code: same encoding for the Pixso assistant RPCs — they declare ONLY
+      // `PixsoAssistantError`, so an auth failure is folded into it (unary + stream).
+      const observePixsoAssistantRpc: ObservePixsoAssistantRpc = (method, effect) =>
+        instrumentRpcEffect(
+          method,
+          authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
+            Effect.catchTag("EnvironmentAuthorizationError", (error) =>
+              // No `cause`: `PixsoAssistantError` deliberately carries only `detail`
+              // (A-I4), and `detail` IS this error's message — nothing is lost. The
+              // sibling `McpError` above keeps its cause; that type is out of scope.
+              Effect.fail(new PixsoAssistantError({ detail: error.message })),
+            ),
+          ),
+          { "rpc.aggregate": "pixsoAssistant" },
+        );
+      const observePixsoAssistantRpcStream: ObservePixsoAssistantRpcStream = (method, stream) =>
+        instrumentRpcStream(
+          method,
+          authorizeStream(requiredScopeForRpcMethod(method), stream).pipe(
+            Stream.catchTag("EnvironmentAuthorizationError", (error) =>
+              Stream.fail(new PixsoAssistantError({ detail: error.message })),
+            ),
+          ),
+          { "rpc.aggregate": "pixsoAssistant" },
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
         isOrchestrationDispatchCommandError(cause)
@@ -1645,6 +1690,12 @@ const makeWsRpcLayer = (
           observeMcpRpc,
           observeMcpRpcStream,
         }),
+        // ru-code: Pixso MCP assistant RPC handlers (extracted to ru-code/pixso-assistant).
+        ...buildPixsoAssistantRpcHandlers({
+          pixsoAssistant,
+          observePixsoAssistantRpc,
+          observePixsoAssistantRpcStream,
+        }),
         // ru-code: extended-chat transcript RPC handlers (ru-code/qwen/transcript).
         ...buildTranscriptRpcHandlers({
           qwenTranscript,
@@ -2555,6 +2606,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // ru-code: the MCP manager services (same memoized module-level layer the
               // runtime graph provides, so ws sees the SAME supervisor instance).
               Layer.provide(McpManagerHostLayer),
+              // ru-code: the Pixso MCP assistant service (host port wired in
+              // ru-code/pixso-assistant/ports.ts; FileSystem + Path + ServerConfig ambient).
+              Layer.provide(PixsoAssistantHostLayer),
               // ru-code: the auto-update engine (same memoized module-level layer).
               Layer.provide(AutoUpdateHostLayer),
               // ru-code: transcript reader. The session directory is a stateless

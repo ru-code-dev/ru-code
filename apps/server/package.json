@@ -43,6 +43,7 @@
     "@smart-tools/qwen-cli-mcp-manager": "catalog:",
     "@smart-tools/qwen-cli-skill-manager": "catalog:",
     "@smart-tools/qwen-cli-transcript-core": "catalog:",
+    "@smart-tools/t3-code-pixso-mcp-assistant": "catalog:",
     "effect": "catalog:",
     "msgpackr-extract": "3.0.4",
     "node-pty": "^1.1.0",

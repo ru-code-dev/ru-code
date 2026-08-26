@@ -28,7 +28,7 @@ describe("probeVersionByExit", () => {
       ["-e", "process.stdout.write('hello')"],
       TIMEOUT,
     );
-    expect(result).toEqual({ ok: false, reason: "broken" });
+    expect(result).toEqual({ ok: false, reason: "broken", outputTail: "hello" });
   });
 
   it("missing when the command does not exist (ENOENT)", async () => {

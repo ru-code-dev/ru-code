@@ -1,7 +1,7 @@
 /**
  * QwenAcpSupport — ACP session runtime factory for the qwen CLI.
  *
- * Spawns `node <cliJs> [launchArgs] [--allowed-mcp-server-names …] --acp` and
+ * Spawns `node <cliJs> [launchArgs] [allowlist flag …] --acp` and
  * wraps the result in a {@link QwenAcpSessionRuntime} layer. The session-start
  * auth method is resolved per instance (override or profile default).
  *
@@ -15,14 +15,10 @@ import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
-import { CLI_ENV_VAR_PREFIX, resolveCliProfile } from "@ru-code/branding";
-import {
-  ACP_SERVER_NO_SSL,
-  MCP_ENGINE_USE_OVERLAY,
-  NO_MCP_SERVER_SENTINEL,
-} from "@ru-code/qwen/constants";
+import { allowedMcpServerArgs, resolveCliProfile } from "@ru-code/branding";
+import { ACP_SERVER_NO_SSL, MCP_ENGINE_USE_OVERLAY } from "@ru-code/qwen/constants";
 import { buildCliSpawn } from "@ru-code/qwen/spawn";
-import { resolveDefaultAuthMethod } from "./profileResolver.ts";
+import { buildCliEnv, resolveDefaultAuthMethod } from "./profileResolver.ts";
 import {
   QwenAcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -55,6 +51,9 @@ export interface QwenAcpRuntimeInput extends Omit<
   readonly environment?: NodeJS.ProcessEnv;
   // ru-code: resolved cli.js (ServerConfig.cliJs). Spawned as `node <cliJs> --acp`.
   readonly cliJs: string;
+  // ru-code: the instance's resolved CLI profile dir (resolveCliProfileSettings().dir) — the
+  // registry's HOME row. Required: the CLI reads the wrong profile (or none) without it.
+  readonly homeDir: string;
   // ru-code: forwarded verbatim into the spawn (env + launch arg). Absent ⇒ today's behaviour.
   readonly settingsOverlay?: QwenAcpSettingsOverlay;
 }
@@ -71,55 +70,39 @@ function parseLaunchArgs(launchArgs: string | undefined): ReadonlyArray<string> 
   return trimmed.split(/\s+/);
 }
 
-/**
- * ru-code: the `--allowed-mcp-server-names` argument pair for an allowlist.
- *
- * Shared by every qwen spawn that should honour the overlay's allowlist (ACP sessions, warm
- * slots, one-shot text generation). An empty/absent list yields the sentinel rather than no
- * flag, because the CLI treats a missing flag as "no filter" and connects everything.
- */
-export function buildAllowedMcpServerArgs(
-  allowedMcpServers: ReadonlyArray<string> | undefined,
-): ReadonlyArray<string> {
-  const names = (allowedMcpServers ?? []).filter((name) => name.trim().length > 0);
-  return [
-    "--allowed-mcp-server-names",
-    names.length > 0 ? names.join(",") : NO_MCP_SERVER_SENTINEL,
-  ];
-}
-
 export function buildQwenAcpSpawnInput(
   cliJs: string,
-  // ru-code: the spawn only needs launchArgs/homePath — narrower than the runtime
-  // settings (which also carry profile/defaultAuthMethod for auth resolution).
-  qwenSettings: Pick<QwenSettings, "launchArgs" | "homePath"> | null | undefined,
+  // ru-code: the instance's resolved CLI profile dir — the registry's HOME row.
+  homeDir: string,
+  // ru-code: the spawn only needs launchArgs — narrower than the runtime settings
+  // (which also carry profile/defaultAuthMethod for auth resolution).
+  qwenSettings: Pick<QwenSettings, "launchArgs"> | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
   settingsOverlay?: QwenAcpSettingsOverlay,
 ): AcpSpawnInput {
-  const env: NodeJS.ProcessEnv = { ...environment };
-  // ru-code: qwen re-spawns itself as a child unless this is set (relaunch
-  // wrapper, qwen-code relaunch.ts). One process ⇒ half the boot cost/memory
-  // and our SIGKILL hits the real agent instead of the wrapper.
-  env[`${CLI_ENV_VAR_PREFIX}_NO_RELAUNCH`] = "true";
+  // ru-code: the enforced env comes from the branding CLI registry (cliEnv.ts) via buildCliEnv —
+  // the relaunch guard, the profile dir and, when present, the settings overlay. The overlay is
+  // gated on MCP_ENGINE_USE_OVERLAY so the documented kill-switch actually disables overlay
+  // injection (and the server allowlist below) when off.
+  const env = buildCliEnv(environment ?? {}, {
+    homeDir,
+    ...(MCP_ENGINE_USE_OVERLAY && settingsOverlay?.settingsOverlayPath
+      ? { settingsOverlayPath: settingsOverlay.settingsOverlayPath }
+      : {}),
+  });
   if (ACP_SERVER_NO_SSL) {
     env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  // ru-code: a highest-precedence settings file overlaid onto qwen's own config.
-  // Gated on MCP_ENGINE_USE_OVERLAY so the documented kill-switch actually disables
-  // overlay injection (and the server allowlist below) when off.
-  if (MCP_ENGINE_USE_OVERLAY && settingsOverlay?.settingsOverlayPath) {
-    env[`${CLI_ENV_VAR_PREFIX}_SYSTEM_SETTINGS_PATH`] = settingsOverlay.settingsOverlayPath;
-  }
   // ru-code: restrict qwen to exactly the overlay's MCP servers. The flag is ALWAYS passed while
-  // the engine is on — an empty allowlist means "no MCP", which is expressed by the sentinel and
-  // NOT by omitting the flag (omitting it disables the filter, so the CLI connects every server
-  // the user configured; see NO_MCP_SERVER_SENTINEL). Engine off ⇒ no flag at all, so the
-  // kill-switch leaves qwen's own MCP configuration untouched.
+  // the engine is on — an empty allowlist means "no MCP", which the registry expresses with its
+  // sentinel value and NOT by omitting the flag (omitting it disables the filter, so the CLI
+  // connects every server the user configured; see CLI_ARGS.ALLOWED_MCP_SERVERS). Engine off ⇒ no
+  // flag at all, so the kill-switch leaves qwen's own MCP configuration untouched.
   const allowMcpArgs = MCP_ENGINE_USE_OVERLAY
-    ? buildAllowedMcpServerArgs(settingsOverlay?.allowedMcpServers)
+    ? allowedMcpServerArgs(settingsOverlay?.allowedMcpServers)
     : [];
-  // ru-code: `node <cliJs> [launchArgs] [--allowed-mcp-server-names …] --acp`
+  // ru-code: `node <cliJs> [launchArgs] [allowlist flag …] --acp`
   // directly — no shell, no PATH lookup.
   const spawn = buildCliSpawn(cliJs, [
     ...parseLaunchArgs(qwenSettings?.launchArgs),
@@ -143,6 +126,7 @@ export const makeQwenAcpRuntime = (
         ...input,
         spawn: buildQwenAcpSpawnInput(
           input.cliJs,
+          input.homeDir,
           input.qwenSettings,
           input.cwd,
           input.environment,

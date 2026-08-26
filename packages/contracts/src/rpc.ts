@@ -232,6 +232,14 @@ export { AUTO_UPDATE_METHODS };
 import { analyticsRpcs, ANALYTICS_METHODS } from "@smart-tools/qwen-cli-analytics/contracts";
 
 export { ANALYTICS_METHODS };
+// ru-code: the Pixso MCP assistant RPC surface — minted in its package, spread into
+// WsRpcGroup below.
+import {
+  pixsoAssistantRpcs,
+  PIXSO_ASSISTANT_METHODS,
+} from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
+
+export { PIXSO_ASSISTANT_METHODS };
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1134,4 +1142,6 @@ export const WsRpcGroup = RpcGroup.make(
   ...autoUpdateRpcs,
   // ru-code: the 2 analytics RPCs (getSnapshot / refresh).
   ...analyticsRpcs,
+  // ru-code: the Pixso MCP assistant RPCs (panel snapshot; scan/card/catalog tiers follow).
+  ...pixsoAssistantRpcs,
 );

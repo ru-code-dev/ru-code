@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { ChatAttachment } from "@t3tools/contracts";
+import { ChatAttachment, MidTurnDeliveryState } from "@t3tools/contracts"; // ru-code: MidTurnDeliveryState
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -21,6 +21,10 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    // ru-code (mid-turn wave, P3b): NULL in SQL = "an ordinary message", which
+    // is every pre-existing row. Mapped back to an ABSENT field, not to a
+    // fourth state.
+    deliveryState: Schema.NullOr(MidTurnDeliveryState),
   }),
 );
 
@@ -37,6 +41,8 @@ function toProjectionThreadMessage(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+    // ru-code (mid-turn wave, P3b)
+    ...(row.deliveryState !== null ? { deliveryState: row.deliveryState } : {}),
   };
 }
 
@@ -57,6 +63,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json,
           is_streaming,
+          delivery_state, -- ru-code (mid-turn wave, P3b)
           created_at,
           updated_at
         )
@@ -75,6 +82,17 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             )
           ),
           ${row.isStreaming ? 1 : 0},
+          -- ru-code: COALESCE so a mark-only re-emission (which carries no
+          -- deliveryState) never ERASES an existing mark, mirroring how
+          -- attachments_json is preserved above.
+          COALESCE(
+            ${row.deliveryState ?? null},
+            (
+              SELECT delivery_state
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
           ${row.createdAt},
           ${row.updatedAt}
         )
@@ -89,6 +107,11 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             projection_thread_messages.attachments_json
           ),
           is_streaming = excluded.is_streaming,
+          -- ru-code (mid-turn wave, P3b): same preserve-on-absent rule.
+          delivery_state = COALESCE(
+            excluded.delivery_state,
+            projection_thread_messages.delivery_state
+          ),
           created_at = excluded.created_at,
           updated_at = excluded.updated_at
       `;
@@ -108,6 +131,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState", -- ru-code (mid-turn wave, P3b)
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -129,6 +153,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState", -- ru-code (mid-turn wave, P3b)
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages

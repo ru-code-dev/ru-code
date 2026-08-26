@@ -288,6 +288,46 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+/**
+ * ru-code (mid-turn wave, P3b): the delivery mark on a message the user sent
+ * while a turn was running.
+ *
+ * ABSENT is the normal case and means "an ordinary message" — no mark at all.
+ * Only a message that went through the mid-turn QUEUE ever carries one, so this
+ * is optional everywhere, exactly like the `chatViewMode` precedent above
+ * (nullable/optional with an old-data default, so existing rows and events keep
+ * decoding untouched).
+ *
+ * Semantics, and the reason both terminal marks are STICKY, live in
+ * {@link mergeMidTurnDeliveryState} directly below. (They used to be specified
+ * in `apps/web/src/ru-code/composer/midTurnDelivery.ts`, which phase 4 deleted
+ * as dead code — this pointer outlived it.)
+ */
+export const MidTurnDeliveryState = Schema.Literals(["pending", "delivered", "not-delivered"]); // ru-code
+export type MidTurnDeliveryState = typeof MidTurnDeliveryState.Type; // ru-code
+
+/**
+ * ru-code (mid-turn wave, phase 4 — m4/SB4): merge an incoming delivery mark
+ * into the one already stored. BOTH terminal marks are sticky.
+ *
+ * Lives in contracts because the rule must hold in two places that cannot import
+ * each other: the server's projection merge (the copy that survives a page
+ * reload) and the client reducer (the copy that governs the live balloon). A
+ * single definition is what stops them drifting.
+ *
+ * Why stickiness is a requirement and not a nicety: the persisted column is
+ * last-writer-wins, so without this a late `not-delivered` after a `delivered`
+ * would un-deliver a message the model had ALREADY seen — a lie about what the
+ * agent was told, which is worse than showing no mark. The mirror case matters
+ * too: nothing auto-fires after a stop, so a stray late `delivered` must never
+ * resurrect a message the user was told had failed.
+ */
+export const mergeMidTurnDeliveryState = (
+  stored: MidTurnDeliveryState | undefined,
+  incoming: MidTurnDeliveryState | undefined,
+): MidTurnDeliveryState | undefined =>
+  stored === "delivered" || stored === "not-delivered" ? stored : (incoming ?? stored); // ru-code
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
@@ -295,6 +335,7 @@ export const OrchestrationMessage = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  deliveryState: Schema.optional(MidTurnDeliveryState), // ru-code
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -935,6 +976,18 @@ const ThreadContextCompactCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ru-code (agentic-flow wave): stop ONE background agent task on the thread's
+// live provider session. Fired by the per-row stop button on a running
+// background agent card; the adapter answers qwen's
+// `qwen/control/session/task/cancel` and the row settles from the next poll.
+const ThreadTaskStopCommand = Schema.Struct({
+  type: Schema.Literal("thread.task.stop"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -996,6 +1049,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadContextCompactCommand, // ru-code
+  ThreadTaskStopCommand, // ru-code (agentic-flow wave)
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1033,6 +1087,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadContextCompactCommand, // ru-code
+  ThreadTaskStopCommand, // ru-code (agentic-flow wave)
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1086,6 +1141,19 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ru-code (mid-turn wave, P3b): mark one message's delivery state. Structurally
+// the twin of `ThreadMessageAssistantCompleteCommand` above — addressed by
+// `messageId`, and handled by RE-EMITTING `thread.message-sent` for that id, the
+// established way this codebase mutates an already-written message row.
+const ThreadMessageDeliveryStateCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.delivery-state"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  deliveryState: MidTurnDeliveryState,
+  createdAt: IsoDateTime,
+}); // ru-code
+
 const ThreadProposedPlanUpsertCommand = Schema.Struct({
   type: Schema.Literal("thread.proposed-plan.upsert"),
   commandId: CommandId,
@@ -1136,6 +1204,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
+  ThreadMessageDeliveryStateCommand, // ru-code
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
@@ -1175,6 +1244,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.context-compact-requested", // ru-code
+  "thread.task-stop-requested", // ru-code (agentic-flow wave)
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1354,6 +1424,13 @@ export const ThreadMessageSentPayload = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  // ru-code (mid-turn wave, P3b): carried on a RE-EMISSION of this same event
+  // for an already-written messageId — the codebase's existing way to mutate a
+  // message row (the assistant streaming/complete pair does exactly this, and a
+  // re-emission with `text: ""` preserves the stored text). Adding a field here
+  // rather than a new event type keeps the WS allowlist, `projectActivityEvent`
+  // passthrough and the projection's read-merge-upsert all working unchanged.
+  deliveryState: Schema.optional(MidTurnDeliveryState), // ru-code
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1381,6 +1458,15 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
 // hidden `/compress` on the thread's live provider session.
 export const ThreadContextCompactRequestedPayload = Schema.Struct({
   threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+// ru-code (agentic-flow wave): the intent the reactor turns into a provider
+// call. `taskId` is qwen's own immutable agent id (`<subagentType>-<callId>`),
+// the same string the poll snapshot and the panel row are keyed by.
+export const ThreadTaskStopRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
 });
 
@@ -1578,6 +1664,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.context-compact-requested"), // ru-code
     payload: ThreadContextCompactRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.task-stop-requested"), // ru-code (agentic-flow wave)
+    payload: ThreadTaskStopRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

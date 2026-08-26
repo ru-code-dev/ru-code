@@ -19,21 +19,24 @@ import type { PlatformKey } from "./common/types.ts";
  */
 export const CLI_BIN_PATHS: Record<PlatformKey, ReadonlyArray<string>> = {
   darwin: [
-    // local test: pnpm global qwen-code (stable symlinked path, version-independent)
-    "{home}/Library/pnpm/global/5/node_modules/@qwen-code/qwen-code/cli.js",
-    "{home}/.npm-global/lib/node_modules/<cli>/cli.js",
-    "/opt/homebrew/lib/node_modules/<cli>/cli.js",
-    // last-resort fallback: the CLI's own config-dir bin (`~/<dir>/bin/cli.js`)
+    // 0.21.1
+    "{home}/Library/pnpm/store/v11/links/@qwen-code/qwen-code/0.21.1/64f994170921f602b4471bd3a255a819da4d8a607f8dd59385a9bbe97c033c10/node_modules/@qwen-code/qwen-code/cli.js",
+    // 0.13.1
+    // "{home}/Library/pnpm/global/5/node_modules/@qwen-code/qwen-code/cli.js",
     `{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}/bin/cli.js`,
   ],
-  linux: [
-    "{home}/.local/share/pnpm/global/5/node_modules/<cli>/cli.js",
-    "/usr/local/lib/node_modules/<cli>/cli.js",
-    `{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}/bin/cli.js`,
-  ],
-  win32: [
-    "{appdata}/npm/node_modules/<cli>/cli.js",
-    "{localappdata}/<cli>/cli.js",
-    `{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}/bin/cli.js`,
-  ],
+  linux: [`{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}/bin/cli.js`],
+  win32: [`{home}/${PREFLIGHT_CLI_PROBE_DIRNAME}/bin/cli.js`],
+};
+
+/**
+ * WHERE the deployment's identity file lives (CLI_PASS_IDENTITY feature) — ONE path per platform,
+ * `""` = not configured (the feature is then inert on that platform). The file is READ, never
+ * executed: preflight/common/identity.ts extracts IDENTITY_KEY's value from its text and every CLI
+ * spawn injects it as that env var. Same tokens as above; filled per deployment.
+ */
+export const CLI_IDENTITY_PATHS: Record<PlatformKey, string> = {
+  darwin: "",
+  linux: "",
+  win32: "",
 };

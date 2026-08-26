@@ -38,9 +38,20 @@ import {
 // the gate below and `classifyQwenToolCallFrame` agree on what an agent frame is.
 import {
   classifyQwenToolCallFrame,
+  isQwenSubAgentFrame,
+  isQwenV2WireFrame,
   QWEN_AGENT_TOOL_NAME,
   readQwenFrameMeta,
+  type QwenAgentFrame,
 } from "./QwenAcpSubAgents.ts";
+// ru-code (agentic-flow wave): the pseudo-turn marker. Read here so the
+// segment machinery can leave a background frame alone, and again in the
+// adapter so the two agree on what a background frame is by construction.
+import {
+  QWEN_BACKGROUND_END_TURN_METHOD,
+  QwenBackgroundEndTurnParams,
+  readQwenBackgroundNotification,
+} from "../background/backgroundTaskContract.ts";
 
 // ru-code: how long `readChildExit` waits for the child's exit status before
 // concluding the child is still alive. On the B1 path the child has already
@@ -264,7 +275,31 @@ const makeAcpSessionRuntime = (
     // opened one would leave an empty assistant bubble in the chat even after the
     // adapter re-routed the delta. Both copies are driven by the same two
     // boundary frames through the same classifier, so they cannot disagree.
-    const agentWindowRef = yield* Ref.make<string | undefined>(undefined);
+    // ru-code (agents wave): the OPEN root-agent task ids. Was a single slot,
+    // when qwen's ACP path ran agent calls one at a time; 0.21.1 runs them
+    // concurrently (qwen Session.ts:6621-6627, runBounded :6742-6796), so a set
+    // is required — with a single slot the second root's open would make the
+    // first child's text mint an assistant segment again.
+    const agentWindowRef = yield* Ref.make<ReadonlySet<string>>(new Set<string>());
+    // ru-code (phase 4, f-1): the 0.21.1-engine latch, mirroring the adapter's.
+    //
+    // ru-code (phase 4b, OPEN-2): they CAN disagree, and the earlier claim that
+    // they "cannot" was wrong. The adapter latches on TWO facts — provenance on
+    // a tool call, and a tagged text/thought chunk — while this one latches on
+    // provenance only, so a text-only 0.21.1 stream sets the adapter's and not
+    // this one. It is safe, but for a reason worth stating rather than assuming:
+    // this copy is only ever READ together with `openAgents.size > 0`, and a
+    // non-empty `openAgents` implies a root `tool_call` frame was seen, which
+    // implies provenance was seen — so the half-gated branch can only fire on a
+    // genuine v0.13.1 wire. Asserted by the equality spec in
+    // subAgentAuditFixes.e2e.test.ts, not left as folklore.
+    //
+    // Needed HERE because the segment decision is taken here:
+    // suppressing a segment for ANY open window meant an untagged parent chunk
+    // (six Session.ts sites emit those, and SE:7893 fires inside the concurrent
+    // agent batch) reached the chat with no itemId, landing outside this
+    // runtime's own assistant-segment scheme.
+    const v2WireRef = yield* Ref.make(false);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     // True while a session/load request is in flight. Per ACP spec, the agent
@@ -353,6 +388,30 @@ const makeAcpSessionRuntime = (
 
     const acp = yield* Effect.service(EffectAcpClient.AcpClient).pipe(Effect.provide(acpContext));
 
+    // ru-code (agentic-flow wave, P3c): the background pseudo-turn's end signal,
+    // parsed into the SAME ordered queue as the frames it terminates.
+    //
+    // Registered by EXACT method name, so the client dispatches it here and not
+    // through the adapter's unknown-ext fallback (effect-acp client.ts:378-386).
+    // That is the point: acting on it in the fallback ran it on the client's own
+    // dispatch fiber, AHEAD of the `session/update` frames still sitting in this
+    // queue — the message was closed before its content arrived, then re-opened
+    // by that content and never closed again. Found by mutation M5.
+    yield* acp.handleExtNotification(
+      QWEN_BACKGROUND_END_TURN_METHOD,
+      QwenBackgroundEndTurnParams,
+      (params) =>
+        Effect.gen(function* () {
+          const suppress = yield* Ref.get(suppressUpdatesRef);
+          if (suppress) return;
+          yield* Queue.offer(eventQueue, {
+            _tag: "BackgroundTurnEnded",
+            ...(params.reason !== undefined ? { reason: params.reason } : {}),
+            rawPayload: params,
+          });
+        }),
+    );
+
     yield* acp.handleSessionUpdate((notification) =>
       Effect.gen(function* () {
         const suppress = yield* Ref.get(suppressUpdatesRef);
@@ -363,6 +422,7 @@ const makeAcpSessionRuntime = (
           toolCallsRef,
           assistantSegmentRef,
           agentWindowRef, // ru-code (sub-agents)
+          v2WireRef, // ru-code (phase 4, f-1)
           params: notification,
           runtimeInstanceId,
         });
@@ -537,7 +597,7 @@ const makeAcpSessionRuntime = (
             sessionId: params.resumeSessionId,
             cwd: params.cwd,
             // ru-code: MCP servers come from the settings overlay
-            // (QWEN_CODE_SYSTEM_SETTINGS_PATH), not this ACP array.
+            // (CLI_ENV.SYSTEM_SETTINGS_PATH, branding cliEnv.ts), not this ACP array.
             mcpServers: [],
           } satisfies EffectAcpSchema.LoadSessionRequest;
           yield* Ref.set(suppressUpdatesRef, true);
@@ -808,6 +868,7 @@ const handleSessionUpdate = ({
   toolCallsRef,
   assistantSegmentRef,
   agentWindowRef,
+  v2WireRef,
   params,
   runtimeInstanceId,
 }: {
@@ -816,7 +877,9 @@ const handleSessionUpdate = ({
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   /** ru-code (sub-agents): open root-agent window, see its declaration. */
-  readonly agentWindowRef: Ref.Ref<string | undefined>;
+  readonly agentWindowRef: Ref.Ref<ReadonlySet<string>>;
+  /** ru-code (phase 4, f-1): 0.21.1-engine latch, see its declaration. */
+  readonly v2WireRef: Ref.Ref<boolean>;
   readonly params: EffectAcpSchema.SessionNotification;
   readonly runtimeInstanceId: string;
 }): Effect.Effect<void> =>
@@ -849,13 +912,18 @@ const handleSessionUpdate = ({
         // but running first makes the two independent of each other. The same
         // classifier the adapter uses decides, so the two copies agree by
         // construction rather than by convention.
+        if (isQwenV2WireFrame(event.rawPayload)) yield* Ref.set(v2WireRef, true);
         const agentFrame = classifyQwenToolCallFrame(merged, event.rawPayload);
         if (agentFrame._tag === "AgentRootStarted") {
-          yield* Ref.set(agentWindowRef, agentFrame.taskId);
+          yield* Ref.update(agentWindowRef, (open) => new Set(open).add(agentFrame.taskId));
         } else if (agentFrame._tag === "AgentRootSettled") {
-          yield* Ref.set(agentWindowRef, undefined);
+          yield* Ref.update(agentWindowRef, (open) => {
+            const next = new Set(open);
+            next.delete(agentFrame.taskId);
+            return next;
+          });
         }
-        if (!shouldEmitToolCallUpdate(previous, merged, event.rawPayload)) {
+        if (!shouldEmitToolCallUpdate(previous, merged, event.rawPayload, agentFrame)) {
           continue;
         }
         yield* Queue.offer(queue, {
@@ -872,7 +940,32 @@ const handleSessionUpdate = ({
         // to the agent row, and a segment opened here would survive as an empty
         // assistant bubble in the parent chat. Handed on WITHOUT an itemId,
         // which is exactly how the adapter recognises it as unhomed.
-        if ((yield* Ref.get(agentWindowRef)) !== undefined) {
+        // ru-code (agents wave): a chunk is the CHILD's if it is TAGGED for one,
+        // or — on a 0.13.1 engine, which could tag no message chunk at all — if
+        // any window is open. It must not mint an assistant SEGMENT, or the
+        // parent chat keeps an empty bubble after the adapter re-routes it.
+        //
+        // ru-code (phase 4, f-1): the open-window half is now gated on NOT having
+        // proven a 0.21.1 engine. Ungated, an untagged PARENT chunk arriving
+        // while a child ran was treated as the child's and lost its itemId.
+        // ru-code (agentic-flow wave, P3c): a BACKGROUND-notification frame is
+        // handed on WITHOUT touching the assistant segment at all.
+        //
+        // qwen's pseudo-turn (research §3.3) fires with no `session/prompt` of
+        // ours enclosing it, so `ensureActiveAssistantSegment` would fold it
+        // into whatever segment is open — and ingestion resolves one message id
+        // per open segment, then concatenates with no separator
+        // (ProviderRuntimeIngestion.ts:1095-1138). That is the byte-level splice
+        // the P1 repro pins. Not closing the parent's segment either is the
+        // other half: closing it would break a live turn's own reply in two
+        // just because a detached agent happened to finish mid-sentence.
+        if (readQwenBackgroundNotification(event.rawPayload) !== undefined) {
+          yield* Queue.offer(queue, event);
+          continue;
+        }
+        const openAgents = yield* Ref.get(agentWindowRef);
+        const v2Wire = yield* Ref.get(v2WireRef);
+        if (isQwenSubAgentFrame(event.rawPayload) || (!v2Wire && openAgents.size > 0)) {
           yield* Queue.offer(queue, event);
           continue;
         }
@@ -915,8 +1008,29 @@ function shouldEmitToolCallUpdate(
   previous: AcpToolCallState | undefined,
   next: AcpToolCallState,
   rawPayload: unknown,
+  agentFrame: QwenAgentFrame,
 ): boolean {
   if (next.status === "completed" || next.status === "failed") {
+    return true;
+  }
+  // ru-code (agentic-flow wave, FIX ROUND 2): THE FRAME THAT NAMES THE ROW.
+  //
+  // The `previous === undefined` root-frame exemption below was written when the
+  // spawn's opening frame really was the first frame we saw. On the real wire it
+  // is not: `ToolCallPreparationTracker.observe`
+  // (tool-call-preparation-tracker.ts:29-51) emits an ARGLESS `tool_call`
+  // (`args: {}`, `phase: 'preparing'`) as soon as the model's stream reveals the
+  // call, so by the time the frame carrying `description` / `subagent_type`
+  // arrives, `previous` is defined — and that frame's detail is
+  // title-equivalent, so the `!next.detail` bail dropped it. The row therefore
+  // never learned the agent's name from the only frame that carries it, which is
+  // how a card ends up titled after its own `call_…` id
+  // (subagentRuntime.ts:362).
+  //
+  // Keyed off the classifier already computed above rather than a second copy of
+  // the rule: `AgentRootStarted` is by definition the frame that opens a
+  // foreground agent row, so it is exactly the set that must never be swallowed.
+  if (agentFrame._tag === "AgentRootStarted") {
     return true;
   }
   // ru-code (sub-agents): the `agent` tool call's OPENING frame is the only
@@ -932,6 +1046,17 @@ function shouldEmitToolCallUpdate(
   // repeat-suppression the bail exists for is untouched and a re-sent opening frame
   // cannot double-open the task.
   if (previous === undefined && isQwenAgentRootFrame(rawPayload)) {
+    return true;
+  }
+  // ru-code (agents wave): the same argument for a CHILD's first frame. An inner
+  // tool call's opening frame is the row's only live "what is it doing right
+  // now" signal, and it hits the `!next.detail` bail below for exactly the reason
+  // the root frame did — a title-equivalent detail is dropped as redundant. Every
+  // agent-owned frame is re-homed out of the main timeline by its `agentId`
+  // (session-logic.ts isAgentInternalActivity), so letting it through adds a row
+  // to the agent, never to the chat. Scoped to the FIRST frame, so the
+  // repeat-suppression this bail exists for is untouched.
+  if (previous === undefined && isQwenSubAgentFrame(rawPayload)) {
     return true;
   }
   if (!next.detail) {

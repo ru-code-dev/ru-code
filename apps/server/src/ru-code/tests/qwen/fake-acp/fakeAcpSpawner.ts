@@ -60,7 +60,7 @@ export interface FakeAcpSpawnerObservers {
    * ru-code (warm engine): spawn-recipe capture — fires with the exact
    * command/args/env/cwd of every spawn, so pool tests can assert the
    * byte-identical-spawn invariant (argv allowlist, slot overlay env path,
-   * QWEN_CODE_NO_RELAUNCH).
+   * the branding CLI registry's enforced vars).
    */
   readonly onSpawnInput?: (input: {
     readonly command: string;

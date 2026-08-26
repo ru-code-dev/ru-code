@@ -6,8 +6,8 @@
 // NOT involved — /healthz + the on-disk journal/pointer/versions tree are the observable truth.
 // (The real-BROWSER acceptance cycle is the sibling suite in browserCycle/, E2E-C.)
 //
-// RUN:  pnpm test:integration:auto-update        (from the repo root)
-//   or: node ru-code/e2e/integration/liveCycleAutoUpdate.ts
+// RUN:  node ru-code/e2e/features/auto-update/liveCycle.ts     (from the repo root)
+//   or as a step in the `test:e2e:all` chain (root package.json)
 //
 // Its reusable machinery (payload/layout assembly, the fixture release server, daemon boot/stop,
 // on-disk observation) lives in ./shared.ts — extracted so browserCycle/ reuses it verbatim.

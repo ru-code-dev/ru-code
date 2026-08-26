@@ -92,6 +92,31 @@ describe("install create_wrapper", () => {
       expect(r.stdout).toContain("EXEC");
       expect(r.stdout).toContain("cli.js");
       expect(r.stdout).toContain("exec");
+      // POSIX keeps the relocatable runtime form — the Windows branch below must never leak here.
+      expect(r.stdout).toContain(`"$(dirname "$0")/cli.js"`);
+    } finally {
+      sb.cleanup();
+    }
+  });
+
+  // Windows: the cli.js path is a NODE argument, so the wrapper bakes the ABSOLUTE node-form path
+  // (to_node_path) instead of the runtime `dirname "$0"` POSIX form, which node.exe misreads when
+  // Git Bash path translation is off. The sandbox BIN_DIR has no drive prefix, so what's asserted
+  // is the baked-absolute shape; the /c→C:/ rewrite itself is pinned in pathLogic.test.ts.
+  it("bakes the absolute cli.js path on Windows (no runtime dirname)", () => {
+    const sb = makeSandbox();
+    try {
+      const tarball = writeFakeRelease(sb);
+      sb.write("tmp/.keep", "");
+      const r = sourceEval(
+        sb,
+        `${EXTRACT_AND_INSTALL}\ncreate_wrapper\n[ -x "$BIN_DIR/$APP_BIN" ] && echo EXEC\ncat "$BIN_DIR/$APP_BIN"`,
+        { globals: { ...baseGlobals(sb, tarball), OS: "windows", ENTRY_JS: "cli.js" } },
+      );
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("EXEC");
+      expect(r.stdout).toContain(`'${sb.path("app/.ru-code/bin")}/cli.js'`);
+      expect(r.stdout).not.toContain("dirname");
     } finally {
       sb.cleanup();
     }

@@ -1095,6 +1095,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     // ru-code: hidden context compaction — plain intent pass-through, the
     // reactor owns the session checks and the provider call.
+    // ru-code (agentic-flow wave): the per-row background-agent stop. Same
+    // shape as the compaction case directly below — validate the thread, emit
+    // the intent, let the reactor make the provider call.
+    case "thread.task.stop": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.task-stop-requested",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
     case "thread.context.compact": {
       yield* requireThread({
         readModel,
@@ -1357,6 +1381,53 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           text: "",
           turnId: command.turnId ?? null,
           streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    // ru-code (mid-turn wave, P3b): mark one message's delivery state.
+    //
+    // Re-emits `thread.message-sent` for an already-written messageId, which is
+    // this codebase's established way to mutate a message row — structurally the
+    // `thread.message.assistant.complete` case above. Reusing that event keeps
+    // the WS allowlist, the activity passthrough and the projection's
+    // read-merge-upsert all working unchanged; a new event type would have
+    // needed a literal, payload, union member, projection case, allowlist entry
+    // and reducer case of its own.
+    case "thread.message.delivery-state": {
+      const deliveryThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // ru-code: PRESERVE THE MESSAGE'S OWN ROLE. Hardcoding a role here
+      // rewrites it on the projection row via the upsert, which turns the
+      // user's balloon into an assistant one — the message keeps rendering, so
+      // the damage shows up only as a mark that silently stops appearing.
+      // Found exactly that way by the reload e2e.
+      const deliveryRole =
+        deliveryThread.messages.find((entry) => entry.id === command.messageId)?.role ?? "user";
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          role: deliveryRole,
+          // `text: ""` is load-bearing — the projection's merge preserves the
+          // stored text when the incoming text is empty, so marking delivery
+          // never rewrites what the user wrote.
+          text: "",
+          turnId: null,
+          streaming: false,
+          deliveryState: command.deliveryState,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

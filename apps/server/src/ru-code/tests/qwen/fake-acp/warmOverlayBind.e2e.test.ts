@@ -1,7 +1,7 @@
 // ru-code: warm-engine v2 MCP-project pool proof over the REAL QwenAdapter,
 // using the fake spawner's spawn-recipe capture:
 //   - an MCP project's FIRST start is cold (canonical overlay env + allowlist
-//     argv + QWEN_CODE_NO_RELAUNCH), then the project gets its own spares
+//     argv + the branding registry's enforced env), then the project gets its own spares
 //     baked with the same allowlist and slot-private overlay paths;
 //   - the next start TAKES a project spare: the slot overlay file carries the
 //     LIVE canonical bytes at bind (policy/secret edits reuse spares) and the
@@ -18,11 +18,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
-import {
-  MCP_PREWARM_INSTANCES,
-  NO_MCP_SERVER_SENTINEL,
-  PREWARM_GENERIC_INSTANCES,
-} from "@ru-code/qwen/constants";
+import { MCP_PREWARM_INSTANCES, PREWARM_GENERIC_INSTANCES } from "@ru-code/qwen/constants";
+import { CLI_ARGS, CLI_ENV, cliEnvAssignments } from "@ru-code/branding";
 
 import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
@@ -45,8 +42,39 @@ interface SpawnRecipe {
 }
 
 const allowlistOf = (recipe: SpawnRecipe): string | null => {
-  const index = recipe.args.indexOf("--allowed-mcp-server-names");
+  const index = recipe.args.indexOf(CLI_ARGS.ALLOWED_MCP_SERVERS.flag);
   return index === -1 ? null : String(recipe.args[index + 1]);
+};
+
+// ru-code: the concrete env-var names live in branding's CLI registry (cliEnv.ts) — these tests
+// read them through it, so a fork's prefix rename cannot leave this suite asserting dead names.
+/** A runtime row's value on this spawn (all aliases carry the same value). */
+const rowValue = (recipe: SpawnRecipe, row: { readonly names: ReadonlyArray<string> }): string =>
+  String(recipe.env?.[row.names[0] as string]);
+
+/** Assert EVERY alias of a runtime row carries `expected` on this spawn. */
+const assertRow = (
+  recipe: SpawnRecipe,
+  row: { readonly names: ReadonlyArray<string> },
+  expected: string,
+  message: string,
+): void => {
+  for (const name of row.names)
+    assert.strictEqual(recipe.env?.[name], expected, `${message} (${name})`);
+};
+
+/** The registry rows that are fixed for every spawn — no ACP spawn may be missing one. */
+const assertEnforcedEnv = (recipe: SpawnRecipe, message: string): void => {
+  for (const [name, value] of cliEnvAssignments()) {
+    assert.strictEqual(recipe.env?.[name], value, `${message}: enforced ${name}`);
+  }
+  // HOME is runtime-supplied (per-instance homePath / profile default / preflight), so what is
+  // pinned here is that it arrived at all and arrived EXPANDED.
+  for (const name of CLI_ENV.HOME.names) {
+    const home = String(recipe.env?.[name] ?? "");
+    assert.isAbove(home.length, 0, `${message}: ${name} present`);
+    assert.isFalse(home.startsWith("~"), `${message}: ${name} expanded`);
+  }
 };
 
 it.effect(
@@ -88,10 +116,10 @@ it.effect(
         // configured server during startup and the spare dies on its warmup budget.
         assert.strictEqual(
           allowlistOf(generic),
-          NO_MCP_SERVER_SENTINEL,
+          CLI_ARGS.ALLOWED_MCP_SERVERS.value,
           "generic spares block MCP with the sentinel allowlist",
         );
-        assert.strictEqual(generic.env?.["QWEN_CODE_NO_RELAUNCH"], "true");
+        assertEnforcedEnv(generic, "generic spare");
         assert.strictEqual(generic.cwd, serverConfig.stateDir, "spares spawn with neutral cwd");
       }
 
@@ -118,12 +146,13 @@ it.effect(
       // Index derivation: the boot spares come first, the cold spawn follows.
       const cold = recipes[PREWARM_GENERIC_INSTANCES]!;
       assert.strictEqual(allowlistOf(cold), "beta,alpha");
-      assert.strictEqual(
-        cold.env?.["QWEN_CODE_SYSTEM_SETTINGS_PATH"],
+      assertRow(
+        cold,
+        CLI_ENV.SYSTEM_SETTINGS_PATH,
         canonicalPath,
         "the cold start reads the canonical overlay directly",
       );
-      assert.strictEqual(cold.env?.["QWEN_CODE_NO_RELAUNCH"], "true");
+      assertEnforcedEnv(cold, "cold start");
       // The FIRST project spare (spawned right after the cold bind succeeded).
       // NOTE: this also pins the pool's DOCUMENTED FIFO pop order — takes pop
       // the OLDEST spare first (WarmAcpPool popSlotLocked), so the next take
@@ -134,7 +163,7 @@ it.effect(
         ["alpha", "beta"],
         "project spares bake the SAME allowlist set",
       );
-      const spareOverlayPath = String(spare.env?.["QWEN_CODE_SYSTEM_SETTINGS_PATH"]);
+      const spareOverlayPath = rowValue(spare, CLI_ENV.SYSTEM_SETTINGS_PATH);
       assert.match(
         spareOverlayPath,
         /qwen-warm[/\\].+[/\\]system\.json$/,
@@ -196,8 +225,9 @@ it.effect(
       );
       const newCold = recipes[PREWARM_GENERIC_INSTANCES + 2 + MCP_PREWARM_INSTANCES]!;
       assert.strictEqual(allowlistOf(newCold), "gamma");
-      assert.strictEqual(
-        newCold.env?.["QWEN_CODE_SYSTEM_SETTINGS_PATH"],
+      assertRow(
+        newCold,
+        CLI_ENV.SYSTEM_SETTINGS_PATH,
         canonicalPath,
         "the cold respawn reads the canonical overlay directly",
       );

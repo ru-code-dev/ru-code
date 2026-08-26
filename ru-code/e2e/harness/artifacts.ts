@@ -17,7 +17,6 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
@@ -34,6 +33,7 @@ import {
   log,
   mkTemp,
   REPO_ROOT,
+  RU_CODE_TMP_ROOT,
   SERVER_DIST,
   WEB_DIST,
 } from "./primitives.ts";
@@ -73,7 +73,8 @@ export const sha256 = (bytes: Buffer): string =>
 
 /** Tar `dir`'s CONTENTS at the archive root (`-C dir .`), gzip — matches fetchVersion's extract. */
 export function tarDir(dir: string): Buffer {
-  const out = NodePath.join(NodeOS.tmpdir(), `au-tar-${NodeCrypto.randomUUID()}.tgz`);
+  NodeFS.mkdirSync(RU_CODE_TMP_ROOT, { recursive: true });
+  const out = NodePath.join(RU_CODE_TMP_ROOT, `au-tar-${NodeCrypto.randomUUID()}.tgz`);
   NodeChildProcess.execFileSync("tar", ["-czf", out, "-C", dir, "."], { stdio: "ignore" });
   const bytes = NodeFS.readFileSync(out);
   NodeFS.rmSync(out, { force: true });

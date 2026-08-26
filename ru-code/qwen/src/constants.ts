@@ -20,25 +20,15 @@ export const ACP_SERVER_NO_SSL = true;
 /**
  * MCP_ENGINE_USE_OVERLAY — kill-switch for the MCP overlay engine. When true,
  * starting an ACP session injects the per-project settings overlay
- * (`QWEN_CODE_SYSTEM_SETTINGS_PATH`) + server allowlist. The overlay itself is
+ * (the CLI registry's SYSTEM_SETTINGS_PATH row) + server allowlist. The overlay itself is
  * supplied by a separate feature; this adapter passes it through when present.
  */
 export const MCP_ENGINE_USE_OVERLAY = true;
 
-/**
- * NO_MCP_SERVER_SENTINEL — the allowlist entry that means "connect NOTHING".
- *
- * The CLI decides by the PRESENCE of `--allowed-mcp-server-names`, not its content: with the
- * flag it builds an allow-set and keeps only servers whose name is in it; WITHOUT the flag there
- * is no filter at all and it connects every MCP server the user has configured, awaiting each
- * one during startup. Omitting the flag for "we want no MCP" therefore did the exact opposite —
- * a machine with slow/unreachable servers spent minutes in startup, which is longer than the
- * warm-slot warmup budget, so every pooled slot was killed before it could answer `initialize`.
- *
- * Passing a name no server can have keeps the filter active and empties it. Any non-colliding
- * token works; this one is explicit in a process list.
- */
-export const NO_MCP_SERVER_SENTINEL = "__none__";
+// ru-code: the "connect NOTHING" MCP allowlist entry used to live here as a loose constant. It is
+// now a ROW in the branding CLI registry (@ru-code/branding cliEnv.ts, CLI_ARGS.ALLOWED_MCP_SERVERS),
+// alongside the flag it belongs to — the two are meaningless apart, since the CLI decides by the
+// flag's PRESENCE and that value is how "no servers" is expressed.
 
 /**
  * STOP_BUTTON_METHOD — what the Stop button does. "end-force" because CLI builds
@@ -115,7 +105,7 @@ export const QWEN_MODELS_AUTO_DISCOVERY = true;
  * ACP_WARM_ENGINE — single kill-switch for the warm-session engine (warm CLI
  * pool + instant-settle cancel-then-kill stop + starting feedback + coordinated
  * shutdown). false ⇒ spawn/stop behavior byte-identical to the classic path.
- * `QWEN_CODE_NO_RELAUNCH` is deliberately NOT behind this gate.
+ * The CLI registry's relaunch-guard row is deliberately NOT behind this gate.
  */
 // ru-code: PERMANENT env seam — RU_CODE_WARM_ENGINE=0 disables the pool and is
 // set ONLY by the e2e harness (ru-code/e2e/scripts/bootApp.ts) for determinism

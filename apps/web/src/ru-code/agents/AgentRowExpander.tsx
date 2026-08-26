@@ -8,6 +8,10 @@
  * uses for workflows (AgentsPanel.tsx:378-522) is a pattern, not a component —
  * copied in shape (open state is presentation state, settling never yanks it
  * shut), not imported.
+ *
+ * The per-row background stop is NOT hosted here any more: it moved into the
+ * row's own title line (`AgentRow`'s `stop` slot, AgentsPanel.tsx:174), so this
+ * component no longer needs the dispatch ids and no longer takes them.
  */
 import type { RuntimeSubagent } from "@t3tools/client-runtime/state/subagentRuntime";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -24,6 +28,8 @@ export function AgentRowExpander({ agent, row }: { agent: RuntimeSubagent; row: 
     return <>{row}</>;
   }
   const Chevron = open ? ChevronDown : ChevronRight;
+  // The stop control now lives INSIDE the row's title line (AgentRow's `stop`
+  // slot) — it stopPropagation()s its clicks, so the expander toggle is safe.
   return (
     <div>
       <button
@@ -35,8 +41,8 @@ export function AgentRowExpander({ agent, row }: { agent: RuntimeSubagent; row: 
       >
         {row}
         {/* Height-neutral by construction: absolutely positioned, so the row's
-            three-line grid is unchanged. Revealed on hover or while open, so a
-            resting roster looks exactly as it did before. */}
+              three-line grid is unchanged. Revealed on hover or while open, so a
+              resting roster looks exactly as it did before. */}
         <Chevron
           aria-hidden
           className={cn(

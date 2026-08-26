@@ -4,6 +4,7 @@ import {
   ApprovalRequestId,
   EventId,
   IsoDateTime,
+  MessageId, // ru-code (mid-turn wave, P3c)
   ProviderItemId,
   ThreadId,
   TurnId,
@@ -63,14 +64,15 @@ export const ProviderSessionStartInput = Schema.Struct({
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
   // ru-code: generic — overlay this settings file onto the spawned CLI's own
-  // config at highest precedence (qwen reads it via QWEN_CODE_SYSTEM_SETTINGS_PATH).
+  // config at highest precedence (delivered as CLI_ENV.SYSTEM_SETTINGS_PATH, branding
+  // cliEnv.ts).
   // Any feature that needs to inject CLI settings can reuse this; the producer
   // owns the file's meaning. Independent of `allowedMcpServers`.
   settingsOverlayPath: Schema.optional(TrimmedNonEmptyString),
-  // ru-code: MCP server allowlist forwarded to the CLI (qwen
-  // `--allowed-mcp-server-names`). Named for what it is rather than masked under
-  // a generic key. Independent of `settingsOverlayPath`. Plain strings — these
-  // are opaque server names the producer owns, not validated identifiers here.
+  // ru-code: MCP server allowlist forwarded to the CLI (delivered as
+  // CLI_ARGS.ALLOWED_MCP_SERVERS, branding cliEnv.ts). Named for what it is rather than
+  // masked under a generic key. Independent of `settingsOverlayPath`. Plain strings —
+  // these are opaque server names the producer owns, not validated identifiers here.
   allowedMcpServers: Schema.optional(Schema.Array(Schema.String)),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
@@ -91,6 +93,16 @@ export const ProviderSendTurnInput = Schema.Struct({
   // adapters that respawn on mode change simply ignore it. Optional ⇒ additive, no
   // existing caller/adapter breaks.
   runtimeMode: Schema.optional(RuntimeMode),
+  // ru-code (mid-turn wave, P3c): the orchestration message id this turn's text
+  // came from. Needed ONLY by the mid-turn queue: when a send arrives while a
+  // turn is running it is queued rather than dispatched, and the adapter must
+  // later be able to say WHICH message row was delivered (or reset). Without
+  // this the adapter holds text with no addressable identity and no mark can
+  // ever be attached.
+  //
+  // Optional ⇒ additive, no existing caller/adapter breaks — same contract as
+  // `runtimeMode` directly above, added for the same reason.
+  messageId: Schema.optional(MessageId),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
@@ -112,6 +124,16 @@ export const ProviderCompactContextInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ProviderCompactContextInput = typeof ProviderCompactContextInput.Type;
+
+// ru-code (agentic-flow wave): stop ONE background agent task on a thread's
+// live provider session. `taskId` is the provider's own task id — for qwen the
+// immutable `<subagentType>-<callId>` string its registry, poll snapshot and
+// cancel ext-method all share.
+export const ProviderStopBackgroundTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
+});
+export type ProviderStopBackgroundTaskInput = typeof ProviderStopBackgroundTaskInput.Type;
 
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,

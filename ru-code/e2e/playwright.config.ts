@@ -6,7 +6,7 @@
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./tests",
+  testDir: "./tests-core",
   testMatch: /.*\.e2e\.test\.ts/,
   // Scroll physics are timing-sensitive: one worker, no parallelism, generous
   // timeouts — determinism beats speed here.

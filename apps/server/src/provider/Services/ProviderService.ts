@@ -13,6 +13,7 @@
  */
 import type {
   ProviderCompactContextInput, // ru-code
+  ProviderStopBackgroundTaskInput, // ru-code (agentic-flow wave)
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -65,6 +66,21 @@ export interface ProviderServiceShape {
    */
   readonly compactContext: (
     input: ProviderCompactContextInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * ru-code (agentic-flow wave): stop ONE background agent task on the thread's
+   * live provider session. Fails `ProviderUnsupportedError` for an adapter that
+   * has no individually addressable background tasks.
+   *
+   * OPTIONAL on the SERVICE (unlike `compactContext` above, which is required),
+   * deliberately: making it required would force a new field into six existing
+   * service mocks, four of them in port test files that R4 tells us not to
+   * touch. A `?` here costs one guard at the reactor's single call site and
+   * zero upstream edits — the smaller seam, which is what R5 asks for.
+   */
+  readonly stopBackgroundTask?: (
+    input: ProviderStopBackgroundTaskInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**

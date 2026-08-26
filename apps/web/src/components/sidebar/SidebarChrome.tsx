@@ -6,6 +6,12 @@ import {
 } from "lucide-react";
 // ru-code: the fork's single footer seam (auto-update pill + feature rows).
 import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
+// ru-code: global-panel triggers (skills/agents/commands/mcp) live in the footer icon row.
+import { OVERLAY_PANELS } from "../../ru-code/skills-agents/rightGlobalPanel/registry";
+import {
+  useRightGlobalPanelStore,
+  type GlobalPanelId,
+} from "../../ru-code/skills-agents/rightGlobalPanel/store";
 
 // ru-code: which whole-area page the bar is on (analytics added — owner decision row 4).
 import { resolveSidebarFooterPage } from "../../ru-code/sidebar/footerPage";
@@ -158,12 +164,25 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/" });
   }, [closeMobileSidebar, navigate]);
 
+  // ru-code: global panels (skills/agents/commands/mcp) — same toggle the text menu used;
+  // the open panel's icon stays selected via isActive until the panel closes.
+  const openGlobalPanel = useRightGlobalPanelStore((state) => state.open);
+  const toggleGlobalPanel = useRightGlobalPanelStore((state) => state.toggle);
+  const handleGlobalPanelClick = useCallback(
+    (id: GlobalPanelId) => {
+      closeMobileSidebar();
+      toggleGlobalPanel(id);
+    },
+    [closeMobileSidebar, toggleGlobalPanel],
+  );
+
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <RuCodeFeaturesMenu /> {/* ru-code */}
-      <SidebarMenu className="flex-row items-center">
+      {/* ru-code: flex-wrap — the icon row breaks onto a second line when too narrow. */}
+      <SidebarMenu className="flex-row flex-wrap items-center">
         {currentFooterPage ? (
           <SidebarMenuItem className="min-w-0 flex-1">
             <SidebarMenuButton onClick={handleBackClick}>
@@ -225,6 +244,31 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 <TooltipPopup side="top">Analytics</TooltipPopup>
               </Tooltip>
             </SidebarMenuItem>
+            {/* ru-code: global-panel triggers (all five, Pixso included) — same item shape as
+                Settings/Analytics above; selected (isActive) while their panel is open. The row
+                flex-wraps onto a second line when the sidebar is too narrow. */}
+            {OVERLAY_PANELS.map((panel) => {
+              const Icon = panel.icon;
+              return (
+                <SidebarMenuItem className="shrink-0" key={panel.id}>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <SidebarMenuButton
+                          aria-label={panel.label}
+                          isActive={openGlobalPanel === panel.id}
+                          onClick={() => handleGlobalPanelClick(panel.id)}
+                          size="icon"
+                        >
+                          <Icon />
+                        </SidebarMenuButton>
+                      }
+                    />
+                    <TooltipPopup side="top">{panel.label}</TooltipPopup>
+                  </Tooltip>
+                </SidebarMenuItem>
+              );
+            })}
           </>
         )}
         <SidebarUpdatePill />

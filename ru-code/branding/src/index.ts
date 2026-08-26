@@ -4,6 +4,8 @@
 // re-skin the product edit the values in this file (+ cliProfiles.ts) and nothing
 // else. Everywhere else references these constants.
 
+export * from "./cliEnv.ts";
+export * from "./cliEnvBuild.ts";
 export * from "./cliProfiles.ts";
 export * from "./hiddenModels.ts";
 export * from "./modelNameWords.ts";
@@ -149,25 +151,35 @@ export const PREFLIGHT_CLI_PROBE_DIRNAME = `.qwen`;
  * value exists ONCE. Filled per deployment, like the CLI probe paths.
  */
 export const NODE_BIN_PATHS: Record<"darwin" | "linux" | "win32", string> = {
-  darwin: "/opt/gigacode/runtime/node/bin/node",
-  linux: "/opt/gigacode/runtime/node/bin/node",
-  win32: "", // fill per deployment (shipped-node path unknown for Windows yet)
+  darwin: "",
+  linux: "",
+  win32: "",
 };
 
 /**
- * Env-var prefix the CLI reads for its system-settings path + no-relaunch flag.
- * A qwen fork edits this to its own prefix, same as the dot-dir above.
+ * CLI_INVOKE_AUTO — HOW the resolved CLI bin is executed. `true`: every spawn site dispatches by
+ * extension (`.js/.mjs/.cjs` → node, `.cmd/.bat` → `cmd.exe /d /s /c` with a hidden window,
+ * anything else → direct exec, honoring a POSIX shebang). `false`: each site keeps its historic
+ * behaviour (buildCliSpawn's js/ts/direct split; the probes' hardcoded node). The flag is read in
+ * exactly ONE place — buildCliSpawn (ru-code/qwen/src/spawn.ts) — call sites never branch on it.
+ * With `.js`-only CLI_BIN_PATHS both settings produce identical spawns; the flag exists so a
+ * deployment shipping a `.cmd`/sh CLI wrapper can be executed correctly.
  */
-export const CLI_ENV_VAR_PREFIX = "QWEN_CODE";
+export const CLI_INVOKE_AUTO = true;
 
 /**
- * Env var carrying the CLI's profile (home) directory into every spawned CLI
- * process — the absolute dir the boot preflight resolved (ServerConfig.cliConfigDir,
- * e.g. `/Users/x/.qwen`). Injected at the driver's single spawn-env convergence
- * point so ACP sessions, warm slots, text generation and the version probe all
- * carry it. A qwen fork edits this to the name its build actually reads.
+ * CLI_PASS_IDENTITY — WHAT extra env rides along. `true`: each CLI spawn reads the per-platform
+ * identity file (preflight CLI_IDENTITY_PATHS), extracts the value assigned to IDENTITY_KEY inside
+ * it, and injects it as that env var via the CLI registry. Read in exactly ONE place —
+ * resolveCliIdentity (preflight/common/identity.ts). Any miss (flag off / no path configured /
+ * file absent / key absent / value rejected) degrades to today's env: the variable is omitted,
+ * nothing blocks. Inert until CLI_IDENTITY_PATHS is filled per deployment.
  */
-export const CLI_HOME_ENV_VAR = "QWEN_HOME";
+export const CLI_PASS_IDENTITY = true;
+
+// ru-code: the CLI's env-var names used to live here as two loose constants (a prefix that call
+// sites string-concatenated, plus the home var), which let each spawn site decide for itself which
+// of them to inject. They are now ROWS in the CLI registry — see cliEnv.ts, exported above.
 
 /**
  * DEFAULT_PROVIDER_INSTANCE_ID — the single source of the app's default provider. This is a

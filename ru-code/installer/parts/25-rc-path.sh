@@ -341,6 +341,23 @@ to_msys_path() {
   fi
 }
 
+# The inverse, for NODE ARGUMENTS: MSYS "/c/path" → "C:/path". Git Bash auto-converts such
+# arguments when spawning native node.exe ONLY while its path translation is on —
+# MSYS_NO_PATHCONV=1 / MSYS2_ARG_CONV_EXCL (machine-wide on some corp images) turn it off, and
+# node then reads "/c/..." as "<current drive>:\c\..." — so every bash-born path handed to node
+# goes through this rewrite instead of relying on the environment. Windows-gated: on POSIX a
+# single-letter root dir (e.g. /u/data) must never become a drive. Anything not shaped
+# /<letter>/... passes through byte-identical.
+to_node_path() {
+  local p="$1"
+  if [ "$OS" = "windows" ] && [[ "$p" =~ ^/([A-Za-z])/(.*)$ ]]; then
+    local drive; drive=$(printf '%s' "${BASH_REMATCH[1]}" | tr 'a-z' 'A-Z')
+    printf '%s:/%s' "$drive" "${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
 # ----------------------------------------------------------------------------
 # Sourced-launcher generation (USE_RC_SOURCED_LAUNCHER=true)
 # ----------------------------------------------------------------------------
@@ -364,11 +381,12 @@ rc_source_line() {
 #     to `node` from PATH when that binary is gone (node was moved/upgraded between installs).
 # `command` bypasses any same-named alias/function without executing any script FILE; only "$@" is
 # deferred. Consumes $PATH_BIN (shell-form bin dir, MSYS-converted on Windows), $NODE_PATH,
-# $NODE_FLAGS, $ENTRY_JS, $APP_BIN, $APP_DISPLAY_NAME.
+# $NODE_FLAGS, $ENTRY_JS, $APP_BIN, $APP_DISPLAY_NAME. The cli.js path is a NODE argument, so on
+# Windows it is baked in node form (to_node_path) — PATH/case lines stay shell-form ($PATH_BIN).
 rc_env_content() {
   local node_q cli_q
   node_q="$(rc_shq "$NODE_PATH")"
-  cli_q="$(rc_shq "$PATH_BIN/$ENTRY_JS")"
+  cli_q="$(rc_shq "$(to_node_path "$PATH_BIN/$ENTRY_JS")")"
   printf '%s\n' \
     "# $APP_DISPLAY_NAME — окружение оболочки. Перезаписывается установщиком; подключается из rc-файлов." \
     'case ":$PATH:" in' \

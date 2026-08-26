@@ -68,7 +68,7 @@ describe("install resolve_local_bundle", () => {
     const sb = makeSandbox();
     try {
       NodeFS.rmSync(sb.cloneDir, { recursive: true, force: true });
-      const r = sourceEval(sb, `TEMP_DIR=$(mktemp -d); bootstrap`);
+      const r = sourceEval(sb, `TEMP_DIR=$(mktemp -d "$PWD/ru-code-tmp-XXXXXX"); bootstrap`);
       expect(r.status).not.toBe(0);
       expect(r.all).toContain("Дистрибутив не найден");
     } finally {

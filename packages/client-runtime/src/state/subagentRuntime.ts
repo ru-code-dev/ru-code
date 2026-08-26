@@ -74,6 +74,14 @@ export interface RuntimeSubagent {
   readonly result: string | null;
   readonly error: string | null;
   readonly outputFile: string | null;
+  /**
+   * ru-code (agentic-flow wave): true for a task DETACHED from the turn that
+   * launched it (qwen's background agents). Sticky-once-true, like every other
+   * metadata field here: terminal rows commonly carry only taskId + status, and
+   * a row that forgot it was background between two events would flicker its
+   * stop control.
+   */
+  readonly isBackgrounded: boolean;
   readonly parentAgentId: string | null;
   readonly agentIndex: number | null;
   readonly phaseIndex: number | null;
@@ -295,6 +303,7 @@ function mergeUsageMax(
 
 interface MutableAgent {
   id: string;
+  isBackgrounded: boolean; // ru-code (agentic-flow wave)
   kind: RuntimeSubagent["kind"];
   title: string;
   role: string | null;
@@ -362,6 +371,7 @@ function getOrCreate(
     result: null,
     error: null,
     outputFile: null,
+    isBackgrounded: false, // ru-code (agentic-flow wave)
     parentAgentId: asString(payload.parentAgentId) ?? null,
     agentIndex: asCount(payload.agentIndex) ?? null,
     phaseIndex: asCount(payload.phaseIndex) ?? null,
@@ -397,6 +407,9 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
   }
   const workflowName = asString(payload.workflowName);
   if (workflowName) agent.workflowName = workflowName;
+  // ru-code (agentic-flow wave): strict `=== true`, and never unset — see the
+  // field's doc. Payloads are not schema-validated on this path.
+  if (payload.isBackgrounded === true) agent.isBackgrounded = true;
   if (asString(payload.taskType) === "local_workflow") agent.kind = "workflow";
   const agentIndex = asCount(payload.agentIndex);
   if (agentIndex !== undefined) agent.agentIndex = agentIndex;

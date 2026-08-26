@@ -65,6 +65,19 @@ export interface QwenRunningTurnInput {
  * approval or a user-input question is open, the session status is still
  * "running" but nothing is streaming, and the send is what settles the parked
  * Deferred server-side. Those keep Enter working.
+ *
+ * ru-code (mid-turn wave, phase 3): THIS NO LONGER GATES THE COMPOSER, and the
+ * premise in the paragraph above is no longer true of our host. The server now
+ * QUEUES a mid-turn send (QwenAdapter `tryQueueMidTurnMessage`) and delivers it
+ * through `craft/drainMidTurnQueue` or the turn-end flush, so no second
+ * `session/prompt` is ever issued and nothing gets aborted. `ChatView.onSend`
+ * stopped passing this into {@link shouldBlockComposerSend} accordingly.
+ *
+ * The predicate is RETAINED, not deleted, because it states exactly the
+ * condition the pending-clock mark needs — "this send is going to be queued
+ * rather than dispatched". That UI wiring is NOT part of phase 3 (no spec drove
+ * it) and is recorded as open work in the phase report. If it is dropped, delete
+ * this function and its specs with it rather than leaving it here unused.
  */
 export function isQwenRunningTurn(input: QwenRunningTurnInput): boolean {
   if (input.providerDriver !== QWEN_KIND) return false;

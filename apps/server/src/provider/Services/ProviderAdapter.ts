@@ -82,6 +82,17 @@ export interface ProviderAdapterShape<TError> {
   readonly compactContext?: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
   /**
+   * ru-code (agentic-flow wave): stop ONE background agent task on the thread's
+   * live session. Optional, exactly like `compactContext` above — only a
+   * provider whose background tasks are individually addressable implements it
+   * (qwen's `qwen/control/session/task/cancel`); ProviderService fails the call
+   * for the rest. Idempotent by the provider's own contract: cancelling a task
+   * that already settled is a typed no-op, never an error
+   * (qwen acpAgent.ts:9415).
+   */
+  readonly stopBackgroundTask?: (threadId: ThreadId, taskId: string) => Effect.Effect<void, TError>;
+
+  /**
    * Respond to an interactive approval request.
    */
   readonly respondToRequest: (

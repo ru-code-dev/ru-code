@@ -236,13 +236,15 @@ run_preflight() {
   script="${RU_CODE_PREFLIGHT:-$EXTRACTED_DIR/$PREFLIGHT_BASENAME}"
   [ -f "$script" ] || fail_crash crash
 
-  out=$("$NODE_PATH" "$script" 2>/dev/null) || rc=$?
+  out=$("$NODE_PATH" "$(to_node_path "$script")") || rc=$?
   PREFLIGHT_STATUS="$rc"
 
   APP_ROOT=$(printf '%s\n' "$out" | grep '^OUR_ROOT=' | head -n 1 | cut -d'=' -f2- || true)
   APP_BIN=$(printf '%s\n'  "$out" | grep '^APP_BIN='  | head -n 1 | cut -d'=' -f2- || true)
   NODE_OK=$(printf '%s\n'  "$out" | grep '^NODE_OK='  | head -n 1 | cut -d'=' -f2- || true)
   CLI_JS=$(printf '%s\n'   "$out" | grep '^CLI_JS='   | head -n 1 | cut -d'=' -f2- || true)
+  CLI_SPAWN_KIND=$(printf '%s\n' "$out" | grep '^CLI_SPAWN_KIND=' | head -n 1 | cut -d'=' -f2- || true)
+  CLI_IDENTITY=$(printf '%s\n' "$out" | grep '^CLI_IDENTITY=' | head -n 1 | cut -d'=' -f2- || true)
   CONFIG_DIR=$(printf '%s\n' "$out" | grep '^CONFIG_DIR=' | head -n 1 | cut -d'=' -f2- || true)
   CONFIG_DIR_ALT=$(printf '%s\n' "$out" | grep '^CONFIG_DIR_ALT=' | head -n 1 | cut -d'=' -f2- || true)
   LEGACY_ROOT=$(printf '%s\n' "$out" | grep '^LEGACY_ROOT=' | head -n 1 | cut -d'=' -f2- || true)
@@ -271,13 +273,22 @@ apply_check_policy() {
     recommend git "$GIT_FATAL"; [ "$GIT_FATAL" = true ] && blocked=1
   fi
   if [ "${CHECK_CLI:-ok}" = fail ]; then
-    if [ "${CHECK_CLI_KIND:-missing}" = missing ]; then
-      # qwen bin absent → matters ONLY if the CLI is required; not-required + missing = skip (N/A).
-      if [ "$CLI_FATAL" = true ]; then recommend cli-install true; blocked=1; fi
-    else
-      # qwen present but OLD/broken → warn always; STOP (block) when required.
-      recommend cli-update "$CLI_FATAL"; [ "$CLI_FATAL" = true ] && blocked=1
-    fi
+    case "${CHECK_CLI_KIND:-missing}" in
+      missing)
+        # qwen bin absent → matters ONLY if the CLI is required; not-required + missing = skip (N/A).
+        if [ "$CLI_FATAL" = true ]; then recommend cli-install true; blocked=1; fi
+        ;;
+      broken)
+        recommend cli-broken "$CLI_FATAL"; [ "$CLI_FATAL" = true ] && blocked=1
+        ;;
+      slow)
+        recommend cli-slow "$CLI_FATAL"; [ "$CLI_FATAL" = true ] && blocked=1
+        ;;
+      *)
+        # old + anything unknown → qwen present but OLD → warn always; STOP (block) when required.
+        recommend cli-update "$CLI_FATAL"; [ "$CLI_FATAL" = true ] && blocked=1
+        ;;
+    esac
   fi
   [ "$blocked" = 0 ]
 }
@@ -292,8 +303,24 @@ warm_up_cli() {
   [ "$PERFORM_CLI_WARM_UP" = true ] || return 0
   [ -n "$CLI_JS" ] || return 0                                   # bin not detected → nothing to warm
   [ -n "$CONFIG_DIR" ] && [ -d "$CONFIG_DIR" ] && return 0       # profile already exists → skip
-  log "warm-up: node $CLI_JS -p test (profile dir missing: $CONFIG_DIR)"
-  "$NODE_PATH" $NODE_FLAGS "$CLI_JS" -p "test" >>"$LOGFILE" 2>&1 &
+  log "warm-up: run [${CLI_SPAWN_KIND:-node}] $CLI_JS -p test (profile dir missing: $CONFIG_DIR)"
+  # ru-code: env prefix and MCP-off flags are GENERATED from the branding CLI registry
+  # (scripts/build-installer.ts) — the same rows the app injects on every spawn. Without the
+  # profile dir the warm-up creates nothing (or the wrong dir); without the allowlist flag the CLI
+  # connects and awaits every MCP server the user configured before it does any work.
+  # The invoke kind comes from the preflight's CLI_SPAWN_KIND (the app's ONE dispatcher, so bash
+  # can never disagree with it): node/"" = the historic node line; cmd|direct = run the bin itself
+  # (git-bash launches a .cmd through cmd.exe on its own; a POSIX script runs via its shebang).
+  # The identity value (CLI_PASS_IDENTITY) is exported under the registry-baked name only when
+  # present — never written as an empty variable. `exec` keeps $pid = the CLI itself, so the
+  # watchdog's TERM still hits the real process, and bash exports the assignment prefix across it.
+  (
+    [ -n "$CLI_IDENTITY" ] && export @@CLI_IDENTITY_ENV_NAME@@="$CLI_IDENTITY"
+    case "$CLI_SPAWN_KIND" in
+      cmd|direct) @@CLI_WARM_UP_ENV@@ exec "$CLI_JS" @@CLI_MCP_OFF_ARGS@@ -p "test" ;;
+      *) @@CLI_WARM_UP_ENV@@ exec "$NODE_PATH" $NODE_FLAGS "$CLI_JS" @@CLI_MCP_OFF_ARGS@@ -p "test" ;;
+    esac
+  ) >>"$LOGFILE" 2>&1 &
   local pid=$!
   ( sleep "$CLI_WARM_UP_TIMEOUT"; kill -TERM "$pid" 2>/dev/null || true ) &
   local killer=$!
@@ -456,15 +483,24 @@ install_files() {
 # The PATH shim `<bin>/<APP_BIN>` — a 4-line sh launcher for `node <bin>/cli.js`. Distinct from the
 # app's own frozen launcher (also `cli.js`): this one only carries the node flags and is rewritten by
 # every install; the frozen one resolves which version to boot.
+# The cli.js path is a NODE argument: on Windows the runtime `dirname "$0"` form is a POSIX path
+# node.exe misreads when Git Bash path translation is off, so the ABSOLUTE node-form path is baked
+# instead (the wrapper is rewritten by every install — baking loses nothing). POSIX keeps the
+# relocatable dirname form, byte-identical to before.
 create_wrapper() {
-  local node_quoted
+  local node_quoted cli_arg
   node_quoted=$(printf "'%s'" "$(printf '%s' "$NODE_PATH" | sed "s/'/'\\\\''/g")")
+  if [ "$OS" = "windows" ]; then
+    cli_arg=$(printf "'%s'" "$(printf '%s' "$(to_node_path "$BIN_DIR/$ENTRY_JS")" | sed "s/'/'\\\\''/g")")
+  else
+    cli_arg="\"\$(dirname \"\$0\")/${ENTRY_JS}\""
+  fi
   cat > "$BIN_DIR/$APP_BIN" <<WRAPPER
 #!/bin/sh
 if [ -x ${node_quoted} ] || [ -f ${node_quoted} ]; then
-  exec ${node_quoted} ${NODE_FLAGS} "\$(dirname "\$0")/${ENTRY_JS}" "\$@"
+  exec ${node_quoted} ${NODE_FLAGS} ${cli_arg} "\$@"
 fi
-exec node ${NODE_FLAGS} "\$(dirname "\$0")/${ENTRY_JS}" "\$@"
+exec node ${NODE_FLAGS} ${cli_arg} "\$@"
 WRAPPER
   chmod +x "$BIN_DIR/$APP_BIN"
 }

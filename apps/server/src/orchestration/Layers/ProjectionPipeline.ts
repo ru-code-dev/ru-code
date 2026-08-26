@@ -6,6 +6,7 @@ import {
   ThreadId,
   // ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
   isSyntheticAssistantMessageId,
+  mergeMidTurnDeliveryState, // ru-code (phase 4, m4/SB4)
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -1017,6 +1018,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             isStreaming: event.payload.streaming,
+            // ru-code (mid-turn wave, P3b + phase 4b/FR8): the delivery mark.
+            //
+            // TWO DIFFERENT RULES apply here, and an earlier version of this
+            // comment conflated them — badly enough that a reviewer read it and
+            // concluded the SQL made this merge redundant, which would have
+            // deleted the only thing enforcing the second rule:
+            //
+            //   1. ABSENT-DOESN'T-ERASE. A mark-only re-emission carries no
+            //      deliveryState and must not wipe the stored one. The
+            //      repository's `COALESCE(excluded.delivery_state, stored)`
+            //      implements exactly this, and ONLY this.
+            //   2. TERMINAL MARKS ARE STICKY. `COALESCE` cannot implement this:
+            //      a `not-delivered` arriving after a `delivered` is non-NULL
+            //      and therefore WINS at the SQL level. This merge is the sole
+            //      enforcement of rule 2 on the copy a page reload reads.
+            //
+            // ru-code (phase 4, m4/SB4): both terminal marks are STICKY.
+            // Without this the column is last-writer-wins, so a late
+            // `not-delivered` after a `delivered` would un-deliver a message the
+            // model had already seen — and a RELOAD would render that lie, since
+            // a refresh reads this column. The client reducer enforces the same
+            // rule; both halves are needed because only this one survives a
+            // refresh.
+            ...(() => {
+              const next = mergeMidTurnDeliveryState(
+                previousMessage?.deliveryState,
+                event.payload.deliveryState,
+              );
+              return next !== undefined ? { deliveryState: next } : {};
+            })(),
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });

@@ -3,9 +3,9 @@
 // drives the respawn diff); the FILE is written only by an actual spawn with ≥1 enabled
 // server. Reuse turns and 0-server spawns write nothing: qwen without an overlay behaves
 // byte-identically (folder trust is off by default in qwen 0.13.1 and an empty allowlist
-// already omits `--allowed-mcp-server-names` — verified against qwen source), so the empty
-// overlay was pure dead weight. The written file is deleted the moment the spawn-decision
-// region settles (`withCleanup`).
+// already omits the CLI_ARGS.ALLOWED_MCP_SERVERS flag (branding cliEnv.ts) — verified against
+// qwen source), so the empty overlay was pure dead weight. The written file is deleted the
+// moment the spawn-decision region settles (`withCleanup`).
 
 import {
   type McpOverlaySpawnReason,

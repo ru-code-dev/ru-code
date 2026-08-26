@@ -43,7 +43,7 @@ import { QwenCompactionHistory } from "./compaction/QwenCompactionHistory.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { readAutoCompactContext } from "./autoCompactSetting.ts";
 // ru-code: resolve the instance's effective CLI identity (profile + settings + preflight).
-import { buildQwenSpawnBaseEnv, resolveCliProfileSettings } from "./profileResolver.ts";
+import { resolveCliProfileSettings } from "./profileResolver.ts";
 import { buildInitialQwenProviderSnapshot, checkQwenProviderStatus } from "./QwenProvider.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../../provider/makeManagedServerProvider.ts";
@@ -118,14 +118,12 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
       // ru-code: resolved cli.js + detection flag, threaded from the startup preflight.
       const serverConfig = yield* ServerConfig;
       const eventLoggers = yield* ProviderEventLoggers;
-      // ru-code: ALL qwen spawns (ACP cold sessions, warm slots, text generation,
-      // version probe) draw their env from this ONE merge — QWEN_HOME is injected
-      // into the base here so every invocation carries the preflight-resolved CLI
-      // profile dir; explicit per-instance env vars still override it.
-      const processEnv = mergeProviderInstanceEnvironment(
-        environment,
-        buildQwenSpawnBaseEnv(serverConfig.cliConfigDir),
-      );
+      // ru-code: the per-instance environment, and nothing else. The CLI's own variables are NOT
+      // merged in here any more: every spawn site overlays the branding CLI registry through
+      // buildCliEnv at the moment it spawns (see profileResolver.buildCliEnv), which is both the
+      // single source for those names and the reason a per-instance variable can no longer
+      // override the CLI's profile dir and point a spawn at the wrong profile.
+      const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -134,7 +132,8 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
       const effectiveEnabled = enabled && serverConfig.cliDetected;
       const effectiveConfig = { ...config, enabled: effectiveEnabled } satisfies QwenSettings;
       // ru-code: resolve profile → { bin, dir, name, artifact } (settings override the
-      // profile default; a null profile default falls back to the boot preflight).
+      // profile default; a null profile default falls back to the boot preflight). `dir` is the
+      // registry's HOME value, threaded into every spawn site below.
       const resolved = resolveCliProfileSettings(effectiveConfig, {
         cliJs: serverConfig.cliJs,
         cliConfigDir: serverConfig.cliConfigDir,
@@ -177,6 +176,7 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
 
       const textGeneration = yield* makeQwenTextGeneration(
         resolved.bin,
+        resolved.dir,
         effectiveConfig,
         processEnv,
         {
@@ -190,6 +190,7 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
 
       const checkProvider = checkQwenProviderStatus(
         resolved.bin,
+        resolved.dir,
         effectiveConfig,
         resolved.name,
         processEnv,

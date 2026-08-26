@@ -20,7 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
-import { type FakeAcpScript } from "./fakeAcpCore.ts";
+import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
 // ru-code: "Stopped by the user." is a localized WIRE string (dict "wire":
 // true) — resolve to English before asserting the text (the suite runs in EN
@@ -42,15 +42,37 @@ const testServices = ServerConfig.layerTest(process.cwd(), { prefix: "ru-code-su
   Layer.provideMerge(NodeServices.layer),
 );
 
+// ru-code (agentic-flow wave, FIX ROUND 2): THE FOREGROUND SPAWN, as qwen really
+// sends it. Two corrections landed on every fixture in this file:
+//
+//   · `run_in_background: false` is REQUIRED to describe a foreground agent.
+//     qwen resolves background-ness from these very args (agent.ts:2526-2536,
+//     which qwen annotates as "the source of truth ... Two UI classifiers
+//     replicate it from tool-call args"), and with the flag OMITTED a top-level
+//     `agent` call with no `working_dir`/`name` and a non-fork type resolves to
+//     BACKGROUND. Every fixture here used to omit it, so this file's "foreground
+//     agent" was, on qwen's own rule, a background launch — the fake was lying
+//     about the mode it claimed to test.
+//   · the PREPARING frame (`emitAgentPreparingStart`) opens the sequence, because
+//     `ToolCallPreparationTracker.observe` (tool-call-preparation-tracker.ts:29-51)
+//     puts an argless `tool_call` on the wire before the real one. It is emitted
+//     here, on the canonical foreground script, so the fg path is exercised
+//     against the true opening rather than a synthetic one.
 const script: FakeAcpScript = {
   onPrompt: (steps) =>
     steps
       .emitUsageChunk(THREAD_TOKENS)
+      .emitAgentPreparingStart(AGENT_CALL)
       .emitToolCall({
         toolCallId: AGENT_CALL,
         toolName: "agent",
         title: "Agent: Review the diff",
-        rawInput: { description: "Review the diff", prompt: "p", subagent_type: SUBAGENT_TYPE },
+        rawInput: {
+          description: "Review the diff",
+          prompt: "p",
+          subagent_type: SUBAGENT_TYPE,
+          run_in_background: false,
+        },
       })
       .emitToolCall({
         toolCallId: INNER_CALL,
@@ -239,7 +261,12 @@ const narrationScript: FakeAcpScript = {
         toolCallId: AGENT_CALL,
         toolName: "agent",
         title: "Agent: Review the diff",
-        rawInput: { description: "Review the diff", prompt: "p", subagent_type: SUBAGENT_TYPE },
+        rawInput: {
+          description: "Review the diff",
+          prompt: "p",
+          subagent_type: SUBAGENT_TYPE,
+          run_in_background: false,
+        },
       })
       // Unstamped thought + text: the child's, by the window.
       .emitThought(CHILD_A_THOUGHT)
@@ -294,6 +321,7 @@ const narrationScript: FakeAcpScript = {
           description: "Plan the migration",
           prompt: "p2",
           subagent_type: SUBAGENT_TYPE_B,
+          run_in_background: false,
         },
       })
       .emitText(CHILD_B_TEXT)
@@ -492,7 +520,12 @@ const deadAcpScript: FakeAcpScript = {
         toolCallId: AGENT_CALL,
         toolName: "agent",
         title: "Agent: Review the diff",
-        rawInput: { description: "Review the diff", prompt: "p", subagent_type: SUBAGENT_TYPE },
+        rawInput: {
+          description: "Review the diff",
+          prompt: "p",
+          subagent_type: SUBAGENT_TYPE,
+          run_in_background: false,
+        },
       })
       .emitText(CHILD_A_1)
       // Let the notifications reach the client before the pipe dies — a real
@@ -529,7 +562,15 @@ it.effect("qwen sub-agent: a dead ACP is settled server-side (P2 zombie fix)", (
     assert.lengthOf(settled, 1, "the crash teardown did not settle the open agent row");
     assert.strictEqual(settled[0]!.payload.status, "stopped");
     assert.strictEqual(settled[0]!.payload.taskType, "subagent");
-    assert.strictEqual(enText(settled[0]!.payload.detail), "Stopped by the user.");
+    // ru-code (agents wave, phase 3 — SUPERSEDED ASSERTION): this line read
+    // "Stopped by the user." until phase 3. That was the bug the wave was
+    // chartered to fix: a crash and a Stop settled with the identical detail, so
+    // a user whose CLI was OOM-killed was told they had stopped it themselves.
+    // The phase-1 baseline pinned it because it pinned TODAY's behaviour, not
+    // because it was right. `status` stays "stopped" — the row is still a
+    // non-completion; only the reason the user reads is now truthful. Crash-vs-Stop
+    // is pinned from the other side by subAgentV2Matrix.broken.test.ts.
+    assert.strictEqual(enText(settled[0]!.payload.detail), "The agent stopped: the CLI exited.");
     assert.isBelow(
       events.indexOf(settled[0]!),
       events.findIndex((e) => e.type === "session.exited"),
@@ -590,7 +631,12 @@ const stopMidAgentScript: FakeAcpScript = {
       toolCallId: AGENT_CALL,
       toolName: "agent",
       title: "Agent: Review the diff",
-      rawInput: { description: "Review the diff", prompt: "p", subagent_type: SUBAGENT_TYPE },
+      rawInput: {
+        description: "Review the diff",
+        prompt: "p",
+        subagent_type: SUBAGENT_TYPE,
+        run_in_background: false,
+      },
     }),
 };
 
@@ -647,4 +693,207 @@ it.effect(
       Effect.provide(Layer.provideMerge(fakeAcpSpawnerLayer(stopMidAgentScript), testServices)),
       TestClock.withLive,
     ),
+);
+
+// ─── BASELINE LOCK (agents wave, phase 1) ────────────────────────────────────
+// ENDING #4 — the ending the three above do NOT cover: the agent settles
+// NORMALLY and the session is torn down afterwards, on the same turn. The
+// teardown twin (settleOpenSubAgentAsStopped, QwenAdapter.ts:929-954) runs
+// unconditionally on every teardown, so its idempotency guard — clearing
+// `ctx.subAgentWindow` FIRST, before any yield (:933) — is the only thing
+// between a completed run and a second, contradicting terminal that would flip
+// a green "completed" row to a muted "Stopped" one in the panel.
+const settleThenStopScript: FakeAcpScript = {
+  onPrompt: (steps) =>
+    steps
+      .emitToolCall({
+        toolCallId: AGENT_CALL,
+        toolName: "agent",
+        title: "Agent: Review the diff",
+        rawInput: {
+          description: "Review the diff",
+          prompt: "p",
+          subagent_type: SUBAGENT_TYPE,
+          run_in_background: false,
+        },
+      })
+      .emitText(CHILD_A_1)
+      .emitToolCallUpdate({
+        toolCallId: AGENT_CALL,
+        toolName: "agent",
+        status: "completed",
+        text: "Found 2 issues.",
+        rawOutput: {
+          type: "task_execution",
+          subagentName: SUBAGENT_TYPE,
+          taskDescription: "Review the diff",
+          status: "completed",
+          result: "Found 2 issues.",
+          executionSummary: { totalDurationMs: 4200, totalToolCalls: 5, totalTokens: 4441 },
+        },
+      }),
+  // No respondOk: the prompt parks after the agent settled, so the Stop below
+  // tears the session down while the run is already terminal.
+};
+
+it.effect(
+  "qwen sub-agent: a run that already settled is NOT re-settled by a later Stop (ENDING #4)",
+  () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
+      const threadId = ThreadId.make("qwen-subagent-settled-then-stop-thread");
+      const events: ProviderRuntimeEvent[] = [];
+      const agentSettled = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          events.push(event);
+        }).pipe(
+          Effect.andThen(
+            event.type === "task.completed" && event.payload.taskId === AGENT_CALL
+              ? Deferred.succeed(agentSettled, undefined)
+              : Effect.void,
+          ),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const turnFiber = yield* Effect.forkChild(
+        adapter.sendTurn({ threadId, input: "review the diff" }),
+      );
+      yield* Deferred.await(agentSettled).pipe(Effect.timeout("10 seconds"));
+
+      yield* adapter.interruptTurn(threadId).pipe(Effect.timeout("10 seconds"));
+      yield* Fiber.join(turnFiber).pipe(Effect.timeout("10 seconds"));
+      yield* Fiber.interrupt(eventsFiber);
+
+      // EXACTLY one terminal for the run, and it is qwen's own verdict — the
+      // teardown's blanket settle must have found the window already closed.
+      const terminals = events.filter(
+        (e): e is Extract<ProviderRuntimeEvent, { type: "task.completed" }> =>
+          e.type === "task.completed" && e.payload.taskId === AGENT_CALL,
+      );
+      assert.lengthOf(terminals, 1, "the teardown re-settled an already-completed agent row");
+      assert.strictEqual(terminals[0]!.payload.status, "completed");
+      assert.strictEqual(terminals[0]!.payload.summary, "Found 2 issues.");
+      // And no "stopped" contradiction reached the wire under any task id.
+      assert.isUndefined(
+        events.find((e) => e.type === "task.completed" && e.payload.status === "stopped"),
+        "a stopped terminal contradicted the completed one",
+      );
+      // The narration flush is idempotent across the same boundary: the line the
+      // settle published must not be republished by the teardown's own flush.
+      const narrationLines = events.filter(
+        (e) => e.type === "task.progress" && (e.payload.summary ?? "").includes("Reading the diff"),
+      );
+      assert.lengthOf(narrationLines, 1, "the teardown re-flushed already-published narration");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.provideMerge(fakeAcpSpawnerLayer(settleThenStopScript), testServices)),
+      TestClock.withLive,
+    ),
+);
+
+// ru-code (sub-agents): the CHILD asks for permission. The request itself keeps
+// every existing surface (it is neither suppressed nor parked differently — the
+// child's prompt() is blocked on the answer), but the agent ROW must say WHICH
+// agent is holding, or the panel reads "Working" while nothing moves. The line
+// is deliberately WORDLESS (QwenAdapter.ts:1786-1791 → formatQwenAgentWaitingLine)
+// so the server ships no English literal owing a dictionary pair.
+const childPermissionScript: FakeAcpScript = {
+  onPrompt: (steps) =>
+    steps
+      .emitToolCall({
+        toolCallId: AGENT_CALL,
+        toolName: "agent",
+        title: "Agent: Review the diff",
+        rawInput: {
+          description: "Review the diff",
+          prompt: "p",
+          subagent_type: SUBAGENT_TYPE,
+          run_in_background: false,
+        },
+      })
+      // Let the opening frame reach the notification fiber before the RPC: qwen
+      // runs the child's tool loop after the spawn frame is on the wire, never
+      // in the same tick (same reasoning as the crash script's sleep above).
+      .sleep(50)
+      .requestPermission({
+        sessionId: FAKE_SESSION_ID,
+        toolCall: {
+          toolCallId: INNER_CALL_B,
+          kind: "edit",
+          rawInput: { absolute_path: "/plan.md" },
+          _meta: { toolName: "write_file" },
+        },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+      })
+      .respondOk(),
+};
+
+it.effect("qwen sub-agent: a child's permission prompt marks its row waiting, wordlessly", () =>
+  Effect.gen(function* () {
+    const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
+    const threadId = ThreadId.make("qwen-subagent-waiting-thread");
+    const events: ProviderRuntimeEvent[] = [];
+    const waitingSeen = yield* Deferred.make<void>();
+    // The mark is published BEFORE the request is registered, so the request's
+    // own surfacing needs its own latch — asserting on it is the whole point of
+    // "additive, never a suppressor".
+    const requestOpened = yield* Deferred.make<void>();
+    const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+      Effect.sync(() => {
+        events.push(event);
+      }).pipe(
+        Effect.andThen(
+          event.type === "task.progress" && event.payload.status === "waiting"
+            ? Deferred.succeed(waitingSeen, undefined)
+            : event.type === "request.opened"
+              ? Deferred.succeed(requestOpened, undefined)
+              : Effect.void,
+        ),
+      ),
+    ).pipe(Effect.forkChild);
+
+    yield* adapter.startSession({
+      threadId,
+      cwd: process.cwd(),
+      runtimeMode: "approval-required",
+    });
+    // The prompt parks on the held permission; the row's waiting mark is the subject.
+    const turnFiber = yield* Effect.forkChild(
+      adapter.sendTurn({ threadId, input: "review the diff" }),
+    );
+    yield* Deferred.await(waitingSeen).pipe(Effect.timeout("10 seconds"));
+    yield* Deferred.await(requestOpened).pipe(Effect.timeout("10 seconds"));
+    yield* Fiber.interrupt(turnFiber);
+    yield* Fiber.interrupt(eventsFiber);
+
+    const waiting = events.filter(
+      (e): e is TaskProgress =>
+        e.type === "task.progress" &&
+        e.payload.taskId === AGENT_CALL &&
+        e.payload.status === "waiting",
+    );
+    assert.isAtLeast(waiting.length, 1, "the child's permission prompt left its row 'Working'");
+    // Wordless by contract: the pause glyph plus the tool's own name, no prose.
+    assert.strictEqual(waiting[0]!.payload.summary, "⏸ write_file");
+    assert.strictEqual(waiting[0]!.payload.taskType, "subagent");
+    // The request itself still surfaced — the mark is additive, never a suppressor.
+    assert.isAtLeast(
+      events.filter((e) => e.type === "request.opened").length,
+      1,
+      "marking the row waiting swallowed the child's permission request",
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.provideMerge(fakeAcpSpawnerLayer(childPermissionScript), testServices)),
+    TestClock.withLive,
+  ),
 );

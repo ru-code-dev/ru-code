@@ -13,6 +13,7 @@ import { AgentRowExpander } from "../../agents/AgentRowExpander";
 const agent = (overrides: Partial<RuntimeSubagent> = {}): RuntimeSubagent => ({
   id: "call-agent-1",
   kind: "subagent",
+  isBackgrounded: false, // ru-code (agentic-flow wave)
   title: "Review the diff",
   role: "code-reviewer",
   model: null,

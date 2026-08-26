@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import projectionThreadsChatViewMode from "./Migrations/002_ProjectionThreadsChatViewMode.ts";
+import projectionThreadMessagesDeliveryState from "./Migrations/004_ProjectionThreadMessagesDeliveryState.ts";
 
 const RU_CODE_MIGRATIONS_TABLE = "ru_code_migrations";
 
@@ -29,6 +30,8 @@ export const ruCodeMigrationEntries = [
   // install that already recorded "3_Analytics" simply never re-runs id 3 — the rename
   // affects what NEW installs record, nothing else.
   [3, "QwenUsage", analyticsMigration],
+  // Mid-turn delivery mark column (pending | delivered | not-delivered).
+  [4, "ProjectionThreadMessagesDeliveryState", projectionThreadMessagesDeliveryState],
 ] as const;
 
 const loader = Migrator.fromRecord(

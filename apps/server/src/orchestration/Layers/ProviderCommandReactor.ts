@@ -11,6 +11,7 @@ import {
   type ProviderSession,
   type RuntimeMode,
   type TurnId,
+  type MessageId, // ru-code (mid-turn wave, P3c)
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
@@ -71,6 +72,7 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.context-compact-requested" // ru-code
+      | "thread.task-stop-requested" // ru-code (agentic-flow wave)
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
@@ -358,6 +360,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
       | "provider.context.compact.failed" // ru-code
+      | "provider.task.stop.failed" // ru-code (agentic-flow wave)
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -836,6 +839,9 @@ const make = Effect.gen(function* () {
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageText: string;
+    // ru-code (mid-turn wave, P3c): the message row this text came from, so the
+    // adapter's mid-turn queue can address a delivery mark at it.
+    readonly messageId?: MessageId;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
@@ -886,6 +892,8 @@ const make = Effect.gen(function* () {
 
     return {
       threadId: input.threadId,
+      // ru-code (mid-turn wave, P3c)
+      ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
@@ -1302,6 +1310,7 @@ const make = Effect.gen(function* () {
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
       messageText: message.text,
+      messageId: event.payload.messageId, // ru-code (mid-turn wave, P3c)
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
@@ -1399,6 +1408,51 @@ const make = Effect.gen(function* () {
     }
     // No start() scope (handlers driven directly in unit tests) — run inline.
     yield* runCompaction;
+  });
+
+  // ru-code (agentic-flow wave): the per-row background-agent stop.
+  //
+  // Awaited inline rather than forked (unlike the compaction above): a cancel
+  // is a single ext-method round trip that qwen answers immediately — it never
+  // blocks on the task actually unwinding (research §14.1 arms a 5s grace and
+  // returns) — so it cannot stall the reactor's sequential worker.
+  //
+  // A failure gets a timeline row for the same reason the interrupt handler's
+  // does: the user pressed a button and is owed an answer either way. A refusal
+  // is NOT a failure — qwen answers `{cancelled:false}` for a task that already
+  // settled (acpAgent.ts:9415), the adapter treats that as a no-op, and the row
+  // is already showing its real terminal.
+  const processTaskStopRequested = Effect.fn("processTaskStopRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.task-stop-requested" }>,
+  ) {
+    const threadExists = yield* resolveThread(event.payload.threadId);
+    if (!threadExists) {
+      return;
+    }
+    const stopBackgroundTask = providerService.stopBackgroundTask;
+    if (stopBackgroundTask === undefined) {
+      return;
+    }
+    yield* stopBackgroundTask({
+      threadId: event.payload.threadId,
+      taskId: event.payload.taskId,
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return yield* Effect.failCause(cause);
+          }
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.task.stop.failed",
+            summary: "Could not stop the agent",
+            detail: formatFailureDetail(cause),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          });
+        }),
+      ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1571,6 +1625,10 @@ const make = Effect.gen(function* () {
       case "thread.context-compact-requested":
         yield* processContextCompactRequested(event);
         return;
+      // ru-code (agentic-flow wave): per-row background-agent stop.
+      case "thread.task-stop-requested":
+        yield* processTaskStopRequested(event);
+        return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
         return;
@@ -1621,6 +1679,13 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.context-compact-requested" || // ru-code
+        // ru-code (agentic-flow wave, ap-final T2): the per-row background stop.
+        // This list is the ONLY door into the worker, and the switch in
+        // `processDomainEvent` cannot tell you a member is missing here — the
+        // `ProviderIntentEvent` union (`:66-80`) already contains the type, so
+        // the `case` at `:1629` typechecks while being unreachable. Leaving it
+        // out is exactly how the stop button became a button that did nothing.
+        event.type === "thread.task-stop-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested"

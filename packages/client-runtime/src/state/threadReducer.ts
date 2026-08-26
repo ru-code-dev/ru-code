@@ -13,6 +13,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 // ru-code: synthetic checkpoint attachment ids (see contracts/ru-code).
+import { mergeMidTurnDeliveryState } from "@t3tools/contracts"; // ru-code (phase 4, m4/SB4)
 import { isSyntheticAssistantMessageId } from "@t3tools/contracts";
 
 export type ThreadDetailReducerResult =
@@ -305,6 +306,11 @@ export function applyThreadDetailEvent(
           : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
+        // ru-code (mid-turn wave, P3d): the delivery mark for a message queued
+        // during a running turn. Absent on an ordinary send.
+        ...(event.payload.deliveryState !== undefined
+          ? { deliveryState: event.payload.deliveryState }
+          : {}),
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
       };
@@ -331,6 +337,35 @@ export function applyThreadDetailEvent(
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
+                    : {}),
+                  // ru-code (mid-turn wave, P3d): the mark rides a RE-EMISSION
+                  // of this event for an already-written message, so the merge
+                  // branch is the one that actually flips a balloon. Absent ⇒
+                  // keep what is there: an ordinary re-emission must never
+                  // erase a mark, mirroring the server's COALESCE.
+                  //
+                  // ru-code (phase 4, m4/SB4): the merge goes through the
+                  // delivery FOLD, which enforces the stickiness the owner's UX
+                  // depends on — a late `reset` must never un-deliver a message
+                  // the model already saw, and a stray late `drained` must never
+                  // resurrect one the user was told was not sent. The persisted
+                  // column is last-writer-wins and cannot express that on its
+                  // own; folding here is what makes the rule real rather than
+                  // documented in a function nothing called.
+                  ...(message.deliveryState !== undefined
+                    ? {
+                        // Both terminal marks are STICKY; `pending` is the only
+                        // movable state. The persisted column is
+                        // last-writer-wins, so without this a late `reset` after
+                        // a `delivered` would un-deliver a message the model had
+                        // already seen — a lie about what the agent was told —
+                        // and a stray late `delivered` could resurrect one the
+                        // user was told had failed.
+                        deliveryState: mergeMidTurnDeliveryState(
+                          entry.deliveryState,
+                          message.deliveryState,
+                        ),
+                      }
                     : {}),
                 },
           )

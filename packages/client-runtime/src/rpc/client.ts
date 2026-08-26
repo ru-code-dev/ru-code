@@ -2,6 +2,7 @@ import {
   AUTO_UPDATE_METHODS, // ru-code: auto-update live state subscription
   MCP_MANAGER_METHODS,
   ORCHESTRATION_WS_METHODS,
+  PIXSO_ASSISTANT_METHODS, // ru-code: the Pixso assistant scan-job subscription
   TRANSCRIPT_WS_METHODS, // ru-code: extended-chat transcript subscription
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -66,7 +67,9 @@ export type EnvironmentSubscriptionRpcTag =
   // ru-code: the extended-chat transcript subscription.
   | typeof TRANSCRIPT_WS_METHODS.subscribeTranscript
   // ru-code: the auto-update live state subscription.
-  | typeof AUTO_UPDATE_METHODS.subscribeAutoUpdate;
+  | typeof AUTO_UPDATE_METHODS.subscribeAutoUpdate
+  // ru-code: the Pixso assistant scan-job state subscription.
+  | typeof PIXSO_ASSISTANT_METHODS.pixsoAssistantScanSubscribe;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient

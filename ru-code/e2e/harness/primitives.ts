@@ -177,8 +177,13 @@ export const getHealthz = async (port: number): Promise<HealthzBody | null> => {
 };
 
 // ── fs helpers ───────────────────────────────────────────────────────────────────────────────
+// EVERY e2e temp path (harness or spec) must live under here — never bare os.tmpdir() — so a
+// single `rm -rf` of this one directory (see `e2e:clean-up` in package.json) reclaims 100% of
+// what this suite ever creates, with zero risk of touching anything else under /tmp.
+export const RU_CODE_TMP_ROOT = NodePath.join(NodeOS.tmpdir(), "ru-code");
 export const mkTemp = (prefix: string): string => {
-  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), prefix));
+  NodeFS.mkdirSync(RU_CODE_TMP_ROOT, { recursive: true });
+  const dir = NodeFS.mkdtempSync(NodePath.join(RU_CODE_TMP_ROOT, prefix));
   cleanups.push(() => NodeFS.rmSync(dir, { recursive: true, force: true }));
   return dir;
 };

@@ -371,6 +371,33 @@ cases.push({
   },
   expect: (clean) => has(clean, "Не удалось остановить"),
 });
+cases.push({
+  label: "cli:broken · fatal (blocked)",
+  setup: (sb) => {
+    writeFakeRelease(sb);
+    const pf = writeFakePreflight(sb, {
+      ourRoot: sb.appRoot,
+      checkCli: "fail",
+      checkCliKind: "broken",
+    });
+    return { preflight: pf, env: { INSTALL_CLI_FATAL: "true" } };
+  },
+  expect: (clean) => has(clean, "установка не завершена", "CLI-движок не запускается"),
+});
+cases.push({
+  label: "cli:slow · warn (install proceeds)",
+  setup: (sb) => {
+    writeFakeRelease(sb);
+    const pf = writeFakePreflight(sb, {
+      ourRoot: sb.appRoot,
+      checkCli: "fail",
+      checkCliKind: "slow",
+    });
+    sb.write("home/.bashrc", "# shell\n");
+    return { preflight: pf };
+  },
+  expect: (clean) => has(clean, "установлен ·", "CLI-движок работает слишком медленно"),
+});
 // The ONE matrix case that reaches the launch (every other case runs with INSTALL_START_AFTER
 // disabled — see spawnPtyCase). Its payload therefore has to speak the `--json` launch contract, or
 // the card would show the FAILED-launch banner for what is a perfectly successful install. The four

@@ -134,6 +134,88 @@ describe("install check policy — warn (default) vs fatal", () => {
     }
   });
 
+  it("BROKEN CLI engine → cli-broken recommendation, WARNS by default (install proceeds)", () => {
+    const sb = makeSandbox();
+    try {
+      const preflight = writeFakePreflight(sb, {
+        ourRoot: sb.appRoot,
+        checkCli: "fail",
+        checkCliKind: "broken",
+      });
+      writeFakeRelease(sb);
+      sb.write("home/.bashrc", "# shell\n");
+
+      const r = runInstaller(sb, { preflight }); // CLI_FATAL defaults false
+
+      expect(r.status).toBe(0);
+      expect(sb.exists("app/.ru-code/bin/cli.js")).toBe(true);
+      expect(r.all).toContain("CLI-движок не запускается");
+    } finally {
+      sb.cleanup();
+    }
+  });
+
+  it("BROKEN CLI engine → cli-broken recommendation, BLOCKS when INSTALL_CLI_FATAL=true", () => {
+    const sb = makeSandbox();
+    try {
+      const preflight = writeFakePreflight(sb, {
+        ourRoot: sb.appRoot,
+        checkCli: "fail",
+        checkCliKind: "broken",
+      });
+      writeFakeRelease(sb);
+
+      const r = runInstaller(sb, { preflight, env: { INSTALL_CLI_FATAL: "true" } });
+
+      expect(r.status).toBe(1); // BLOCKED_RECOMMENDATION
+      expect(r.all).toContain("CLI-движок не запускается");
+      expect(sb.exists("app/.ru-code/bin/cli.js")).toBe(false);
+    } finally {
+      sb.cleanup();
+    }
+  });
+
+  it("SLOW CLI engine → cli-slow recommendation, WARNS by default (install proceeds)", () => {
+    const sb = makeSandbox();
+    try {
+      const preflight = writeFakePreflight(sb, {
+        ourRoot: sb.appRoot,
+        checkCli: "fail",
+        checkCliKind: "slow",
+      });
+      writeFakeRelease(sb);
+      sb.write("home/.bashrc", "# shell\n");
+
+      const r = runInstaller(sb, { preflight }); // CLI_FATAL defaults false
+
+      expect(r.status).toBe(0);
+      expect(sb.exists("app/.ru-code/bin/cli.js")).toBe(true);
+      expect(r.all).toContain("CLI-движок работает слишком медленно");
+    } finally {
+      sb.cleanup();
+    }
+  });
+
+  it("SLOW CLI engine → cli-slow recommendation, BLOCKS when INSTALL_CLI_FATAL=true", () => {
+    const sb = makeSandbox();
+    try {
+      const preflight = writeFakePreflight(sb, {
+        ourRoot: sb.appRoot,
+        checkCli: "fail",
+        checkCliKind: "slow",
+      });
+      writeFakeRelease(sb);
+
+      const r = runInstaller(sb, { preflight, env: { INSTALL_CLI_FATAL: "true" } });
+
+      expect(r.status).toBe(1); // BLOCKED_RECOMMENDATION
+      expect(r.all).toContain("CLI-движок работает слишком медленно");
+      expect(sb.exists("app/.ru-code/bin/cli.js")).toBe(false);
+    } finally {
+      sb.cleanup();
+    }
+  });
+
   it("node failure can be downgraded to a warning with INSTALL_NODE_FATAL=false", () => {
     const sb = makeSandbox();
     try {

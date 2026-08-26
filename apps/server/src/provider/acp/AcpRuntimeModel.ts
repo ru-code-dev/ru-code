@@ -116,6 +116,52 @@ export type AcpParsedSessionEvent =
       readonly _tag: "UsageUpdated";
       readonly used: number;
       readonly rawPayload: unknown;
+    }
+  | {
+      // ru-code: agents wave — `agent_thought_chunk`. Previously the frame kind
+      // hit `default: break` and produced NOTHING, so a sub-agent's thinking was
+      // invisible while it ran. Parsed as its own tag rather than folded into
+      // ContentDelta: a thought must never be mistaken for assistant prose (that
+      // would splice the model's reasoning into the chat bubble), so the
+      // distinction has to survive the parser.
+      readonly _tag: "ThoughtDelta";
+      readonly text: string;
+      readonly rawPayload: unknown;
+    }
+  | {
+      // ru-code: agents wave — qwen 0.21.1's goal SIGNAL FRAMES: empty-text
+      // `agent_message_chunk`s whose whole payload is `_meta.goalTerminal` /
+      // `_meta.goalStatus` (qwen MessageEmitter.ts:66-86). `_meta.stopHookLoop`
+      // is deliberately NOT parsed: it is per-iteration telemetry qwen's own
+      // reference host discards (contract §9.1), and surfacing it would put a
+      // row on the timeline for every stop-hook continuation.
+      readonly _tag: "GoalSignal";
+      readonly signal: "goalTerminal" | "goalStatus";
+      readonly payload: Record<string, unknown>;
+      readonly rawPayload: unknown;
+    }
+  | {
+      // ru-code (agentic-flow wave): qwen's `_qwencode/end_turn` extNotification
+      // (Session.ts:6074-6087), the ONLY reliable "the background pseudo-turn is
+      // over" signal — a self-initiated turn has no `PromptResponse` slot to put
+      // a stopReason in.
+      //
+      // It is an ext-NOTIFICATION, so the client dispatches it on its own fiber
+      // while this session's `session/update` frames are still queued ahead of
+      // it. Acting on it there closed a background message BEFORE its own
+      // content had been drained — the message then re-opened and was never
+      // closed at all. Parsing it into THIS union is what puts it back in order
+      // with the frames it terminates.
+      readonly _tag: "BackgroundTurnEnded";
+      readonly reason?: string;
+      // ru-code (agentic-flow wave, FIX ROUND 1): the decoded params, carried through so the
+      // adapter can mirror the signal into the native ACP log. Registering the
+      // method by exact name took it off `handleUnknownExtNotification`, which
+      // was the thing doing that logging (implementer-report OPEN 3; owner GO
+      // 2026-08-27). Same passthrough field `GoalSignal` above already carries,
+      // and it is the WHOLE params struct — qwen sends exactly three keys
+      // (Session.ts:6074-6087).
+      readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
@@ -597,6 +643,26 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         if (Number.isFinite(inputTokens) && inputTokens >= 0) {
           events.push({ _tag: "UsageUpdated", used: inputTokens, rawPayload: params });
         }
+      }
+      // ru-code: agents wave — the goal signal frames ride the SAME empty-text
+      // chunk this case already reads `_meta.usage` from, so they are read here
+      // for the same reason — outside the text guard, or they are invisible.
+      // `stopHookLoop` is intentionally absent from this lookup (see GoalSignal).
+      if (isRecord(chunkMeta)) {
+        for (const signal of ["goalTerminal", "goalStatus"] as const) {
+          const value = (chunkMeta as Record<string, unknown>)[signal];
+          if (isRecord(value)) {
+            events.push({ _tag: "GoalSignal", signal, payload: value, rawPayload: params });
+          }
+        }
+      }
+      break;
+    }
+    case "agent_thought_chunk": {
+      // ru-code: agents wave — non-empty text only; an empty thought carries no
+      // information and would otherwise mint an empty row.
+      if (upd.content.type === "text" && upd.content.text.length > 0) {
+        events.push({ _tag: "ThoughtDelta", text: upd.content.text, rawPayload: params });
       }
       break;
     }

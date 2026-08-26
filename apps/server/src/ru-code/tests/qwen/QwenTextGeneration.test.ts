@@ -7,7 +7,7 @@
 // (extractQwenResultText, buildQwenSingleStringPrompt) are not exported, so they
 // are covered here through the public generate* surface.
 import { describe, expect, it } from "@effect/vitest";
-import { NO_MCP_SERVER_SENTINEL } from "@ru-code/qwen/constants";
+import { CLI_ARGS } from "@ru-code/branding";
 import { ModelSelection, QwenSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -65,7 +65,7 @@ const program = <A, E>(
   out: { stdout?: string; stderr?: string; code?: number },
   use: (tg: TextGenerationShape) => Effect.Effect<A, E>,
 ) =>
-  makeQwenTextGeneration("/fake/cli.js", SETTINGS, {}).pipe(
+  makeQwenTextGeneration("/fake/cli.js", "/home/u/.qwen", SETTINGS, {}).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, cannedSpawner(out)),
     Effect.flatMap(use),
   );
@@ -214,7 +214,7 @@ describe("makeQwenTextGeneration model + auth flags (ru-code)", () => {
     const modelSelection = selection(model);
     return Effect.gen(function* () {
       const { argvs, spawner } = capturingSpawner({ stdout: resultEnvelope("t") });
-      yield* makeQwenTextGeneration("/fake/cli.js", settings, {}).pipe(
+      yield* makeQwenTextGeneration("/fake/cli.js", "/home/u/.qwen", settings, {}).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.flatMap((tg) =>
           tg.generateThreadTitle({ cwd: "/repo", message: "m", modelSelection }),
@@ -245,7 +245,9 @@ describe("makeQwenTextGeneration model + auth flags (ru-code)", () => {
   it.effect("blocks MCP discovery with the sentinel allowlist", () =>
     Effect.gen(function* () {
       const argv = yield* captureTitleArgv(SETTINGS, "qwen3-coder-plus");
-      expect(flagValue(argv, "--allowed-mcp-server-names")).toBe(NO_MCP_SERVER_SENTINEL);
+      expect(flagValue(argv, CLI_ARGS.ALLOWED_MCP_SERVERS.flag)).toBe(
+        CLI_ARGS.ALLOWED_MCP_SERVERS.value,
+      );
     }),
   );
 
@@ -271,7 +273,7 @@ describe("makeQwenTextGeneration model + auth flags (ru-code)", () => {
       const { argvs, spawner } = capturingSpawner({
         stdout: resultEnvelope(JSON.stringify({ subject: "feat: x", body: "" })),
       });
-      yield* makeQwenTextGeneration("/fake/cli.js", SETTINGS, {}).pipe(
+      yield* makeQwenTextGeneration("/fake/cli.js", "/home/u/.qwen", SETTINGS, {}).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.flatMap((tg) =>
           tg.generateCommitMessage({
@@ -310,6 +312,7 @@ describe("makeQwenTextGeneration dispatch-model resolve (ru-code)", () => {
       const { argvs, spawner } = capturingSpawner({ stdout: resultEnvelope("t") });
       yield* makeQwenTextGeneration(
         "/fake/cli.js",
+        "/home/u/.qwen",
         SETTINGS,
         {},
         {
@@ -338,6 +341,7 @@ describe("makeQwenTextGeneration dispatch-model resolve (ru-code)", () => {
       const { argvs, spawner } = capturingSpawner({ stdout: resultEnvelope("t") });
       yield* makeQwenTextGeneration(
         "/fake/cli.js",
+        "/home/u/.qwen",
         SETTINGS,
         {},
         {
@@ -397,6 +401,7 @@ describe("makeQwenTextGeneration dispatch-model resolve (ru-code)", () => {
       const { argvs, spawner } = capturingSpawner({ stdout: resultEnvelope("t") });
       yield* makeQwenTextGeneration(
         "/fake/cli.js",
+        "/home/u/.qwen",
         SETTINGS,
         {},
         {

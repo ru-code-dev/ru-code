@@ -954,7 +954,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..738f91c7a33698f16e00808192e54a92
       * Returns the native ScrollView component reference.
       */
 diff --git a/react.js b/react.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..96f77ae716b3d19a0d23e4dd0aead56089371807 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..4e3c6d76873d514be19fd3387f8c3001c52bda67 100644
 --- a/react.js
 +++ b/react.js
 @@ -1225,7 +1225,11 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
@@ -997,7 +997,44 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..96f77ae716b3d19a0d23e4dd0aead560
    if (Math.abs(positionDiff) > 0.1) {
      const doit = () => {
        {
-@@ -7376,6 +7391,14 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -5548,13 +5563,15 @@ var Container = typedMemo(function Container2({
+   const isHorizontalRTLList = isHorizontalRTL(ctx.state);
+   const positionComponentInternal = ctx.state.props.positionComponentInternal;
+   const stickyPositionComponentInternal = ctx.state.props.stickyPositionComponentInternal;
+-  const [column = 0, span = 1, data, numColumns = 1, extraData, isSticky] = useArr$([
++  const [column = 0, span = 1, data, numColumns = 1, extraData, isSticky, ruCodeItemIndex] = useArr$([
+     `containerColumn${id}`,
+     `containerSpan${id}`,
+     `containerItemData${id}`,
+     "numColumns",
+     "extraData",
+-    `containerSticky${id}`
++    `containerSticky${id}`,
++    // ru-code[HEAVY]: subscribed only to invalidate the renderedItemInfo memo below.
++    `containerItemIndex${id}`
+   ]);
+   const ref = React3.useRef(null);
+   const { onLayout, triggerLayout } = useContainerMeasurement({
+@@ -5592,7 +5609,17 @@ var Container = typedMemo(function Container2({
+   );
+   const renderedItemInfo = React3.useMemo(
+     () => itemKey !== void 0 ? getRenderedItem2(itemKey) : null,
+-    [itemKey, data, extraData]
++    // ru-code[HEAVY]: upstream 3.3.5 bug -- when a commit SHRINKS `data`, the stale
++    // `indexByKey` makes getRenderedItem resolve `data[staleIndex]` -> undefined and
++    // return `renderedItem: null`, and this memo caches that null permanently: for an
++    // identity-stable item neither `itemKey` nor `data` changes again, and `set$` is
++    // identity-deduped, so re-writing `containerItemData${id}` cannot invalidate it.
++    // `containerItemIndex${id}` IS corrected as soon as calculateItemsInView rebuilds
++    // `indexByKey` (via syncMountedContainer), so depending on it re-runs
++    // getRenderedItem against the fresh index and the blanked row comes back.
++    // Fixed upstream in 3.3.9 (getRenderedItem resolves through containerItemMetadata
++    // behind a dataChangeEpoch guard); this is the minimal 3.3.5 equivalent.
++    [itemKey, data, extraData, ruCodeItemIndex]
+   );
+   const { renderedItem } = renderedItemInfo || {};
+   const contextValue = React3.useMemo(() => {
+@@ -7376,6 +7403,14 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
    return {
      clearCaches,
      flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
@@ -1012,7 +1049,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..96f77ae716b3d19a0d23e4dd0aead560
      getAnimatableRef: () => {
        var _a3, _b, _c;
        return (_c = (_b = (_a3 = refScroller.current).getNativeScrollRef) == null ? void 0 : _b.call(_a3)) != null ? _c : refScroller.current;
-@@ -7720,6 +7743,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +7755,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      drawDistance = 250,
      contentInsetEndAdjustment,
      estimatedItemSize = 100,
@@ -1020,7 +1057,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..96f77ae716b3d19a0d23e4dd0aead560
      estimatedListSize,
      extraData,
      getFixedItemSize,
-@@ -7990,6 +8014,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7990,6 +8026,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -1029,7 +1066,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..96f77ae716b3d19a0d23e4dd0aead560
      getItemType: useWrapIfItem(getItemType),
      horizontal: !!horizontal,
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..1d6203643e45cea6ca6ec2141376c3e7ea8a4709 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..09a2da8b7af1875d74a0c7163512f83b5ed8a40a 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1204,7 +1204,11 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
@@ -1072,7 +1109,44 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..1d6203643e45cea6ca6ec2141376c3e7
    if (Math.abs(positionDiff) > 0.1) {
      const doit = () => {
        {
-@@ -7355,6 +7370,14 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -5527,13 +5542,15 @@ var Container = typedMemo(function Container2({
+   const isHorizontalRTLList = isHorizontalRTL(ctx.state);
+   const positionComponentInternal = ctx.state.props.positionComponentInternal;
+   const stickyPositionComponentInternal = ctx.state.props.stickyPositionComponentInternal;
+-  const [column = 0, span = 1, data, numColumns = 1, extraData, isSticky] = useArr$([
++  const [column = 0, span = 1, data, numColumns = 1, extraData, isSticky, ruCodeItemIndex] = useArr$([
+     `containerColumn${id}`,
+     `containerSpan${id}`,
+     `containerItemData${id}`,
+     "numColumns",
+     "extraData",
+-    `containerSticky${id}`
++    `containerSticky${id}`,
++    // ru-code[HEAVY]: subscribed only to invalidate the renderedItemInfo memo below.
++    `containerItemIndex${id}`
+   ]);
+   const ref = useRef(null);
+   const { onLayout, triggerLayout } = useContainerMeasurement({
+@@ -5571,7 +5588,17 @@ var Container = typedMemo(function Container2({
+   );
+   const renderedItemInfo = useMemo(
+     () => itemKey !== void 0 ? getRenderedItem2(itemKey) : null,
+-    [itemKey, data, extraData]
++    // ru-code[HEAVY]: upstream 3.3.5 bug -- when a commit SHRINKS `data`, the stale
++    // `indexByKey` makes getRenderedItem resolve `data[staleIndex]` -> undefined and
++    // return `renderedItem: null`, and this memo caches that null permanently: for an
++    // identity-stable item neither `itemKey` nor `data` changes again, and `set$` is
++    // identity-deduped, so re-writing `containerItemData${id}` cannot invalidate it.
++    // `containerItemIndex${id}` IS corrected as soon as calculateItemsInView rebuilds
++    // `indexByKey` (via syncMountedContainer), so depending on it re-runs
++    // getRenderedItem against the fresh index and the blanked row comes back.
++    // Fixed upstream in 3.3.9 (getRenderedItem resolves through containerItemMetadata
++    // behind a dataChangeEpoch guard); this is the minimal 3.3.5 equivalent.
++    [itemKey, data, extraData, ruCodeItemIndex]
+   );
+   const { renderedItem } = renderedItemInfo || {};
+   const contextValue = useMemo(() => {
+@@ -7355,6 +7382,14 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
    return {
      clearCaches,
      flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
@@ -1087,7 +1161,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..1d6203643e45cea6ca6ec2141376c3e7
      getAnimatableRef: () => {
        var _a3, _b, _c;
        return (_c = (_b = (_a3 = refScroller.current).getNativeScrollRef) == null ? void 0 : _b.call(_a3)) != null ? _c : refScroller.current;
-@@ -7699,6 +7722,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +7734,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      drawDistance = 250,
      contentInsetEndAdjustment,
      estimatedItemSize = 100,
@@ -1095,7 +1169,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..1d6203643e45cea6ca6ec2141376c3e7
      estimatedListSize,
      extraData,
      getFixedItemSize,
-@@ -7969,6 +7993,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7969,6 +8005,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      dataVersion,
      drawDistance,
      estimatedItemSize,

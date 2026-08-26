@@ -56,6 +56,7 @@ const withWireRuntime = (
       childProcessSpawner,
       qwenSettings: decode(settings),
       cliJs: "/opt/cli.js",
+      homeDir: "/home/u/.qwen",
       cwd: "/tmp/qwen-wire",
       clientInfo: { name: "t3-code", version: "0.0.0" },
     });

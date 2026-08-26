@@ -38,7 +38,8 @@ import * as Sink from "effect/Sink";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 
-import { type FakeAcpScript, runFakeAcpAgent } from "./fakeAcpCore.ts";
+import { type FakeAcpScript, type PromptSteps, runFakeAcpAgent } from "./fakeAcpCore.ts";
+import { qwenBackgroundAgentId, type QwenAgentTaskEntry } from "./qwen021BackgroundAgents.ts";
 
 // CRITICAL: stdout is the ACP wire (ndJSON-RPC) — ANYTHING non-protocol on it
 // corrupts the stream and the client fails to parse the handshake. Effect's
@@ -98,6 +99,126 @@ const SCENARIOS: Record<string, FakeAcpScript> = {
 interface FlowControl {
   readonly delayMs?: number;
   readonly responseText?: string;
+  // ru-code(e2e, agents): drive ONE qwen `agent` tool call through the browser
+  // harness. Same knob channel as the two above — the control file is re-read on
+  // every prompt, so a spec switches the whole run on without rebooting the app,
+  // and a spec that never sets it gets today's text-only FLOW byte-for-byte.
+  // Frame shapes are the ones the in-memory suite already pins
+  // (subAgentFlow.e2e.test.ts:45-105); this is the same wire, over real pipes.
+  // ru-code (mid-turn wave, P3d): hold the turn open for `holdMs` and then run
+  // ONE mid-turn drain. That window is what lets a browser spec type a second
+  // message WHILE the first turn is genuinely running — the only state in which
+  // the delivery marks exist at all.
+  // ru-code (live-issues T1): a SLOW, MULTI-CHUNK response — the baseline the
+  // working-line specs pin. `chunks` deltas `gapMs` apart, so the turn is
+  // genuinely running for roughly chunks*gapMs and the DOM timer has real
+  // seconds to count. REAL wall-clock on purpose: the working timer ticks off a
+  // `setInterval` over `new Date()` inside the browser
+  // (MessagesTimeline.tsx:1326-1340), which nothing on this side can virtualize.
+  readonly stream?: { readonly chunks: number; readonly gapMs: number };
+  // ru-code (live-issues T1): N BACKGROUND agents launched in this turn and left
+  // genuinely running in the fake's task registry (served over
+  // `qwen/status/session/tasks`), with the main turn PARKED when `hold` — the
+  // exact state the owner's scenario needs before pressing Stop.
+  readonly backgroundAgents?: { readonly count: number; readonly hold?: boolean };
+  // ru-code (agentic-flow wave, timer-bug): the OWNER'S REPRO turn — a turn big
+  // enough to FOLD. The reported defect lands "at the exact commit where the
+  // previous turn's rows collapse (rowsCount 14→11)", and a collapse of that
+  // size needs a turn carrying many foldable work entries; `backgroundAgents`
+  // alone cannot produce one, because agent-spawn rows are explicitly exempt
+  // from folding (MessagesTimeline.logic.ts:404-409). So this knob emits
+  // `toolCalls` ordinary completed tool calls (foldable), `agents` background
+  // launches (the running fleet), and then keeps EMITTING TEXT while the turn
+  // stays parked — which is what makes the Stop land on a genuinely streaming
+  // turn and leak a partial chunk during the kill, exactly as qwen does.
+  readonly richTurn?: {
+    readonly toolCalls: number;
+    readonly agents: number;
+    readonly holdChunks?: number;
+    readonly holdGapMs?: number;
+  };
+  readonly midTurn?: { readonly holdMs: number };
+  readonly subAgent?: {
+    readonly title: string;
+    readonly role: string;
+    readonly innerTool?: string;
+    // Omitted ⇒ the run stays OPEN and the prompt never resolves (the HOLD
+    // shape): that is the Stop leg, where qwen sends no settling frame at all
+    // and only the server-side teardown settle can close the row.
+    readonly settle?: {
+      readonly status: "completed" | "failed" | "cancelled";
+      readonly result?: string;
+    };
+  };
+}
+
+// ru-code(e2e, agents): tool-call ids must be unique PER CALL, exactly as qwen's
+// own are — the Agents panel keys a row by the spawn's tool-call id, so a fixed
+// id would merge two separate runs (even in different threads) into one row.
+let agentCallSeq = 0;
+
+/**
+ * ru-code(e2e, agents): scripts one root `agent` call plus its child's inner
+ * tool. Terminal ops are the CALLER's business — this returns the still-open
+ * chain so the caller decides between `respondOk()` (settled run) and parking
+ * (the Stop leg).
+ */
+function scriptSubAgentRun(
+  steps: PromptSteps,
+  subAgent: NonNullable<FlowControl["subAgent"]>,
+): PromptSteps {
+  agentCallSeq += 1;
+  const agentCallId = `e2e-call-agent-${process.pid}-${agentCallSeq}`;
+  const innerCallId = `e2e-call-inner-${process.pid}-${agentCallSeq}`;
+  const meta = { parentToolCallId: agentCallId, subagentType: subAgent.role };
+  const innerTool = subAgent.innerTool ?? "read_file";
+  const opened = steps
+    .emitToolCall({
+      toolCallId: agentCallId,
+      toolName: "agent",
+      title: `Agent: ${subAgent.title}`,
+      rawInput: {
+        description: subAgent.title,
+        prompt: "p",
+        subagent_type: subAgent.role,
+        run_in_background: false,
+      },
+    })
+    // Real spacing: qwen runs the child's tool loop after the spawn frame is on
+    // the wire, and the browser needs a paint between them anyway.
+    .sleep(120)
+    .emitToolCall({
+      toolCallId: innerCallId,
+      toolName: innerTool,
+      title: `${innerTool}: /a.ts`,
+      status: "pending",
+      kind: "read",
+      rawInput: { absolute_path: "/a.ts" },
+      subagentMeta: meta,
+    })
+    .emitToolCallUpdate({
+      toolCallId: innerCallId,
+      toolName: innerTool,
+      status: "completed",
+      text: "42 lines",
+      subagentMeta: meta,
+    })
+    .sleep(120);
+  if (!subAgent.settle) return opened;
+  return opened.emitToolCallUpdate({
+    toolCallId: agentCallId,
+    toolName: "agent",
+    status: subAgent.settle.status === "failed" ? "failed" : "completed",
+    ...(subAgent.settle.result ? { text: subAgent.settle.result } : {}),
+    rawOutput: {
+      type: "task_execution",
+      subagentName: subAgent.role,
+      taskDescription: subAgent.title,
+      status: subAgent.settle.status,
+      ...(subAgent.settle.result ? { result: subAgent.settle.result } : {}),
+      executionSummary: { totalDurationMs: 4200, totalToolCalls: 5, totalTokens: 4441 },
+    },
+  });
 }
 
 // ru-code(e2e): append-only diagnostics file (RU_CODE_FAKE_LOG_FILE) — the real
@@ -166,8 +287,25 @@ function makeFlowScenario(): FakeAcpScript {
     return record;
   };
 
+  // ru-code (live-issues T1): the fake's LIVE background registry. Mutable and
+  // shared with the poll surface below, exactly as qwen's own `getAll()` returns
+  // live Map entries rather than clones (research §14.1).
+  const bgEntries: QwenAgentTaskEntry[] = [];
+  let bgSeq = 0;
+  // ru-code (timer-bug): tool-call ids for the rich repro turn — unique per call
+  // for the same reason `agentCallSeq` is (a reused id merges two rows into one).
+  let richSeq = 0;
+
   return {
     sessionId,
+    // ru-code (live-issues T1): serve `qwen/status/session/tasks` from the live
+    // registry above. Inert until a prompt actually launches something.
+    backgroundTasks: { entries: bgEntries },
+    // ru-code (mid-turn wave, P3d): the drain knob is always ON for this
+    // scenario. It is inert unless a prompt actually scripts `.drainMidTurn()`,
+    // so every pre-existing e2e leg is byte-identical; only the mid-turn leg
+    // opts in via the control file.
+    midTurnDrain: {},
     onCreateSession: () => fakeLog("session/new"),
     onStepExecuting: (kind) => fakeLog(`step: ${kind}`),
     onSetConfigOption: (configId, value) =>
@@ -201,10 +339,120 @@ function makeFlowScenario(): FakeAcpScript {
           message: { role: "model", parts: [{ text: responseText }] },
         });
       }, delayMs + 400);
-      steps
-        .sleep(delayMs + 500)
-        .emitText(responseText)
-        .respondOk("end_turn");
+      const opened = steps.sleep(delayMs + 500);
+      // ru-code (P3d): the mid-turn window. Hold, drain once (the host answers
+      // from its queue), then finish the turn normally.
+      if (control.midTurn) {
+        opened
+          .sleep(control.midTurn.holdMs)
+          .drainMidTurn()
+          .emitText(responseText)
+          .respondOk("end_turn");
+        return;
+      }
+      // ru-code (agentic-flow wave, timer-bug): the foldable, parked, streaming turn.
+      if (control.richTurn) {
+        let chain = opened;
+        for (let index = 0; index < control.richTurn.toolCalls; index += 1) {
+          richSeq += 1;
+          const callId = `e2e-rich-${String(process.pid)}-${String(richSeq)}`;
+          chain = chain
+            .emitToolCall({
+              toolCallId: callId,
+              toolName: "read_file",
+              title: `read_file: /rich${String(index)}.ts`,
+              status: "pending",
+              kind: "read",
+              rawInput: { absolute_path: `/rich${String(index)}.ts` },
+            })
+            .emitToolCallUpdate({
+              toolCallId: callId,
+              toolName: "read_file",
+              status: "completed",
+              text: `${String(20 + index)} lines`,
+            })
+            .sleep(80);
+        }
+        for (let index = 0; index < control.richTurn.agents; index += 1) {
+          bgSeq += 1;
+          const agentId = qwenBackgroundAgentId("general-purpose", `e2erich${String(bgSeq)}`);
+          const callId = `call_rich_bg_${String(bgSeq)}`;
+          const description = `Background job ${String(index + 1)}`;
+          bgEntries.push({
+            id: agentId,
+            description,
+            subagentType: "general-purpose",
+            status: "running",
+            startTime: Date.now(),
+            isBackgrounded: true,
+            toolUseId: callId,
+          });
+          chain = chain.emitBackgroundLaunch({
+            toolCallId: callId,
+            agentId,
+            subagentName: "general-purpose",
+            taskDescription: description,
+          });
+        }
+        // Park while STREAMING: no terminal frame ever, so only the Stop's
+        // force-kill ends it — and it ends mid-chunk.
+        for (let index = 0; index < (control.richTurn.holdChunks ?? 0); index += 1) {
+          chain = chain
+            .emitText(`${responseText} [${String(index + 1)}]\n`)
+            .sleep(control.richTurn.holdGapMs ?? 800);
+        }
+        return;
+      }
+      // ru-code (live-issues T1): two background agents, genuinely running.
+      if (control.backgroundAgents) {
+        let chain = opened;
+        for (let index = 0; index < control.backgroundAgents.count; index += 1) {
+          bgSeq += 1;
+          const agentId = qwenBackgroundAgentId("general-purpose", `e2ebg${String(bgSeq)}`);
+          const callId = `call_bg_${String(bgSeq)}`;
+          const description = `Background job ${String(index + 1)}`;
+          bgEntries.push({
+            id: agentId,
+            description,
+            subagentType: "general-purpose",
+            status: "running",
+            startTime: Date.now(),
+            isBackgrounded: true,
+            toolUseId: callId,
+          });
+          chain = chain.emitBackgroundLaunch({
+            toolCallId: callId,
+            agentId,
+            subagentName: "general-purpose",
+            taskDescription: description,
+          });
+        }
+        // `hold` parks the MAIN turn: no terminal frame at all, so the turn is
+        // still running while both agents work — the Stop leg's precondition.
+        if (control.backgroundAgents.hold) return;
+        chain.emitText(responseText).respondOk("end_turn");
+        return;
+      }
+      // ru-code (live-issues T1): the slow streaming baseline.
+      if (control.stream) {
+        let chain = opened;
+        for (let index = 0; index < control.stream.chunks; index += 1) {
+          chain = chain
+            .emitText(`${responseText} [${String(index + 1)}]\n`)
+            .sleep(control.stream.gapMs);
+        }
+        chain.respondOk("end_turn");
+        return;
+      }
+      if (control.subAgent) {
+        const withAgent = scriptSubAgentRun(opened, control.subAgent);
+        // No settling frame ⇒ the turn parks: the row can only be closed by the
+        // Stop button's server-side settle, which is exactly what that leg pins.
+        if (!control.subAgent.settle) return;
+        withAgent.emitText(responseText).respondOk("end_turn");
+        return;
+      }
+      opened.emitText(responseText).respondOk("end_turn");
     },
   };
 }

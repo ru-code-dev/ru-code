@@ -153,9 +153,13 @@ describe("qwenModelsForSettings — via buildInitialQwenProviderSnapshot", () =>
 describe("checkQwenProviderStatus", () => {
   it.effect("disabled settings return the disabled draft WITHOUT spawning", () =>
     Effect.gen(function* () {
-      const draft = yield* checkQwenProviderStatus("/fake/cli.js", DISABLED, LABEL, {}).pipe(
-        Effect.provide(provideSpawner(forbiddenSpawner)),
-      );
+      const draft = yield* checkQwenProviderStatus(
+        "/fake/cli.js",
+        "/home/u/.qwen",
+        DISABLED,
+        LABEL,
+        {},
+      ).pipe(Effect.provide(provideSpawner(forbiddenSpawner)));
       expect(draft.enabled).toBe(false);
       expect(draft.status).toBe("disabled");
       expect(draft.installed).toBe(false);
@@ -166,9 +170,13 @@ describe("checkQwenProviderStatus", () => {
 
   it.effect("enabled + version probe exit 0 → ready with parsed version and models", () =>
     Effect.gen(function* () {
-      const draft = yield* checkQwenProviderStatus("/fake/cli.js", ENABLED, LABEL, {}).pipe(
-        Effect.provide(provideSpawner(cannedSpawner({ stdout: "qwen 1.2.3\n", code: 0 }))),
-      );
+      const draft = yield* checkQwenProviderStatus(
+        "/fake/cli.js",
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+        {},
+      ).pipe(Effect.provide(provideSpawner(cannedSpawner({ stdout: "qwen 1.2.3\n", code: 0 }))));
       expect(draft.enabled).toBe(true);
       expect(draft.status).toBe("ready");
       expect(draft.installed).toBe(true);
@@ -181,7 +189,13 @@ describe("checkQwenProviderStatus", () => {
   // `ready` (a warning would disable it in the model picker). See QwenProvider.test.ts.
   it.effect("enabled + non-zero exit with version → ready, version reported", () =>
     Effect.gen(function* () {
-      const draft = yield* checkQwenProviderStatus("/fake/cli.js", ENABLED, LABEL, {}).pipe(
+      const draft = yield* checkQwenProviderStatus(
+        "/fake/cli.js",
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+        {},
+      ).pipe(
         Effect.provide(
           provideSpawner(cannedSpawner({ stdout: "qwen 4.5.6\n", stderr: "boom", code: 3 })),
         ),
@@ -201,9 +215,13 @@ describe("checkQwenProviderStatus", () => {
         method: "spawn",
         description: "qwen missing",
       });
-      const draft = yield* checkQwenProviderStatus("/fake/cli.js", ENABLED, LABEL, {}).pipe(
-        Effect.provide(provideSpawner(failingSpawner(notFound))),
-      );
+      const draft = yield* checkQwenProviderStatus(
+        "/fake/cli.js",
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+        {},
+      ).pipe(Effect.provide(provideSpawner(failingSpawner(notFound))));
       expect(draft.installed).toBe(false);
       expect(draft.status).toBe("error");
       expect(draft.message).toContain("not installed");
@@ -218,9 +236,13 @@ describe("checkQwenProviderStatus", () => {
         method: "spawn",
         description: "permission denied",
       });
-      const draft = yield* checkQwenProviderStatus("/fake/cli.js", ENABLED, LABEL, {}).pipe(
-        Effect.provide(provideSpawner(failingSpawner(denied))),
-      );
+      const draft = yield* checkQwenProviderStatus(
+        "/fake/cli.js",
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+        {},
+      ).pipe(Effect.provide(provideSpawner(failingSpawner(denied))));
       expect(draft.installed).toBe(true);
       expect(draft.status).toBe("error");
       expect(draft.message).toContain("Could not run");

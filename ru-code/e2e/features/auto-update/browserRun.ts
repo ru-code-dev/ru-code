@@ -1,5 +1,6 @@
 // ru-code: auto-update FEATURE — entry point for the real-browser acceptance cycle.
-// Wired as the root script `test:e2e:auto-update-cycle`. The launcher itself is generic
+// Wired as a step in the root `test:e2e:all` chain (invoked directly via `node
+// ru-code/e2e/features/auto-update/browserRun.ts`). The launcher itself is generic
 // (harness/browserRunner.ts); all this file decides is WHICH config to run.
 //
 // @effect-diagnostics nodeBuiltinImport:off

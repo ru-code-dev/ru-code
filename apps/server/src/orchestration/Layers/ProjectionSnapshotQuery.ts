@@ -25,6 +25,7 @@ import {
   ModelSelection,
   ProjectId,
   ThreadId,
+  MidTurnDeliveryState, // ru-code
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -91,6 +92,11 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    // ru-code (mid-turn wave, P3b): SQL returns NULL for an ordinary message,
+    // while the service schema declares the field OPTIONAL (absent). This file
+    // keeps its own copy of the row schema, so the null mapping has to be
+    // repeated here — without it every message SELECT fails to decode.
+    deliveryState: Schema.NullOr(MidTurnDeliveryState),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -556,6 +562,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState", -- ru-code (mid-turn wave, P3b)
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1000,6 +1007,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState", -- ru-code (mid-turn wave, P3b)
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1243,6 +1251,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState", -- ru-code (mid-turn wave, P3b)
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1586,6 +1595,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
                   turnId: row.turnId,
                   streaming: row.isStreaming === 1,
+                  // ru-code (mid-turn wave, P3b)
+                  ...(row.deliveryState !== null ? { deliveryState: row.deliveryState } : {}),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                 });
@@ -2659,6 +2670,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             text: row.text,
             turnId: row.turnId,
             streaming: row.isStreaming === 1,
+            // ru-code (mid-turn wave, P3b)
+            ...(row.deliveryState !== null ? { deliveryState: row.deliveryState } : {}),
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
           };

@@ -4,12 +4,17 @@
 // resolution for multiple instances side-by-side across config combinations, and
 // prove the resolved bin drives the right spawn shape (`node <cli.js>` vs a direct
 // command). See specs/cli-profiles.md.
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { describe, expect, it } from "vite-plus/test";
 import { QwenSettings } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import {
-  buildQwenSpawnBaseEnv,
+  buildCliEnv,
   formatQwenModelId,
   resolveCliProfileSettings,
   resolveDefaultAuthMethod,
@@ -17,7 +22,7 @@ import {
   type CliPreflight,
 } from "../../qwen/profileResolver.ts";
 import { buildCliSpawn, isJsEntry } from "@ru-code/qwen/spawn";
-import { CLI_HOME_ENV_VAR, resolveCliProfile } from "@ru-code/branding";
+import { CLI_ENV, cliEnvAssignments, resolveCliProfile } from "@ru-code/branding";
 
 const decode = Schema.decodeSync(QwenSettings);
 // A realistic boot preflight: a fork's detected cli.js + its config dir.
@@ -268,32 +273,79 @@ describe("resolved bin → spawn shape (node vs direct command)", () => {
   });
 });
 
-// ru-code: QWEN_HOME injection — the ONE base env every qwen spawn (ACP cold,
-// warm slot, textgen, version probe) is built from in QwenDriver.create.
-describe("buildQwenSpawnBaseEnv — QWEN_HOME injection", () => {
-  it("injects the preflight CLI profile dir as QWEN_HOME", () => {
-    const env = buildQwenSpawnBaseEnv("/home/u/.qwen", { PATH: "/usr/bin" });
-    expect(env[CLI_HOME_ENV_VAR]).toBe("/home/u/.qwen");
+// ru-code: buildCliEnv — the ONE spawn env every qwen invocation (ACP cold, warm slot, textgen,
+// version probe) is built from. It is a thin last-writer overlay of the branding CLI registry
+// onto a base env, so the expectations below are DERIVED from the registry: the concrete var
+// names live in cliEnv.ts and the one literal snapshot (cliEnvRegistry.test.ts).
+describe("buildCliEnv — the registry overlay", () => {
+  const HOME_DIR = "/home/u/.qwen";
+  const enforcedPairs = cliEnvAssignments({ HOME: HOME_DIR });
+
+  it("preserves the base env and adds every enforced assignment", () => {
+    const env = buildCliEnv({ PATH: "/usr/bin" }, { homeDir: HOME_DIR });
     expect(env["PATH"]).toBe("/usr/bin"); // base env preserved
+    for (const [name, value] of enforcedPairs) {
+      expect(env[name], `enforced ${name}`).toBe(value);
+    }
+    for (const name of CLI_ENV.HOME.names) expect(env[name]).toBe(HOME_DIR);
   });
 
-  it("wins over an inherited shell QWEN_HOME", () => {
-    const env = buildQwenSpawnBaseEnv("/home/u/.qwen", {
-      [CLI_HOME_ENV_VAR]: "/somewhere/else",
-    });
-    expect(env[CLI_HOME_ENV_VAR]).toBe("/home/u/.qwen");
+  it("wins over an inherited value for any enforced var (last writer)", () => {
+    const base: NodeJS.ProcessEnv = {};
+    for (const [name] of enforcedPairs) base[name] = "/somewhere/else";
+    const env = buildCliEnv(base, { homeDir: HOME_DIR });
+    for (const [name, value] of enforcedPairs) {
+      expect(env[name], `enforced ${name} beats the inherited value`).toBe(value);
+    }
   });
 
-  it("an empty/blank dir injects nothing and returns the base env untouched", () => {
-    const base = { PATH: "/usr/bin" };
-    expect(buildQwenSpawnBaseEnv("", base)).toBe(base);
-    expect(buildQwenSpawnBaseEnv("   ", base)).toBe(base);
-    expect(buildQwenSpawnBaseEnv("", base)[CLI_HOME_ENV_VAR]).toBeUndefined();
+  it("expands a leading `~` in the home dir (spawns get no shell expansion)", () => {
+    const env = buildCliEnv({}, { homeDir: "~/.qwen" });
+    const expected = NodePath.join(NodeOS.homedir(), ".qwen");
+    for (const name of CLI_ENV.HOME.names) expect(env[name]).toBe(expected);
+  });
+
+  it("writes the settings-overlay path only when one is supplied", () => {
+    const without = buildCliEnv({}, { homeDir: HOME_DIR });
+    for (const name of CLI_ENV.SYSTEM_SETTINGS_PATH.names) {
+      expect(without[name], `${name} absent`).toBeUndefined();
+    }
+    const withOverlay = buildCliEnv(
+      {},
+      { homeDir: HOME_DIR, settingsOverlayPath: "/tmp/overlay.json" },
+    );
+    for (const name of CLI_ENV.SYSTEM_SETTINGS_PATH.names) {
+      expect(withOverlay[name]).toBe("/tmp/overlay.json");
+    }
   });
 
   it("does not mutate the provided base env", () => {
     const base: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
-    buildQwenSpawnBaseEnv("/home/u/.qwen", base);
-    expect(base[CLI_HOME_ENV_VAR]).toBeUndefined();
+    buildCliEnv(base, { homeDir: HOME_DIR });
+    for (const [name] of enforcedPairs) expect(base[name]).toBeUndefined();
+  });
+
+  // ru-code: CLI_PASS_IDENTITY reaches every spawn through here — identity is RE-READ per call
+  // (no caching), so a CLI update that rewrites its identity file is live on the next spawn.
+  it("injects the identity per call, freshly re-read (RU_CODE_CLI_IDENTITY_PATH hook)", () => {
+    const names = CLI_ENV.PACKAGE_IDENTITY.names;
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ru-code-env-identity-"));
+    const file = NodePath.join(dir, "identity.sh");
+    try {
+      process.env["RU_CODE_CLI_IDENTITY_PATH"] = file;
+      NodeFS.writeFileSync(file, `${CLI_ENV.PACKAGE_IDENTITY.names[0]}='first'\n`);
+      for (const name of names) expect(buildCliEnv({}, { homeDir: HOME_DIR })[name]).toBe("first");
+      NodeFS.writeFileSync(file, `${CLI_ENV.PACKAGE_IDENTITY.names[0]}='second'\n`);
+      for (const name of names) expect(buildCliEnv({}, { homeDir: HOME_DIR })[name]).toBe("second");
+      NodeFS.rmSync(file);
+      for (const name of names)
+        expect(
+          buildCliEnv({}, { homeDir: HOME_DIR })[name],
+          `${name} absent on a miss`,
+        ).toBeUndefined();
+    } finally {
+      delete process.env["RU_CODE_CLI_IDENTITY_PATH"];
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

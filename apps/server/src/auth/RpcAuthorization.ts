@@ -21,6 +21,8 @@ import { TRANSCRIPT_RPC_SCOPES } from "../ru-code/qwen/transcript/transcriptHost
 import { AUTO_UPDATE_RPC_SCOPES } from "../ru-code/auto-update/rpcHandlers.ts";
 // ru-code: analytics per-method scopes (ru-code/analytics).
 import { ANALYTICS_RPC_SCOPES } from "../ru-code/analytics/analyticsRpcHandlers.ts";
+// ru-code: Pixso MCP assistant per-method scopes (ru-code/pixso-assistant).
+import { PIXSO_ASSISTANT_RPC_SCOPES } from "../ru-code/pixso-assistant/rpcHandlers.ts";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
@@ -143,6 +145,8 @@ export const RPC_REQUIRED_SCOPES = {
   ...AUTO_UPDATE_RPC_SCOPES,
   // ru-code: analytics per-method scopes (ru-code/analytics).
   ...ANALYTICS_RPC_SCOPES,
+  // ru-code: Pixso MCP assistant per-method scopes (ru-code/pixso-assistant).
+  ...PIXSO_ASSISTANT_RPC_SCOPES,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

@@ -31,7 +31,7 @@ import { expand } from "./expand.ts";
 import { isDir, isFile } from "./fs.ts";
 import type { CliResolution, PlatformKey, ResolveOptions } from "./types.ts";
 
-const toPlatformKey = (platform: NodeJS.Platform): PlatformKey =>
+export const toPlatformKey = (platform: NodeJS.Platform): PlatformKey =>
   platform === "darwin" ? "darwin" : platform === "win32" ? "win32" : "linux";
 
 /**

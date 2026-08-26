@@ -69,8 +69,8 @@ const configLayer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const stateDir = yield* fs.makeTempDirectory();
-    const home = yield* fs.makeTempDirectory();
+    const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ru-session-respawn-state-" });
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "ru-session-respawn-home-" });
     return { stateDir, cliConfigDir: path.join(home, ".qwen") } as never;
   }),
 );
@@ -98,8 +98,10 @@ it.effect("changedForThread flips for skills, agents, and globals — but not an
     const commands = yield* CommandCatalog;
     const gate = yield* SessionRespawnGate;
 
-    const projectRoot = yield* fs.makeTempDirectory();
-    const otherRoot = yield* fs.makeTempDirectory();
+    const projectRoot = yield* fs.makeTempDirectoryScoped({
+      prefix: "ru-session-respawn-project-",
+    });
+    const otherRoot = yield* fs.makeTempDirectoryScoped({ prefix: "ru-session-respawn-other-" });
     const PID = "11111111-1111-1111-1111-111111111111";
     const OTHER_PID = "22222222-2222-2222-2222-222222222222";
     yield* repo.upsert(mkProject(PID, projectRoot));

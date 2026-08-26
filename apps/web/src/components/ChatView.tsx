@@ -39,7 +39,7 @@ import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashComm
 // ru-code: live catalog custom-command slugs (dynamic allowlist) for the qwen submit guard.
 import { useCatalogCommandSlugs } from "../ru-code/skills-agents/composer/useCatalogCommandSlugs"; // ru-code
 import { providerCommandSource } from "@ru-code/provider-capabilities"; // ru-code
-import { isQwenRunningTurn, shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
+import { shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
 import { deriveIsCompactingContext } from "../ru-code/workLog/contextCompaction"; // ru-code
 import {
   connectionStatusTitle,
@@ -5085,18 +5085,14 @@ function ChatViewContent(props: ChatViewProps) {
         isConnecting,
         isCompactingContext,
         isEnvironmentUnavailable: activeEnvironmentUnavailable,
-        // ru-code: Enter reaches this gate directly (ChatComposer's key handler
-        // calls submitComposer → onSend), bypassing the Stop button the toolbar
-        // shows while a turn runs. qwen aborts the in-flight prompt when a new
-        // one arrives, so the answer is cut short; the rule is qwen-scoped
-        // because the other drivers STEER instead of aborting.
-        isRunningTurn: isQwenRunningTurn({
-          providerDriver: activeProviderStatus?.driver,
-          phase,
-          pendingApprovalCount: pendingApprovals.length,
-          pendingUserInputCount: pendingUserInputs.length,
-          hasPendingPlanApproval,
-        }),
+        // ru-code (mid-turn wave, phase 3): the qwen running-turn block is GONE.
+        // It used to pass `isRunningTurn: isQwenRunningTurn({...})` here,
+        // because a second `session/prompt` aborts qwen's in-flight one and cut
+        // the answer short. The server now QUEUES a mid-turn send instead of
+        // dispatching it (QwenAdapter `tryQueueMidTurnMessage`), so the reason
+        // for the block no longer exists and the composer stays live.
+        // ONLY this condition was relaxed — `isCompactingContext` above is
+        // untouched by owner ruling (wave-midturn-plan.md).
         sendInFlight: sendInFlightRef.current,
         threadDetailLoading,
       })

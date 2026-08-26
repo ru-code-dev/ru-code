@@ -115,13 +115,13 @@ describe("version probe cache", () => {
     Effect.gen(function* () {
       const { spawner, calls } = countingSpawner({ stdout: "0.13.1\n" });
 
-      const first = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      const first = yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
-      const second = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      const second = yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
-      const third = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      const third = yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
 
@@ -137,17 +137,17 @@ describe("version probe cache", () => {
     Effect.gen(function* () {
       const { spawner, calls } = countingSpawner({ stdout: "0.13.1\n" });
 
-      yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
-      yield* checkQwenProviderStatus(OTHER_CLI_PATH, ENABLED, LABEL).pipe(
+      yield* checkQwenProviderStatus(OTHER_CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
       // …and each of them stays cached afterwards.
-      yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
-      yield* checkQwenProviderStatus(OTHER_CLI_PATH, ENABLED, LABEL).pipe(
+      yield* checkQwenProviderStatus(OTHER_CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
 
@@ -160,7 +160,7 @@ describe("version probe cache", () => {
       const { spawner, calls } = hangingSpawner();
 
       // Virtual time: the probe waits out its real budget without the test doing so.
-      const probe = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      const probe = yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
         Effect.forkChild,
       );
@@ -168,7 +168,7 @@ describe("version probe cache", () => {
       yield* TestClock.adjust(Duration.millis(CLI_VERSION_PROBE_TIMEOUT_MS));
       const first = yield* Fiber.join(probe);
 
-      const second = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      const second = yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
 
@@ -191,17 +191,23 @@ describe("version probe cache", () => {
     Effect.gen(function* () {
       const failing = failingSpawner(missingBinaryError);
 
-      const missing = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
-        Effect.provide(provideSpawner(failing.spawner)),
-      );
+      const missing = yield* checkQwenProviderStatus(
+        CLI_PATH,
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+      ).pipe(Effect.provide(provideSpawner(failing.spawner)));
       expect(missing.status).toBe("error");
       expect(missing.installed).toBe(false);
 
       // The user installs the CLI; the next refresh must see it.
       const installed = countingSpawner({ stdout: "0.13.1\n" });
-      const recovered = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
-        Effect.provide(provideSpawner(installed.spawner)),
-      );
+      const recovered = yield* checkQwenProviderStatus(
+        CLI_PATH,
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+      ).pipe(Effect.provide(provideSpawner(installed.spawner)));
 
       expect(failing.calls.count).toBe(1);
       expect(installed.calls.count).toBe(1);
@@ -215,16 +221,19 @@ describe("version probe cache", () => {
       const { spawner, calls } = countingSpawner({ stdout: "0.13.1\n" });
       const disabled = decodeQwenSettings({ enabled: false });
 
-      const draft = yield* checkQwenProviderStatus(CLI_PATH, disabled, LABEL).pipe(
+      const draft = yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", disabled, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
       expect(calls.count).toBe(0);
       expect(draft.enabled).toBe(false);
 
       // Re-enabling must still probe.
-      const enabledDraft = yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
-        Effect.provide(provideSpawner(spawner)),
-      );
+      const enabledDraft = yield* checkQwenProviderStatus(
+        CLI_PATH,
+        "/home/u/.qwen",
+        ENABLED,
+        LABEL,
+      ).pipe(Effect.provide(provideSpawner(spawner)));
       expect(calls.count).toBe(1);
       expect(enabledDraft.version).toBe("0.13.1");
     }),
@@ -233,7 +242,7 @@ describe("version probe cache", () => {
   it.effect("the pre-probe placeholder reuses a verdict already known for that path", () =>
     Effect.gen(function* () {
       const { spawner } = countingSpawner({ stdout: "0.13.1\n" });
-      yield* checkQwenProviderStatus(CLI_PATH, ENABLED, LABEL).pipe(
+      yield* checkQwenProviderStatus(CLI_PATH, "/home/u/.qwen", ENABLED, LABEL).pipe(
         Effect.provide(provideSpawner(spawner)),
       );
 

@@ -14,6 +14,7 @@ import {
 export { CLI_ERROR_TASK_TYPE, CONTEXT_COMPACTION_TASK_PREFIX, CONTEXT_COMPACTION_TASK_TYPE };
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { MidTurnDeliveryState } from "./orchestration.ts"; // ru-code (mid-turn wave, P3c)
 import {
   EventId,
   IsoDateTime,
@@ -209,6 +210,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "files.persisted",
   "runtime.warning",
   "runtime.error",
+  "message.delivery-state", // ru-code (mid-turn wave, P3c)
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 
@@ -579,6 +581,14 @@ export function classifyTaskAgentKind(input: {
  * All fields optional: old emitters and old rows decode unchanged.
  */
 const taskAgentLinkageFields = {
+  /**
+   * ru-code (agentic-flow wave): is this task DETACHED from the turn that
+   * launched it? Repeated on every row for the same reason `taskType` is — a
+   * fold that never saw the start row still has to classify it. The panel uses
+   * it for exactly one decision: a stop control belongs only on a task the host
+   * can address individually while it runs.
+   */
+  isBackgrounded: Schema.optional(Schema.Boolean),
   /** SDK task_type (subagent/shell/monitor/local_workflow/…), repeated on
    * every row so folds can classify without the start row. */
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -665,7 +675,10 @@ const TaskUpdatedPayload = Schema.Struct({
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   error: Schema.optional(TrimmedNonEmptyStringSchema),
   endedAt: Schema.optional(IsoDateTime),
-  isBackgrounded: Schema.optional(Schema.Boolean),
+  // ru-code (agentic-flow wave): `isBackgrounded` moved into
+  // `taskAgentLinkageFields` (spread below) so every task row carries it, not
+  // just this one. Same schema, same optionality — a payload that set it here
+  // decodes identically.
   ...taskAgentLinkageFields,
 });
 export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
@@ -926,6 +939,27 @@ const ProviderRuntimeTurnStartedEvent = Schema.Struct({
   payload: TurnStartedPayload,
 });
 export type ProviderRuntimeTurnStartedEvent = typeof ProviderRuntimeTurnStartedEvent.Type;
+
+// ru-code (mid-turn wave, P3c): the adapter telling ingestion that ONE queued
+// message changed delivery state. This is the missing link between the
+// in-memory MidTurnQueue (which knows when a message was actually handed to the
+// model) and the persisted mark on its row.
+//
+// `messageId` is the ORCHESTRATION message id, threaded down through
+// `ProviderSendTurnInput.messageId` — without it the adapter cannot say WHICH
+// row it is marking, which is why that field had to exist first.
+const MessageDeliveryStateType = Schema.Literal("message.delivery-state"); // ru-code
+const MessageDeliveryStatePayload = Schema.Struct({
+  messageId: Schema.String,
+  deliveryState: MidTurnDeliveryState,
+}); // ru-code
+const ProviderRuntimeMessageDeliveryStateEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: MessageDeliveryStateType,
+  payload: MessageDeliveryStatePayload,
+}); // ru-code
+export type ProviderRuntimeMessageDeliveryStateEvent =
+  typeof ProviderRuntimeMessageDeliveryStateEvent.Type; // ru-code
 
 const ProviderRuntimeTurnCompletedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -1195,6 +1229,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeThreadRealtimeClosedEvent,
   ProviderRuntimeTurnStartedEvent,
   ProviderRuntimeTurnCompletedEvent,
+  ProviderRuntimeMessageDeliveryStateEvent, // ru-code (mid-turn wave, P3c)
   ProviderRuntimeTurnAbortedEvent,
   ProviderRuntimeTurnPlanUpdatedEvent,
   ProviderRuntimeTurnProposedDeltaEvent,

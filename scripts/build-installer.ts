@@ -22,8 +22,11 @@ import {
   BRAND_GRADIENT_FROM,
   BRAND_GRADIENT_TO,
   SUPPORT_CHANNEL_URL,
+  IDENTITY_KEY,
   NODE_BIN_PATHS,
   USE_RC_SOURCED_LAUNCHER,
+  cliArgAssignments,
+  cliEnvAssignments,
 } from "@ru-code/branding";
 
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -35,6 +38,21 @@ const OUTPUT = NodePath.join(REPO_ROOT, "install");
 // apps/server/src/ru-code/tests/install/build.test.ts (which can import both sides).
 const NODE_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
 const CLI_MIN_VERSION = "0.13.1";
+
+/**
+ * ru-code: the bash warm-up's env prefix, generated from the branding CLI registry.
+ *
+ * The warm-up is the fifth qwen spawn site and the only one outside TypeScript, so it takes its
+ * variables from the same tables the app's spawns do rather than from a hand-written prefix that
+ * could drift. `$CONFIG_DIR` is deliberately a bash variable REFERENCE — the installer resolves
+ * the profile dir at run time, so the registry's HOME row is filled with the literal text and
+ * expanded by bash, not by us.
+ */
+function warmUpEnvPrefix(): string {
+  return cliEnvAssignments({ HOME: "$CONFIG_DIR" })
+    .map(([name, value]) => `${name}="${value}"`)
+    .join(" ");
+}
 
 /** Minimum major from the engine range (min of every clause's major) — no drift with the range. */
 function minMajorFromRange(range: string): string {
@@ -88,6 +106,15 @@ const CONFIG: Record<string, string> = {
   // profile dir is missing, so the profile exists before the app first spawns it. Timeout in seconds.
   PERFORM_CLI_WARM_UP: "true",
   CLI_WARM_UP_TIMEOUT: "20",
+  // ru-code: generated FROM the CLI registry (see warmUpEnvPrefix + RAW_TOKENS). These two are
+  // bash FRAGMENTS, not values in a quoted assignment, which is why they bypass the escaper.
+  CLI_WARM_UP_ENV: warmUpEnvPrefix(),
+  CLI_MCP_OFF_ARGS: cliArgAssignments().join(" "),
+  // ru-code: the env-var NAME the warm-up exports the preflight-extracted identity value under
+  // (CLI_PASS_IDENTITY). The name comes from the registry (IDENTITY_KEY → the PACKAGE_IDENTITY
+  // row), so bash never writes a variable name by hand; the VALUE arrives at install time via the
+  // preflight's CLI_IDENTITY stdout line and is exported only when non-empty.
+  CLI_IDENTITY_ENV_NAME: IDENTITY_KEY,
   // Hints — bodies for the §10 message table. Placeholders (author-filled).
   CLI_INSTALL_HINT: "Установите CLI-движок (см. документацию проекта).",
   CLI_UPDATE_HINT: "Обновите CLI-движок до последней версии.",
@@ -122,6 +149,17 @@ export function escapeForDoubleQuotedShell(value: string): string {
   return value.replace(/[\\`"$]/g, (character) => `\\${character}`);
 }
 
+/**
+ * ru-code: the ONLY tokens injected verbatim, without {@link escapeForDoubleQuotedShell}.
+ *
+ * Both are bash fragments this script GENERATES from the CLI registry — `NAME="$CONFIG_DIR"` env
+ * prefixes and flag pairs — rather than brand values someone typed. Escaping them would neutralise
+ * exactly the characters that make them work: the quotes that group each assignment and the `$`
+ * that defers `CONFIG_DIR` to bash at install time. Every other token keeps its escaping; adding a
+ * name here means taking responsibility for that fragment's shell safety at its generator.
+ */
+const RAW_TOKENS: ReadonlySet<string> = new Set(["CLI_WARM_UP_ENV", "CLI_MCP_OFF_ARGS"]);
+
 /** Deterministic assembly: parts in filename order, tokens replaced, joined by exactly one \n. */
 export function buildInstaller(): string {
   const partFiles = NodeFS.readdirSync(PARTS_DIR)
@@ -140,7 +178,7 @@ export function buildInstaller(): string {
   output = output.replace(/@@([A-Z0-9_]+)@@/g, (_match, key: string) => {
     const value = CONFIG[key];
     if (value === undefined) throw new Error(`build-installer: no config value for @@${key}@@`);
-    return escapeForDoubleQuotedShell(value);
+    return RAW_TOKENS.has(key) ? value : escapeForDoubleQuotedShell(value);
   });
   const leftover = output.match(/@@[A-Z0-9_]+@@/);
   if (leftover) throw new Error(`build-installer: unresolved token ${leftover[0]}`);

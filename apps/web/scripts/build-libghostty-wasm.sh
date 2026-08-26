@@ -92,7 +92,7 @@ ensure_ghostty_source() {
 ensure_zig
 ensure_ghostty_source
 
-build_root="$(mktemp -d)"
+build_root="$(mktemp -d -t gc-libghostty-wasm.XXXXXX)"
 trap 'rm -rf "${build_root}"' EXIT
 
 log "building ${GHOSTTY_REVISION} for wasm32-freestanding"

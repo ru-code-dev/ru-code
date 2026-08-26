@@ -14,7 +14,8 @@ import {
   ModelSelection,
   NonNegativeInt,
   ThreadId,
-  ProviderCompactContextInput, // ru-code
+  ProviderCompactContextInput,
+  ProviderStopBackgroundTaskInput, // ru-code
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -900,6 +901,35 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  // ru-code (agentic-flow wave): the per-task background stop. Mirrors
+  // `compactContext` directly above, including `allowRecovery` — a user can
+  // press stop on a row whose session has since been reaped, and the honest
+  // answer is to resume the session and cancel the task, not to refuse.
+  const stopBackgroundTask: ProviderServiceMethod<"stopBackgroundTask"> = Effect.fn(
+    "stopBackgroundTask",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.stopBackgroundTask",
+      schema: ProviderStopBackgroundTaskInput,
+      payload: rawInput,
+    });
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.stopBackgroundTask",
+      allowRecovery: true,
+    });
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "stop-background-task",
+      "provider.kind": routed.adapter.provider,
+      "provider.thread_id": input.threadId,
+    });
+    const adapterStopBackgroundTask = routed.adapter.stopBackgroundTask;
+    if (!adapterStopBackgroundTask) {
+      return yield* new ProviderUnsupportedError({ provider: routed.adapter.provider });
+    }
+    yield* adapterStopBackgroundTask(routed.threadId, input.taskId);
+  });
+
   const respondToRequest: ProviderServiceMethod<"respondToRequest"> = Effect.fn("respondToRequest")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1240,6 +1270,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     sendTurn,
     interruptTurn,
     compactContext, // ru-code
+    stopBackgroundTask, // ru-code (agentic-flow wave)
     respondToRequest,
     respondToUserInput,
     stopSession,

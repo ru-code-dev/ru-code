@@ -485,3 +485,57 @@ it.live(
       (harness) => harness.dispose,
     ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+// ru-code (mid-turn wave, phase 4 — M3): stale PENDING delivery marks.
+//
+// The mid-turn queue is process memory; the mark is a persisted column. A
+// SIGKILL / OOM / crash destroys the former and preserves the latter, so without
+// this sweep a balloon shows its clock forever for a message that can never be
+// sent. The plan of record names "server restart" alongside stop and crash, and
+// it was the one case nothing covered.
+//
+// Driven with a recording dispatch rather than the full engine: the claim is
+// exactly "the sweep issues this command for each stale row", and a stub makes
+// that legible in milliseconds.
+it.effect("M3: the boot sweep flips every stale PENDING mark to not-delivered", () =>
+  Effect.gen(function* () {
+    const dispatched: Array<{
+      readonly type: string;
+      readonly messageId?: string;
+      readonly deliveryState?: string;
+    }> = [];
+    let uuidCounter = 0;
+
+    yield* runQwenBootSweepWith({
+      listBindings: () =>
+        Effect.succeed([
+          { threadId: THREAD_QWEN, provider: QWEN, lastSeenAt: "2026-01-01T00:00:00.000Z" },
+        ]),
+      readSweepThreadState: () =>
+        Effect.succeed({
+          session: null,
+          streamingAssistantMessages: [],
+          activities: [],
+          pendingDeliveryMessageIds: [
+            MessageId.make("stale-pending-1"),
+            MessageId.make("stale-pending-2"),
+          ],
+        }),
+      dispatch: ((command: { readonly type: string }) =>
+        Effect.sync(() => {
+          dispatched.push(command as never);
+        })) as never,
+      randomUuid: Effect.sync(() => `m3-uuid-${uuidCounter++}`),
+    });
+
+    const marks = dispatched.filter((command) => command.type === "thread.message.delivery-state");
+    assert.deepStrictEqual(
+      marks.map((mark) => [mark.messageId, mark.deliveryState]),
+      [
+        ["stale-pending-1", "not-delivered"],
+        ["stale-pending-2", "not-delivered"],
+      ],
+      "every row the dead process left pending must be terminalised on boot",
+    );
+  }),
+);

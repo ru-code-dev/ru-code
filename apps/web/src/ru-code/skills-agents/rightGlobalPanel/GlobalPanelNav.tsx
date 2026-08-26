@@ -13,7 +13,9 @@ export function GlobalPanelNav() {
 
   return (
     <>
-      {OVERLAY_PANELS.map((panel) => {
+      {/* ru-code: only Pixso lives in the text menu — skills/agents/commands/mcp moved to the
+          footer icon row (SidebarChromeFooter). */}
+      {OVERLAY_PANELS.filter((panel) => panel.id === "pixso").map((panel) => {
         const Icon = panel.icon;
         const active = open === panel.id;
         return (

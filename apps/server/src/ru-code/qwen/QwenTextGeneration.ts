@@ -28,11 +28,11 @@ import { TextGenerationError } from "@t3tools/contracts";
 import { buildCliSpawn } from "@ru-code/qwen/spawn";
 import { CLI_TEXT_GENERATION_TIMEOUT_MS, MCP_ENGINE_USE_OVERLAY } from "@ru-code/qwen/constants";
 // ru-code: same allowlist argument the ACP spawns use — one definition, one behaviour.
-import { buildAllowedMcpServerArgs } from "./QwenAcpSupport.ts";
+import { buildCliEnv } from "./profileResolver.ts";
 import { haltOnExit } from "@ru-code/qwen/haltOnExit";
 // ru-code: resolve the auth method a given model dispatches with (built-in →
 // profile default, custom → its stored method, else instance default).
-import { asAuthMethodId } from "@ru-code/branding";
+import { allowedMcpServerArgs, asAuthMethodId } from "@ru-code/branding";
 import { resolveServedModelAuthMethod } from "./discovery/serveQwenModels.ts";
 import { resolveDefaultAuthMethod } from "./profileResolver.ts";
 import { type TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
@@ -143,15 +143,17 @@ export interface QwenTextGenerationOptions {
 
 export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(function* (
   cliJs: string,
+  // ru-code: the instance's resolved CLI profile dir — the registry's HOME row.
+  homeDir: string,
   qwenSettings: QwenSettings,
   environment: NodeJS.ProcessEnv = process.env,
   options?: QwenTextGenerationOptions,
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  const qwenEnvironment: NodeJS.ProcessEnv = {
-    ...environment,
-  };
+  // ru-code: a `-p` run is a full CLI invocation like any other, so it takes the same enforced
+  // env from the branding CLI registry (relaunch guard + profile dir) as the ACP path.
+  const qwenEnvironment = buildCliEnv(environment, { homeDir });
 
   // ru-code: the CLI flags selecting the model + its auth for a `-p` run. Without
   // `--model`/`--auth-type` qwen falls back to its persisted defaults, which
@@ -258,7 +260,7 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
       // connects (and awaits) every MCP server the user configured before answering — minutes
       // on a machine with slow/unreachable servers, paid on every commit message / branch name.
       // Gated like the ACP path so the kill-switch leaves qwen's own configuration alone.
-      ...(MCP_ENGINE_USE_OVERLAY ? buildAllowedMcpServerArgs(undefined) : []),
+      ...(MCP_ENGINE_USE_OVERLAY ? allowedMcpServerArgs(undefined) : []),
       "--output-format",
       "json",
     ]);

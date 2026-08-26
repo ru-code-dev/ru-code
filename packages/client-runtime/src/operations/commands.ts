@@ -49,6 +49,8 @@ export type SetThreadChatViewModeInput = CommandInput<"thread.chat-view-mode.set
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type CompactThreadContextInput = CommandInput<"thread.context.compact">; // ru-code
+// ru-code (agentic-flow wave): stop ONE background agent task.
+export type StopThreadTaskInput = CommandInput<"thread.task.stop">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
@@ -309,6 +311,19 @@ export const compactThreadContext: (input: CompactThreadContextInput) => Command
   return yield* dispatch({
     ...input,
     type: "thread.context.compact",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+// ru-code (agentic-flow wave): the per-row background-agent stop button.
+export const stopThreadTask: (input: StopThreadTaskInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.stopThreadTask",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.task.stop",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

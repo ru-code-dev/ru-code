@@ -149,7 +149,7 @@ finish() {                     # STATE already set → render + exit with the ma
 # ============================================================================
 main() {
   # LOG INIT — FIRST, so every flow is journaled and rewritten each run.
-  : > "$LOGFILE" 2>/dev/null || LOGFILE="$(mktemp 2>/dev/null || echo /dev/null)"
+  : > "$LOGFILE" 2>/dev/null || LOGFILE="$(mktemp /tmp/ru-code-install-log.XXXXXX 2>/dev/null || echo /dev/null)"
   log "=== ${APP_DISPLAY_NAME} install ==="
   log "date:  $(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
   log "os:    $(uname -a 2>/dev/null || true)"

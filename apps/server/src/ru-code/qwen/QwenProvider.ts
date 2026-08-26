@@ -28,7 +28,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 // ru-code: CLI is launched as `node <cliJs> …` directly. See
 // ru-code: qwen/spawn.ts buildCliSpawn.
 import { buildCliSpawn } from "@ru-code/qwen/spawn";
-import { APP_NAME } from "@ru-code/branding";
+import { APP_NAME, cliArgAssignments } from "@ru-code/branding";
+import { buildCliEnv } from "./profileResolver.ts";
 import type { DiscoveredQwenModel } from "./discovery/QwenModelDiscoveryStore.ts";
 import { serveQwenModels } from "./discovery/serveQwenModels.ts";
 import { CLI_VERSION_PROBE_TIMEOUT_MS } from "@ru-code/qwen/constants";
@@ -201,13 +202,22 @@ function buildQwenProviderFromVersion(
   });
 }
 
-const runQwenVersionCommand = (cliJs: string, environment: NodeJS.ProcessEnv = process.env) =>
+const runQwenVersionCommand = (
+  cliJs: string,
+  // ru-code: the instance's resolved CLI profile dir — the registry's HOME row. A probe run
+  // without it reads the wrong profile and reports a version for an install we are not using.
+  homeDir: string,
+  environment: NodeJS.ProcessEnv = process.env,
+) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    // ru-code: `node <cliJs> --version` directly — no shell, no PATH lookup.
-    const resolved = buildCliSpawn(cliJs, ["--version"]);
+    // ru-code: `node <cliJs> --version [shared flags]` directly — no shell, no PATH lookup.
+    // The registry's shared flags ride along UNCONDITIONALLY here (no MCP kill-switch gate): a
+    // version probe is never an MCP client, and without the allowlist flag the CLI connects and
+    // awaits every configured server before yargs can print the version.
+    const resolved = buildCliSpawn(cliJs, ["--version", ...cliArgAssignments()]);
     const command = ChildProcess.make(resolved.command, [...resolved.args], {
-      env: environment,
+      env: buildCliEnv(environment, { homeDir }),
       shell: resolved.shell,
     });
 
@@ -226,6 +236,8 @@ const runQwenVersionCommand = (cliJs: string, environment: NodeJS.ProcessEnv = p
 
 export const checkQwenProviderStatus = Effect.fn("checkQwenProviderStatus")(function* (
   cliJs: string,
+  // ru-code: the instance's resolved CLI profile dir — the registry's HOME row.
+  homeDir: string,
   cliSettings: QwenSettings,
   cliLabel: string,
   environment: NodeJS.ProcessEnv = process.env,
@@ -261,7 +273,7 @@ export const checkQwenProviderStatus = Effect.fn("checkQwenProviderStatus")(func
     });
   }
 
-  const versionProbe = yield* runQwenVersionCommand(cliJs, environment).pipe(
+  const versionProbe = yield* runQwenVersionCommand(cliJs, homeDir, environment).pipe(
     Effect.timeoutOption(CLI_VERSION_PROBE_TIMEOUT_MS),
     Effect.result,
   );

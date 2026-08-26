@@ -6,14 +6,31 @@ import type { DiffPanelMode } from "@smart-tools/qwen-cli-ui-kit";
 // ru-code zone → hand seam (R19): module-const L is safe — the locale module self-seeds
 // from the server-stamped window.__RU_LOCALE__ at its own init (localeInit.test.ts).
 import { L } from "@ru-code/localization";
-import { BotIcon, ServerIcon, SparklesIcon, TerminalIcon, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import {
+  BotIcon,
+  PenToolIcon,
+  ServerIcon,
+  SparklesIcon,
+  TerminalIcon,
+  type LucideIcon,
+} from "lucide-react";
+import { lazy, Suspense, type ReactNode } from "react";
 
 import { McpPanelHost } from "../../mcp/McpPanelHost";
 import { AgentsPanelHost } from "../agents-manager/host";
 import { CommandsPanelHost } from "../commands-manager/host";
 import { SkillsPanelHost } from "../skill-manager/host";
 import type { GlobalPanelId } from "./store";
+
+// ru-code: the Pixso host pulls in the whole assistant package (panel tree, parser,
+// preview renderer). A static import puts all of it in the initial chunk of every cold
+// boot, for a panel most sessions never open — so this one entry is code-split. The other
+// panels stay static: they are small and their hosts are already on the app's own graph.
+const PixsoAssistantPanelHost = lazy(() =>
+  import("../../pixso-assistant/host").then((module) => ({
+    default: module.PixsoAssistantPanelHost,
+  })),
+);
 
 export interface OverlayPanel {
   readonly id: GlobalPanelId;
@@ -48,6 +65,17 @@ export const OVERLAY_PANELS: readonly OverlayPanel[] = [
     label: L("MCP Servers", "MCP-серверы"),
     icon: ServerIcon,
     render: (mode, onClose) => <McpPanelHost mode={mode} onClose={onClose} />,
+  },
+  // ru-code: the Pixso MCP assistant (scan → gallery → detail → diagnostics).
+  {
+    id: "pixso",
+    label: "Pixso",
+    icon: PenToolIcon,
+    render: (mode, onClose) => (
+      <Suspense fallback={null}>
+        <PixsoAssistantPanelHost mode={mode} onClose={onClose} />
+      </Suspense>
+    ),
   },
 ];
 

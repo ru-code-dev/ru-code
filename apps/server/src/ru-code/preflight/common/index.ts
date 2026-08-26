@@ -11,3 +11,4 @@ export * from "./fs.ts";
 export * from "./probe.ts";
 export * from "./resolve.ts";
 export * from "./checks.ts";
+export * from "./identity.ts";

@@ -9,6 +9,7 @@
 import {
   ChatAttachment,
   MessageId,
+  MidTurnDeliveryState, // ru-code
   OrchestrationMessageRole,
   ThreadId,
   TurnId,
@@ -29,6 +30,9 @@ export const ProjectionThreadMessage = Schema.Struct({
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   isStreaming: Schema.Boolean,
+  // ru-code (mid-turn wave, P3b): the delivery mark for a message that went
+  // through the mid-turn queue. Optional — an ordinary message never has one.
+  deliveryState: Schema.optional(MidTurnDeliveryState),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

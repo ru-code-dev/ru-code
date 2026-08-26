@@ -8,7 +8,13 @@ import * as NodeFS from "node:fs";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { BRAND_GRADIENT_FROM, BRAND_GRADIENT_TO } from "@ru-code/branding";
+import {
+  BRAND_GRADIENT_FROM,
+  BRAND_GRADIENT_TO,
+  CLI_ENV,
+  cliArgAssignments,
+  cliEnvAssignments,
+} from "@ru-code/branding";
 
 import { CLI_MIN_VERSION, NODE_ENGINE_RANGE } from "../../preflight/common/constants.ts";
 import {
@@ -45,6 +51,26 @@ describe("installer build (drift guard)", () => {
       Math.min(...[...NODE_ENGINE_RANGE.matchAll(/(?:\^|>=?|~)(\d+)/g)].map((m) => Number(m[1]))),
     );
     expect(committed).toContain(`NODE_MIN_MAJOR="${minMajor}"`);
+  });
+
+  // ru-code: the bash warm-up is the fifth qwen spawn site, and the only one outside TypeScript.
+  // Its env prefix and shared flags are TOKENS generated from @ru-code/branding's CLI registry, so
+  // the shipped installer cannot drift from what the app injects. Derived from the registry here —
+  // the literals live in cliEnv.ts and its one snapshot test.
+  it("bakes the CLI registry's env + shared flags into the warm-up line", () => {
+    const committed = NodeFS.readFileSync(INSTALL_SCRIPT, "utf8");
+    const warmLine = committed.split("\n").find((line) => line.includes(`-p "test"`));
+    expect(warmLine, "the warm-up invocation line").toBeDefined();
+    // The CLI home var carries the installer's own resolved profile dir (bash-expanded).
+    for (const name of CLI_ENV.HOME.names) {
+      expect(warmLine).toContain(`${name}="$CONFIG_DIR"`);
+    }
+    // Every fixed row rides along too, verbatim.
+    for (const [name, value] of cliEnvAssignments()) {
+      expect(warmLine).toContain(`${name}="${value}"`);
+    }
+    // …and the shared flags, so a warm-up never waits on the user's MCP servers.
+    expect(warmLine).toContain(cliArgAssignments().join(" "));
   });
 
   it("contains no bash-4+ syntax (bash 3.2 portability, §1a)", () => {

@@ -7,12 +7,15 @@
 
 import {
   asAuthMethodId,
-  CLI_HOME_ENV_VAR,
+  cliEnvAssignments,
   resolveCliProfile,
   type AuthMethodId,
   type CliProfile,
 } from "@ru-code/branding";
 import type { QwenSettings } from "@t3tools/contracts";
+
+import { expandHomePath } from "../../pathExpansion.ts";
+import { identityEnvRuntime } from "../preflight/common/identity.ts";
 
 /** The boot preflight result threaded via ServerConfig (`cliJs`/`cliConfigDir`). */
 export interface CliPreflight {
@@ -45,18 +48,35 @@ export const resolveCliProfileSettings = (
 };
 
 /**
- * ru-code: the base spawn env for EVERY qwen invocation — `baseEnv` plus
- * {@link CLI_HOME_ENV_VAR} (`QWEN_HOME`) set to the preflight-resolved CLI profile
- * dir. The dir is always absolute (built from `os.homedir()` by the resolver), so
- * no path processing happens here; an empty dir injects nothing. The injected
- * value wins over an inherited shell variable, while per-instance environment
- * variables (merged AFTER this base in the driver) still override it.
+ * ru-code: the spawn env for EVERY qwen invocation — `baseEnv` with the branding CLI registry
+ * (@ru-code/branding cliEnv.ts) written over the top. Each site that spawns the CLI (ACP sessions,
+ * warm slots, one-shot text generation, the version probe) funnels through here, so a row added to
+ * the registry reaches all of them at once and no site can quietly omit one.
+ *
+ * The registry is written LAST, so its values beat both an inherited shell variable and the
+ * per-instance environment merged into `baseEnv` upstream: these are policy, not defaults. (That is
+ * a deliberate reversal of the old base-env behaviour, where a per-instance variable could
+ * override the CLI's home dir and point the spawn at the wrong profile.)
+ *
+ * `homeDir` is REQUIRED rather than optional because the CLI cannot run correctly without its
+ * profile dir; it is expanded here since a spawned process gets no shell expansion and the stock
+ * profile's default is the literal `~/.qwen`.
  */
-export const buildQwenSpawnBaseEnv = (
-  cliConfigDir: string,
-  baseEnv: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv =>
-  cliConfigDir.trim().length > 0 ? { ...baseEnv, [CLI_HOME_ENV_VAR]: cliConfigDir } : baseEnv;
+export const buildCliEnv = (
+  baseEnv: NodeJS.ProcessEnv,
+  runtime: { readonly homeDir: string; readonly settingsOverlayPath?: string },
+): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  // ru-code: identity is re-read at every spawn (CLI_PASS_IDENTITY, preflight identity.ts) so an
+  // updated CLI's new identity is picked up by the very next spawn; a miss omits the variable.
+  const assignments = cliEnvAssignments({
+    HOME: expandHomePath(runtime.homeDir),
+    ...(runtime.settingsOverlayPath ? { SYSTEM_SETTINGS_PATH: runtime.settingsOverlayPath } : {}),
+    ...identityEnvRuntime(),
+  });
+  for (const [name, value] of assignments) env[name] = value;
+  return env;
+};
 
 /**
  * ru-code: the session-start ACP `authenticate` methodId for an instance —

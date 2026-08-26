@@ -68,6 +68,8 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
+
+import { MidTurnDeliveryMarkIcon } from "../../ru-code/composer/MidTurnDeliveryMarkIcon"; // ru-code (mid-turn wave, P3c)
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -1039,6 +1041,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      {/* ru-code (mid-turn wave, P3c): the delivery mark for a message queued
+          during a running turn. Sits OUTSIDE the hover-revealed footer below —
+          a pending clock and a not-delivered warning must be visible without
+          hovering. Renders nothing for an ordinary or delivered message. */}
+      <MidTurnDeliveryMarkIcon state={row.message.deliveryState} />
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>

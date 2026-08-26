@@ -17,12 +17,29 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+
+import { RU_CODE_TMP_ROOT } from "../harness/primitives.ts";
+import { PIXSO_MCP_ENDPOINT } from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
+
+// T10 (reorg wave, decisions 438/442, owner option A "full merge"): the fake REMOTE
+// Pixso MCP is no longer a separate process/port — `harness/fakeRemotePixsoMcp.ts` was
+// folded into `harness/fakePixsoMcp.ts` (one file/process/port, two routes). Its
+// endpoint/calls-URL constants now come from that ONE module.
+import {
+  FAKE_PIXSO_ENTRY_PATH,
+  FAKE_REMOTE_PIXSO_CALLS_URL,
+  FAKE_REMOTE_PIXSO_ENDPOINT,
+} from "../harness/fakePixsoMcp.ts";
 
 const REPO_ROOT = NodePath.resolve(import.meta.dirname, "../../..");
 const ARTIFACTS_DIR = NodePath.join(import.meta.dirname, "../.artifacts");
 const STATE_FILE = NodePath.join(ARTIFACTS_DIR, "harness-state.json");
+// ru-code: written the INSTANT the fake Pixso MCP is spawned, long before the full state
+// file exists — teardown can then reclaim port 3667 after a boot that failed halfway.
+// T10 (reorg wave): ONE pid file for the ONE merged process — it now serves BOTH the
+// local (`/local-mcp`) and remote (`/remote-mcp`) routes, so there is no second pid file.
+const PIXSO_PID_FILE = NodePath.join(ARTIFACTS_DIR, "fake-pixso-pid.json");
 const FAKE_ACP_ENTRY = NodePath.join(
   REPO_ROOT,
   "apps/server/src/ru-code/tests/qwen/fake-acp/fake-acp-server.ts",
@@ -35,11 +52,35 @@ const MOCK_UPDATE_ENTRY = NodePath.join(import.meta.dirname, "mockUpdateServer.t
 // dev runner: dev runs the server as raw `node --watch src/bin.ts`, so nothing dedupes the
 // dev-linked @smart-tools packages' own `effect` copy and TWO effect instances load in one
 // process — under effect 4.0.0-beta.103 a schema built by one and decoded by the other loses
-// its transforms (empty MCP catalog). The bundle resolves one instance via
+// its transforms (empty MCP catalog, dead pixso scans). The bundle resolves one instance via
 // apps/server/vite.config.ts `bundledPackagePrefixes`, and it is what the owner smoke-tests.
 const BUILT_APP_ENTRY = NodePath.join(REPO_ROOT, "apps/server/dist/bin.mjs");
+// ru-code: the fake Pixso desktop MCP the pixso spec drives (see harness/fakePixsoMcp.ts).
+// It MUST bind the app's hardcoded internal endpoint — hence the package constant here.
+// ru-code: the real server file, in the package (decisions 510/511). `harness/fakePixsoMcp.ts`
+// only re-exports it, and a re-export cannot be SPAWNED — its run-when-direct block would
+// never fire, so the child would exit 0 without binding 3667.
+const FAKE_PIXSO_ENTRY = FAKE_PIXSO_ENTRY_PATH;
+const FAKE_PIXSO_ENDPOINT = PIXSO_MCP_ENDPOINT;
+const FAKE_PIXSO_URL = new URL(FAKE_PIXSO_ENDPOINT);
+const FAKE_PIXSO_PORT = Number(FAKE_PIXSO_URL.port);
+const FAKE_PIXSO_HOST = FAKE_PIXSO_URL.hostname;
+const FAKE_PIXSO_HEALTH_URL = `${FAKE_PIXSO_URL.origin}/healthz`;
+// T10 (reorg wave, decisions 438/442 — supersedes task 23's dedicated fake-remote entry):
+// the remote route is served by the SAME child process as the local route
+// (`FAKE_PIXSO_ENTRY` above) — no separate entry, no separate port. Decisions 435/436's
+// "no env var points the app here anymore" still holds: the package's
+// `PIXSO_REMOTE_MCP_ENDPOINT` constant already IS this address (same host:port as local
+// now, `/remote-mcp`), so booting the app normally already dials it.
 
 const BOOT_TIMEOUT_MS = 240_000;
+
+// F5 (branch-sync v5): the fake Pixso MCP is ONLY spawned for the pixso suite —
+// playwright.pixso.config.ts sets this before importing bootApp.ts (the warm-config
+// idiom). Every other suite (core, warm, contracts, ...) leaves it unset, so their
+// shared globalSetup performs ZERO pixso actions: no spawn attempt, no port 3667
+// touch, no dependency on the untracked ru-code-packages symlink.
+const PIXSO_ENABLED = process.env["RU_CODE_E2E_PIXSO"] === "1";
 
 // ── WARMUP BUDGET ─────────────────────────────────────────────────────────────────────
 //
@@ -47,7 +88,7 @@ const BOOT_TIMEOUT_MS = 240_000;
 // then said only «never served», with the real cause sitting in a log nobody was told to
 // read. Twice this suite sat for minutes on a wedged boot.
 //
-// So each warmup wait — the app serving its URL — gets a HARD
+// So each warmup wait — the fake binding its port, the app serving its URL — gets a HARD
 // 20 s budget, and the clock starts at the process's FIRST OUTPUT, not at spawn: the app's
 // ~30 s build is silent by design and must never count against it. Blown budget ⇒ throw
 // immediately, naming what stalled and quoting the last line it managed to write. Not a
@@ -126,6 +167,19 @@ export interface HarnessState {
   readonly mockServerPid: number;
   /** Candidate paths of the server-runtime sentinel ({host,port,pid}) — the #42 server-pid seam. */
   readonly serverStatePaths: ReadonlyArray<string>;
+  // ── ru-code: fake Pixso MCP facts (harness/fakePixsoMcp.ts) ──────────────────
+  /** Behaviour switch re-read on EVERY request: {"mode":"normal"|"dsl-error"|"down"}. Governs
+   *  the LOCAL route only (the remote route has no such concept). */
+  readonly pixsoControlFile: string;
+  /** The hardcoded LOCAL-route endpoint the app dials — the fake binds exactly this. */
+  readonly pixsoEndpoint: string;
+  readonly pixsoServerPid: number;
+  // ── T10 (reorg wave, decisions 438/442): fake REMOTE route facts — SAME process/pid as
+  // the local route above (`pixsoServerPid`); no separate pid field any more. ──────────
+  readonly remotePixsoEndpoint: string;
+  /** `GET` this for `{calledTools, authorizations}` — the ONLY way the spec (a separate
+   *  process) sees the fake's REMOTE-route server-side call history. */
+  readonly remotePixsoCallsUrl: string;
 }
 
 /** qwen utils/paths.ts sanitizeCwd (linux branch) — mirrors chatsPath.ts. */
@@ -135,7 +189,8 @@ export default async function bootApp(): Promise<void> {
   NodeFS.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
   // A state file that survived the previous run describes processes THIS run does not
-  // own. Reclaim what is still alive, then drop the files: from here on the
+  // own. Reclaim what is still alive (a leaked fake keeps port 3667 and would make the
+  // readiness probe succeed against a dead child), then drop the files: from here on the
   // only state on disk is this boot's.
   reclaimPreviousRun();
 
@@ -144,7 +199,8 @@ export default async function bootApp(): Promise<void> {
   // serves and the server bundle itself.
   buildApp();
 
-  const tmpRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ru-code-e2e-"));
+  NodeFS.mkdirSync(RU_CODE_TMP_ROOT, { recursive: true });
+  const tmpRoot = NodeFS.mkdtempSync(NodePath.join(RU_CODE_TMP_ROOT, "ru-code-e2e-"));
   const homeDir = NodePath.join(tmpRoot, "home");
   const t3Home = NodePath.join(tmpRoot, "t3home");
   const cliConfigDir = NodePath.join(homeDir, ".qwen");
@@ -157,6 +213,11 @@ export default async function bootApp(): Promise<void> {
 
   // ── ru-code: auto-update harness seams ────────────────────────────────────────
   const autoUpdate = setUpAutoUpdateHarness(tmpRoot, t3Home);
+
+  // ── ru-code: the fake Pixso MCP — ONE process, port 3667, both routes (T10) ────
+  // F5: gated on PIXSO_ENABLED — every other suite's boot must not spawn it, touch its
+  // port, or depend on the ru-code-packages symlink FAKE_PIXSO_ENTRY resolves through.
+  const pixso = PIXSO_ENABLED ? await startFakePixso(tmpRoot) : { controlFile: "", pid: -1 };
 
   const projectCwd = REPO_ROOT;
   const transcriptFile = NodePath.join(
@@ -184,7 +245,14 @@ export default async function bootApp(): Promise<void> {
     T3CODE_LOG_LEVEL: "Debug",
     // Warm pool OFF while the harness stabilizes (pool replacement-spawn
     // interferes with the bound child's reader — investigate separately).
-    RU_CODE_WARM_ENGINE: "0",
+    //
+    // ru-code (agentic-flow wave, live-issues T1): the DEFAULT is unchanged —
+    // "0" — but a suite may opt IN via `RU_CODE_E2E_WARM_ENGINE`. The pool is
+    // where the owner's reported defect lives: a Stop kills the bound child and
+    // the next send rides a session the POOL hands over, so a suite that never
+    // turns the pool on never exercises the handoff at all. Opt-in rather than
+    // flipped, so every existing spec keeps the substrate it was written for.
+    RU_CODE_WARM_ENGINE: process.env["RU_CODE_E2E_WARM_ENGINE"] ?? "0",
     RU_CODE_ACP_PROTOCOL_LOG: "1",
     RU_CODE_FAKE_LOG_FILE: NodePath.join(ARTIFACTS_DIR, "fake-acp.log"),
     TZ: "UTC",
@@ -359,12 +427,24 @@ export default async function bootApp(): Promise<void> {
     mockUrl: autoUpdate.mockUrl,
     mockServerPid: autoUpdate.mockServerPid,
     serverStatePaths: autoUpdate.serverStatePaths,
+    pixsoControlFile: pixso.controlFile,
+    pixsoEndpoint: FAKE_PIXSO_ENDPOINT,
+    pixsoServerPid: pixso.pid,
+    remotePixsoEndpoint: FAKE_REMOTE_PIXSO_ENDPOINT,
+    remotePixsoCallsUrl: FAKE_REMOTE_PIXSO_CALLS_URL,
   };
   NodeFS.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
   // Keep the runner alive past globalSetup: unref so the setup process can exit.
   runner.unref();
   runner.stdout?.unref?.();
   runner.stderr?.unref?.();
+}
+
+// ── ru-code: fake Pixso MCP setup ──────────────────────────────────────────────
+
+interface FakePixsoHarness {
+  readonly controlFile: string;
+  readonly pid: number;
 }
 
 /**
@@ -416,6 +496,109 @@ async function reserveFreePort(): Promise<number> {
   });
 }
 
+/**
+ * Start the fake Pixso desktop MCP detached (the mockUpdateServer idiom) and wait until
+ * the port actually answers AS THIS CHILD. The endpoint is a HARDCODED constant in the
+ * package (`PIXSO_MCP_ENDPOINT`), so there is no port to negotiate: a busy 3667 is a boot
+ * failure with the fake's own message in fake-pixso.log.
+ *
+ * Readiness has two halves, and BOTH are load-bearing:
+ *  · the child is still alive — checked FIRST, so an EADDRINUSE exit is reported as
+ *    itself instead of being masked by a foreign listener answering the TCP probe;
+ *  · the listener IS this child — proven by `GET /healthz` returning its pid. A leaked
+ *    fake from an aborted run answers MCP perfectly well but reads a DIFFERENT control
+ *    file, so every `setPixsoFakeMode` would be a silent no-op and the failure would
+ *    surface four cases later as an inexplicable assertion mismatch.
+ */
+async function startFakePixso(tmpRoot: string): Promise<FakePixsoHarness> {
+  const controlFile = NodePath.join(tmpRoot, "pixso-control.json");
+  NodeFS.writeFileSync(controlFile, JSON.stringify({ mode: "normal" }));
+  const logPath = NodePath.join(ARTIFACTS_DIR, "fake-pixso.log");
+  const logFd = NodeFS.openSync(logPath, "w");
+  const child = NodeChildProcess.spawn("node", [FAKE_PIXSO_ENTRY], {
+    // PIXSO_FAKE_ORDER is pinned HERE, at the spawn site, and not left to the fake's own
+    // default. Run standalone the fake serves the REAL captures only (that is what the
+    // owner starts it for); the suite needs the historical synthetic-first cycle, because
+    // half its assertions are pinned to "the first three scans" and to example1 being the
+    // first card. Stating it here means the suite's order is a property of the suite, not
+    // something it inherits from whatever the standalone default happens to be. An
+    // environment that already names an order still wins, so a run can be pointed at the
+    // real captures on purpose.
+    env: {
+      ...process.env,
+      PIXSO_FAKE_CONTROL_FILE: controlFile,
+      PIXSO_FAKE_ORDER: process.env["PIXSO_FAKE_ORDER"] ?? "synthetic-first",
+    },
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+  });
+  // Recorded BEFORE the first thing that can fail: every later boot step (dev runner,
+  // pairing, vite) can throw, and without this file teardown would have no idea a fake is
+  // holding 3667 — the leak that poisons the NEXT run.
+  NodeFS.writeFileSync(
+    PIXSO_PID_FILE,
+    JSON.stringify({ pid: child.pid ?? -1, entry: FAKE_PIXSO_ENTRY, controlFile }),
+  );
+
+  // Readiness is the FACT that the port accepts a connection — not a duration. The fake
+  // synthesizes ~5 MB of payload before it listens, so the first attempts legitimately
+  // fail; the loop returns the moment it is up.
+  const { connect } = await import("node:net");
+  const deadline = Date.now() + 60_000;
+  let fakeWarmup: WarmupClock | null = null;
+  for (;;) {
+    // A fake that is ALIVE BUT WEDGED (mid-synthesis, blocked on a read) used to burn the
+    // full 60 s and then report only «never bound». Its log going quiet says so in ~20 s.
+    fakeWarmup = assertWithinWarmupBudget(
+      logPath,
+      `fake Pixso MCP (${FAKE_PIXSO_ENDPOINT})`,
+      fakeWarmup,
+    );
+    // The liveness check comes FIRST: a child that already exited can never bind, and a
+    // port that answers anyway is somebody else's.
+    if (child.exitCode !== null) {
+      throw new Error(
+        `fake Pixso MCP exited (${String(child.exitCode)}) before binding ${FAKE_PIXSO_ENDPOINT} — see ${logPath}`,
+      );
+    }
+    const up = await new Promise<boolean>((resolve) => {
+      const socket = connect({ port: FAKE_PIXSO_PORT, host: FAKE_PIXSO_HOST }, () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.on("error", () => resolve(false));
+    });
+    if (up) break;
+    if (Date.now() > deadline) {
+      throw new Error(`fake Pixso MCP never bound ${FAKE_PIXSO_ENDPOINT} — see ${logPath}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  // TCP readiness proves only that SOMETHING accepted the socket. A foreign listener that
+  // never answers HTTP would park this request on undici's 300 s default and swallow the
+  // FOREIGN-listener diagnosis below — the timeout turns that into the honest failure.
+  const identity = await fetch(FAKE_PIXSO_HEALTH_URL, { signal: AbortSignal.timeout(5_000) })
+    .then((response) => response.json() as Promise<{ name?: string; pid?: number }>)
+    .catch((error: unknown) => ({ name: `unreachable (${String(error)})`, pid: -1 }));
+  if (identity.name !== "fake-pixso" || identity.pid !== child.pid) {
+    throw new Error(
+      `${FAKE_PIXSO_ENDPOINT} is served by a FOREIGN listener ` +
+        `(${identity.name ?? "?"} pid ${String(identity.pid ?? -1)}, expected fake-pixso pid ${String(child.pid ?? -1)}) — ` +
+        `free the port and re-run; see ${logPath}`,
+    );
+  }
+
+  child.unref();
+  return { controlFile, pid: child.pid ?? -1 };
+}
+
+// T10 (reorg wave, decisions 438/442): the fake REMOTE Pixso MCP no longer has its own
+// boot step — `startFakePixso` above already spawns the ONE process that serves both
+// routes, and its own TCP + `/healthz` identity probe already proves the listener on
+// port 3667 (the SAME listener the remote route answers behind) is this run's child.
+// A separate remote readiness probe would just be re-checking the same socket.
+
 // ── ru-code: stale-state guard ─────────────────────────────────────────────────
 
 /** The pid files a previous run may have left behind, with the argv needle that proves a
@@ -439,12 +622,24 @@ function reclaimPreviousRun(): void {
       return null;
     }
   };
+  // T10 (reorg wave): ONE pid file, ONE process — it served BOTH routes, so reclaiming it
+  // reclaims both.
+  // F5: both pixso reclaim entries are gated too — a non-pixso boot never touches port
+  // 3667 and must not go looking for a stale fake to kill there.
+  if (PIXSO_ENABLED) {
+    const pixso = read(PIXSO_PID_FILE);
+    if (pixso !== null) stale.push({ pid: Number(pixso["pid"] ?? -1), needle: FAKE_PIXSO_ENTRY });
+  }
   const previous = read(STATE_FILE);
   if (previous !== null) {
+    if (PIXSO_ENABLED) {
+      stale.push({ pid: Number(previous["pixsoServerPid"] ?? -1), needle: FAKE_PIXSO_ENTRY });
+    }
     stale.push({ pid: Number(previous["mockServerPid"] ?? -1), needle: MOCK_UPDATE_ENTRY });
     stale.push({ pid: Number(previous["runnerPid"] ?? -1), needle: BUILT_APP_ENTRY });
   }
   for (const record of stale) killIfStillOurs(record.pid, record.needle);
+  NodeFS.rmSync(PIXSO_PID_FILE, { force: true });
   NodeFS.rmSync(STATE_FILE, { force: true });
 }
 

@@ -89,6 +89,12 @@ const recordBodyCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
   tag: TRANSCRIPT_WS_METHODS.getTranscriptRecordBody,
 });
 
+/** The ruled D3 transport: fired when a user EXPANDS an agent row, never on a tick. */
+const subagentFlowCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "ru-code:extended-chat:subagent-flow",
+  tag: TRANSCRIPT_WS_METHODS.getSubagentFlow,
+});
+
 export function ExtendedChatTimelineHost({
   environmentId,
   threadId,
@@ -141,6 +147,16 @@ export function ExtendedChatTimelineHost({
           throw Cause.squash(result.cause);
         }
         return result.value.record;
+      },
+      fetchSubagentFlow: async (callId) => {
+        const result = await subagentFlowCommand.run(appAtomRegistry, {
+          environmentId,
+          input: { threadId, callId },
+        });
+        if (!AsyncResult.isSuccess(result)) {
+          throw Cause.squash(result.cause);
+        }
+        return result.value;
       },
       renderMarkdown: (text, cwd) => <ChatMarkdown text={text} cwd={cwd} />,
     }),

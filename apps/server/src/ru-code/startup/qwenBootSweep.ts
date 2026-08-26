@@ -206,6 +206,8 @@ export function planQwenBootSweepSessionStop(
 export interface QwenSweepThreadState {
   readonly session: OrchestrationSession | null;
   readonly streamingAssistantMessages: ReadonlyArray<SweepStreamingMessageInput>;
+  /** ru-code (phase 4, M3): message ids left `pending` by the dead process. */
+  readonly pendingDeliveryMessageIds: ReadonlyArray<MessageId>;
   readonly activities: ReadonlyArray<SweepActivityInput>;
 }
 
@@ -227,6 +229,11 @@ const SweepStreamingMessageRowSchema = Schema.Struct({
   isStreaming: Schema.Number,
   updatedAt: Schema.String,
 });
+// ru-code (phase 4, M3)
+const SweepPendingDeliveryRowSchema = Schema.Struct({
+  messageId: MessageId,
+});
+
 const SweepActivityRowSchema = Schema.Struct({
   kind: Schema.String,
   taskId: Schema.NullOr(Schema.String),
@@ -276,6 +283,24 @@ export const makeSweepThreadStateReader = (
         ORDER BY created_at ASC, message_id ASC
       `,
   });
+  // ru-code (phase 4, M3): messages still marked `pending` from the PREVIOUS
+  // process. The mid-turn queue is process memory; the mark is a persisted
+  // column. A SIGKILL / OOM / crash destroys the former and preserves the
+  // latter, so without this sweep the balloon shows a clock forever for a
+  // message that can never be sent — the plan of record names "server restart"
+  // in the same breath as stop and crash, and it was the one case uncovered.
+  const readSweepPendingDeliveryRows = SqlSchema.findAll({
+    Request: SweepThreadLookupInput,
+    Result: SweepPendingDeliveryRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND delivery_state = 'pending'
+        ORDER BY created_at ASC, message_id ASC
+      `,
+  });
   const readSweepActivityRows = SqlSchema.findAll({
     Request: SweepThreadLookupInput,
     Result: SweepActivityRowSchema,
@@ -302,7 +327,7 @@ export const makeSweepThreadStateReader = (
       if (Option.isNone(shell)) {
         return null;
       }
-      const [messageRows, activityRows] = yield* Effect.all([
+      const [messageRows, activityRows, pendingDeliveryRows] = yield* Effect.all([
         readStreamingAssistantMessageRows({ threadId }).pipe(
           Effect.mapError(
             toSweepReadError(
@@ -319,9 +344,19 @@ export const makeSweepThreadStateReader = (
             ),
           ),
         ),
+        // ru-code (phase 4, M3)
+        readSweepPendingDeliveryRows({ threadId }).pipe(
+          Effect.mapError(
+            toSweepReadError(
+              "qwenBootSweep.readPendingDelivery:query",
+              "qwenBootSweep.readPendingDelivery:decodeRow",
+            ),
+          ),
+        ),
       ]);
       return {
         session: shell.value.session,
+        pendingDeliveryMessageIds: pendingDeliveryRows.map((row) => row.messageId),
         streamingAssistantMessages: messageRows.map((row) => ({
           id: row.messageId,
           role: row.role,
@@ -364,6 +399,26 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
       // (stamped now) re-bump it — so the fold duration ends at the last real
       // byte while thread ordering still ends at the sweep. Replay order is
       // sequence-based; occurredAt is display data.
+      // ru-code (phase 4, M3): flip every mark the dead process left `pending`.
+      //
+      // Same reasoning as the rest of this sweep — nothing outlives the previous
+      // process, so a queued mid-turn message certainly did not. It goes through
+      // the ordinary engine dispatch like every other writer here, so the
+      // projection, the WS push and the balloon all converge with no read-side
+      // special case. `not-delivered` is the honest mark: the message was never
+      // handed to a model and now never can be.
+      for (const messageId of state.pendingDeliveryMessageIds) {
+        const commandUuid = yield* deps.randomUuid;
+        yield* deps.dispatch({
+          type: "thread.message.delivery-state",
+          commandId: CommandId.make(commandUuid),
+          threadId,
+          messageId,
+          deliveryState: "not-delivered",
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+      }
+
       for (const finalize of planQwenBootSweepStreamingFinalizes(
         state.streamingAssistantMessages,
       )) {

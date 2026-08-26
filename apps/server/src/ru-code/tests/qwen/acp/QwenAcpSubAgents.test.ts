@@ -9,12 +9,17 @@ import { parseSessionUpdateEvent } from "../../../../provider/acp/AcpRuntimeMode
 import {
   appendQwenAgentText,
   classifyQwenToolCallFrame,
+  formatQwenAgentPlanLine,
+  formatQwenAgentToolLine,
+  formatQwenAgentWaitingLine,
   isQwenSubAgentFrame,
   openQwenAgentWindow,
   readQwenFrameMeta,
   takeQwenAgentLine,
   withQwenAgentAttribution,
   QWEN_AGENT_LINE_LIMIT,
+  QWEN_AGENT_LINE_QUANTUM,
+  QWEN_AGENT_TOOL_NAME,
   QWEN_SUBAGENT_TASK_TYPE,
 } from "../../../qwen/acp/QwenAcpSubAgents.ts";
 
@@ -49,7 +54,12 @@ const agentStartFrame = notification({
   content: [],
   locations: [],
   kind: "other",
-  rawInput: { description: "Review the diff", prompt: "look at it", subagent_type: SUBAGENT_TYPE },
+  rawInput: {
+    description: "Review the diff",
+    prompt: "look at it",
+    subagent_type: SUBAGENT_TYPE,
+    run_in_background: false,
+  },
   _meta: { toolName: "agent" },
 });
 
@@ -149,6 +159,79 @@ describe("isQwenSubAgentFrame", () => {
   });
 });
 
+describe("classifyQwenToolCallFrame — the spawn-args background rule (FIX ROUND 2)", () => {
+  // qwen decides background-ness from these args and says so:
+  // `agent.ts:2506-2513` calls `agent.ts:2526-2536` "the source of truth for the
+  // background-classification rule" and names the two UI classifiers that
+  // replicate it from tool-call args. This table IS that rule
+  // (`toolClassification.ts:39-51`), one row per axis it reads.
+  const openingFrame = (rawInput: Record<string, unknown>) =>
+    notification({
+      sessionUpdate: "tool_call",
+      toolCallId: AGENT_CALL,
+      status: "in_progress",
+      title: "Agent: Review the diff",
+      content: [],
+      locations: [],
+      kind: "other",
+      rawInput,
+      _meta: { toolName: "agent" },
+    });
+  const base = { description: "Review the diff", prompt: "p", subagent_type: SUBAGENT_TYPE };
+
+  it("the ARGLESS preparing frame opens no row — it cannot say what it is yet", () => {
+    // tool-call-preparation-tracker.ts:41 sends `args: {}`, and :43 marks it
+    // `phase: 'preparing'`. Every `undefined` in the rule is satisfied, so the
+    // rule's own answer is "background" — which is the correct answer for a
+    // frame that carries neither a description nor a subagent type and may be
+    // discarded before it ever runs.
+    expect(classify(openingFrame({}))).toEqual({
+      _tag: "AgentSpawnPending",
+      toolUseId: AGENT_CALL,
+    });
+  });
+
+  it("run_in_background:false is the ONLY thing that makes a spawn foreground", () => {
+    expect(classify(openingFrame({ ...base, run_in_background: false }))._tag).toBe(
+      "AgentRootStarted",
+    );
+  });
+
+  it("the flag OMITTED is a background launch (qwen's documented default)", () => {
+    // agent.ts:2528-2535: with no explicit flag, no `working_dir` and no `name`,
+    // a non-fork top-level spawn defaults to background. This is the case a YOLO
+    // wire delivers with real args and no preparing frame — the residual zombie
+    // if the rule were not applied here.
+    expect(classify(openingFrame(base))._tag).toBe("AgentSpawnPending");
+  });
+
+  it("run_in_background:true is background even with everything else set", () => {
+    expect(
+      classify(openingFrame({ ...base, run_in_background: true, name: "teammate" }))._tag,
+    ).toBe("AgentSpawnPending");
+  });
+
+  it("working_dir forces foreground — a caller-owned worktree cannot detach", () => {
+    // agent.ts:1150-1151 and :2537-2549 both reject the combination.
+    expect(classify(openingFrame({ ...base, working_dir: "/w" }))._tag).toBe("AgentRootStarted");
+  });
+
+  it("a named teammate is foreground", () => {
+    expect(classify(openingFrame({ ...base, name: "teammate" }))._tag).toBe("AgentRootStarted");
+  });
+
+  it("a fork without the explicit flag stays foreground — args cannot decide it", () => {
+    // qwen's own carve-out and its reason, verbatim at toolClassification.ts:44-48;
+    // agent.ts:926 confirms an interactive session needs the explicit flag.
+    expect(classify(openingFrame({ ...base, subagent_type: "fork" }))._tag).toBe(
+      "AgentRootStarted",
+    );
+    expect(classify(openingFrame({ ...base, subagent_type: "FORK" }))._tag).toBe(
+      "AgentRootStarted",
+    );
+  });
+});
+
 describe("classifyQwenToolCallFrame", () => {
   it("the agent tool's opening frame becomes a root start, titled from rawInput", () => {
     expect(classify(agentStartFrame)).toEqual({
@@ -166,6 +249,11 @@ describe("classifyQwenToolCallFrame", () => {
       taskId: AGENT_CALL,
       toolUseId: AGENT_CALL,
       status: "completed",
+      // ru-code (agentic-flow wave, FIX ROUND 3 ADDENDUM): qwen sent an
+      // `AgentResultDisplay`, so this terminal is the record of a run that
+      // really happened. The caller settles such a row unconditionally; only a
+      // terminal with NO result display AND no row we opened is silence (F-A5).
+      hasResultDisplay: true,
       summary: "Found 2 issues.",
       title: "Review the diff",
       role: SUBAGENT_TYPE,
@@ -238,7 +326,12 @@ describe("classifyQwenToolCallFrame", () => {
       content: [],
       locations: [],
       kind: "other",
-      rawInput: { description: "nested", prompt: "p", subagent_type: "planner" },
+      rawInput: {
+        description: "nested",
+        prompt: "p",
+        subagent_type: "planner",
+        run_in_background: false,
+      },
       _meta: { toolName: "agent", parentToolCallId: AGENT_CALL, subagentType: SUBAGENT_TYPE },
     });
     expect(classify(nested)._tag).toBe("AgentInnerTool");
@@ -360,5 +453,233 @@ describe("streaming tail: word-anchored window", () => {
       expect(anchors[i]!).toBeGreaterThanOrEqual(anchors[i - 1]!);
     }
     expect(anchors.some((a) => a > 0)).toBe(true); // the 280-char stream must re-anchor at least once.
+  });
+});
+
+// ─── BASELINE LOCK (agents wave, phase 1) ────────────────────────────────────
+// The exported seams below carry today's behaviour but had no unit spec: the
+// panel's whole live-line vocabulary (inner-tool result, parked child plan,
+// wordless waiting glyph), the window constructor's description fallback chain,
+// and the quantum/flush contract the settle paths depend on. Each block names
+// the seam it guards so a mutation there lands here rather than in a red e2e.
+
+describe("inner tool outcome — result text only on the TERMINAL frame", () => {
+  // qwen's opening frame carries the call's ARGUMENT in the same `detail` field
+  // the terminal frame carries the RESULT in (proven above: the port's parser
+  // fills `detail: "/a.ts"` from the opening frame's content). Presenting the
+  // argument as a result would put "▸ read_file · /a.ts" on the row as if the
+  // read had already returned. Guards QwenAcpSubAgents.ts:159-161.
+  const innerOpeningWithArgument = notification({
+    sessionUpdate: "tool_call",
+    toolCallId: INNER_CALL,
+    status: "pending",
+    title: "ReadFile: /a.ts",
+    content: [{ type: "content", content: { type: "text", text: "/a.ts" } }],
+    locations: [{ path: "/a.ts", line: null }],
+    kind: "read",
+    rawInput: { absolute_path: "/a.ts" },
+    _meta: { toolName: "read_file", parentToolCallId: AGENT_CALL, subagentType: SUBAGENT_TYPE },
+  });
+
+  const innerTerminal = (status: "completed" | "failed") =>
+    notification({
+      sessionUpdate: "tool_call_update",
+      toolCallId: INNER_CALL,
+      status,
+      content: [{ type: "content", content: { type: "text", text: "42 lines" } }],
+      _meta: { toolName: "read_file", parentToolCallId: AGENT_CALL, subagentType: SUBAGENT_TYPE },
+    });
+
+  it("an opening frame's ARGUMENT is never surfaced as the call's result", () => {
+    const frame = classify(innerOpeningWithArgument);
+    if (frame._tag !== "AgentInnerTool") throw new Error("wrong tag");
+    expect(frame.settled).toBe(false);
+    expect(frame.detail).toBeUndefined();
+  });
+
+  it("a completed inner frame carries the tool's own result text", () => {
+    const frame = classify(innerTerminal("completed"));
+    if (frame._tag !== "AgentInnerTool") throw new Error("wrong tag");
+    expect(frame.settled).toBe(true);
+    expect(frame.detail).toBe("42 lines");
+  });
+
+  it("a FAILED inner frame settles too — its error text is the row's line", () => {
+    const frame = classify(innerTerminal("failed"));
+    if (frame._tag !== "AgentInnerTool") throw new Error("wrong tag");
+    expect(frame.settled).toBe(true);
+    expect(frame.detail).toBe("42 lines");
+  });
+});
+
+describe("openQwenAgentWindow", () => {
+  const started = (over?: { title?: string; role?: string }) =>
+    openQwenAgentWindow({
+      _tag: "AgentRootStarted",
+      taskId: AGENT_CALL,
+      toolUseId: AGENT_CALL,
+      ...(over?.title !== undefined ? { title: over.title } : {}),
+      ...(over?.role !== undefined ? { role: over.role } : {}),
+    });
+
+  it("starts empty at the text/quantum/anchor origin", () => {
+    const window = started({ title: "Review the diff", role: SUBAGENT_TYPE });
+    expect(window).toEqual({
+      taskId: AGENT_CALL,
+      description: "Review the diff",
+      role: SUBAGENT_TYPE,
+      toolUseId: AGENT_CALL,
+      title: "Review the diff",
+      text: "",
+      emitted: "",
+      pending: 0,
+      anchor: 0,
+    });
+  });
+
+  // `description` is a REQUIRED non-empty contract field on TaskProgressPayload:
+  // an empty one makes every heartbeat of the run fail the schema. Guards the
+  // fallback chain at QwenAcpSubAgents.ts:363.
+  it("falls back title → role → the tool name so `description` is never empty", () => {
+    expect(started({ title: "Review the diff", role: SUBAGENT_TYPE }).description).toBe(
+      "Review the diff",
+    );
+    expect(started({ role: SUBAGENT_TYPE }).description).toBe(SUBAGENT_TYPE);
+    expect(started().description).toBe(QWEN_AGENT_TOOL_NAME);
+    expect(started().role).toBeUndefined();
+  });
+});
+
+describe("the line quantum and its flush", () => {
+  const openWindow = () =>
+    openQwenAgentWindow({
+      _tag: "AgentRootStarted",
+      taskId: AGENT_CALL,
+      toolUseId: AGENT_CALL,
+      title: "d",
+    });
+
+  it("publishes nothing until the quantum is reached, then the whole tail", () => {
+    const window = openWindow();
+    const below = "x".repeat(QWEN_AGENT_LINE_QUANTUM - 1);
+    expect(appendQwenAgentText(window, below)).toBeUndefined();
+    expect(window.text).toBe(below);
+    expect(window.pending).toBe(below.length);
+    // One more character crosses it — and the line is everything accumulated.
+    expect(appendQwenAgentText(window, "y")).toBe(`${below}y`);
+    expect(window.pending).toBe(0);
+  });
+
+  // The settle paths (AgentRootSettled at QwenAdapter.ts:2303 and the teardown
+  // twin settleOpenSubAgentAsStopped at :934) flush below the quantum so a run
+  // that ends mid-sentence keeps the child's last words.
+  it("takeQwenAgentLine publishes a sub-quantum tail the quantum withheld", () => {
+    const window = openWindow();
+    expect(appendQwenAgentText(window, "half a thought")).toBeUndefined();
+    expect(takeQwenAgentLine(window)).toBe("half a thought");
+  });
+
+  // THE idempotency seam: the crash/Stop settle calls takeQwenAgentLine
+  // unconditionally, and a real AgentRootSettled may have flushed already. A
+  // second call with nothing new must publish NOTHING, or every interrupted run
+  // duplicates its last line on the row.
+  it("takeQwenAgentLine is idempotent — nothing new means nothing published", () => {
+    const window = openWindow();
+    appendQwenAgentText(window, "half a thought");
+    expect(takeQwenAgentLine(window)).toBe("half a thought");
+    expect(takeQwenAgentLine(window)).toBeUndefined();
+    expect(takeQwenAgentLine(window)).toBeUndefined();
+  });
+
+  it("an empty window publishes nothing at all", () => {
+    expect(takeQwenAgentLine(openWindow())).toBeUndefined();
+  });
+});
+
+describe("formatQwenAgentPlanLine — the CHILD's todo list, parked on the row", () => {
+  it("reads progress count plus the step actually in flight", () => {
+    expect(
+      formatQwenAgentPlanLine({
+        plan: [
+          { step: "read the files", status: "completed" },
+          { step: "write the review", status: "inProgress" },
+          { step: "post it", status: "pending" },
+        ],
+      }),
+    ).toBe("▤ 1/3 · write the review");
+  });
+
+  // The pending step is deliberately NOT the last entry here: a fixture where it
+  // is cannot tell the pending lookup from the trailing-step fallback below.
+  it("with nothing in flight it names the next PENDING step", () => {
+    expect(
+      formatQwenAgentPlanLine({
+        plan: [
+          { step: "read the files", status: "completed" },
+          { step: "post it", status: "pending" },
+          { step: "clean up", status: "completed" },
+        ],
+      }),
+    ).toBe("▤ 2/3 · post it");
+  });
+
+  it("with everything done it names the last step, not undefined", () => {
+    expect(
+      formatQwenAgentPlanLine({
+        plan: [
+          { step: "read the files", status: "completed" },
+          { step: "post it", status: "completed" },
+        ],
+      }),
+    ).toBe("▤ 2/2 · post it");
+  });
+
+  it("an empty plan produces no line (nothing to say)", () => {
+    expect(formatQwenAgentPlanLine({ plan: [] })).toBeUndefined();
+  });
+
+  it("is bounded by the fold's SUMMARY_CHAR_LIMIT, with a leading ellipsis", () => {
+    const line = formatQwenAgentPlanLine({
+      plan: [{ step: "s".repeat(400), status: "inProgress" }],
+    });
+    expect(line!.length).toBe(QWEN_AGENT_LINE_LIMIT);
+    expect(line!.startsWith("…")).toBe(true);
+  });
+});
+
+describe("formatQwenAgentToolLine — an inner tool's result on the one channel that renders it", () => {
+  it("joins the tool name and its result", () => {
+    expect(formatQwenAgentToolLine("read_file", "42 lines")).toBe("▸ read_file · 42 lines");
+  });
+
+  it("a name with no result is the cheap heartbeat line", () => {
+    expect(formatQwenAgentToolLine("read_file", undefined)).toBe("▸ read_file");
+  });
+
+  it("a result with no name still reaches the row", () => {
+    expect(formatQwenAgentToolLine(undefined, "42 lines")).toBe("▸ 42 lines");
+  });
+
+  it("neither means no line — never a bare glyph", () => {
+    expect(formatQwenAgentToolLine(undefined, undefined)).toBeUndefined();
+    expect(formatQwenAgentToolLine("   ", "  ")).toBeUndefined();
+  });
+
+  it("collapses whitespace so a chunk boundary cannot render as a blank line", () => {
+    expect(formatQwenAgentToolLine("read_file", "42\n\n  lines")).toBe("▸ read_file · 42 lines");
+  });
+});
+
+// Deliberately WORDLESS: the server emits no English literal here, so the line
+// owes no dictionary pair and reads identically in both locales. A word added
+// to this line is a localization-contract break, which is what this pins.
+describe("formatQwenAgentWaitingLine", () => {
+  it("is a pause glyph plus the tool name — no prose", () => {
+    expect(formatQwenAgentWaitingLine("write_file")).toBe("⏸ write_file");
+  });
+
+  it("is the bare glyph when the tool is unnamed", () => {
+    expect(formatQwenAgentWaitingLine(undefined)).toBe("⏸");
+    expect(formatQwenAgentWaitingLine("   ")).toBe("⏸");
   });
 });

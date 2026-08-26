@@ -33,6 +33,7 @@
     "@smart-tools/qwen-cli-extended-chat": "catalog:",
     "@smart-tools/qwen-cli-mcp-manager": "catalog:",
     "@smart-tools/qwen-cli-skill-manager": "catalog:",
+    "@smart-tools/t3-code-pixso-mcp-assistant": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

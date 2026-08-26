@@ -21,7 +21,7 @@
     "typecheck": "vp run -r --concurrency-limit 2 typecheck",
     "tc": "vp run -r --concurrency-limit 2 typecheck",
     "lint": "vp lint --report-unused-disable-directives",
-    "test": "vp run -r test",
+    "test": "pnpm --filter @ru-code/e2e e2e:clean-up && vp run -r test && pnpm --filter @ru-code/e2e e2e:clean-up",
     "test:resource-monitor": "cargo test --locked --manifest-path native/resource-monitor/Cargo.toml",
     "localize:extract": "node ru-code/localization/build/extractDictionary.mjs",
     "localize:catalog": "node ru-code/localization/build/genCatalog.mjs",
@@ -49,11 +49,11 @@
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
     "build:preflight": "vp run --filter t3 build:preflight",
     "prepare-release": "node scripts/prepare-release.ts",
-    "test:e2e": "pnpm --filter @ru-code/e2e test:e2e",
     "build:installer": "node scripts/build-installer.ts",
-    "test:integration:auto-update": "node ru-code/e2e/features/auto-update/liveCycle.ts",
-    "test:e2e:auto-update-cycle": "node ru-code/e2e/features/auto-update/browserRun.ts",
-    "test:e2e:pins": "pnpm --filter @ru-code/e2e test:pins"
+    "test:e2e:core": "pnpm --filter @ru-code/e2e test:core",
+    "test:e2e:performance": "pnpm --filter @ru-code/e2e test:performance",
+    "test:e2e:pixso": "pnpm --filter @ru-code/e2e test:pixso",
+    "test:e2e:all": "pnpm --filter @ru-code/e2e test:core && pnpm --filter @ru-code/e2e test:contracts && pnpm --filter @ru-code/e2e test:warm && node ru-code/e2e/features/auto-update/browserRun.ts && node ru-code/e2e/features/auto-update/liveCycle.ts && pnpm --filter @ru-code/e2e test:outdated"
   },
   "devDependencies": {
     "@babel/plugin-transform-react-jsx": "7.28.6",

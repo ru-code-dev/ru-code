@@ -23,7 +23,7 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react"; // ru-code: ReactNode for the row stop slot
 
 import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
@@ -31,6 +31,7 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
 import { Lp } from "@ru-code/localization"; // ru-code: bilingual plural seam
 import { AgentRowExpander } from "~/ru-code/agents/AgentRowExpander"; // ru-code: per-agent expander seam
+import { AgentStopButton, canStopAgent } from "~/ru-code/agents/AgentStopButton"; // ru-code: row stop slot
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -140,7 +141,10 @@ function agentActivityText(agent: RuntimeSubagent): string | null {
 }
 
 /** Flat, non-interactive agent status line. No unfold. */
-function AgentRow({ agent }: { agent: RuntimeSubagent }) {
+// ru-code (stop-button placement): optional `stop` slot — the zone passes the
+// per-row stop control in; it renders inline after the type badge on the title
+// line. Upstream callers that pass nothing render byte-identically.
+function AgentRow({ agent, stop }: { agent: RuntimeSubagent; stop?: ReactNode }) {
   const visuals = STATUS_VISUALS[agent.status];
   const activity = agentActivityText(agent);
   const modelLabel = formatSubagentModelLabel(agent.model, agent.effort);
@@ -167,6 +171,7 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
             {role}
           </span>
         ) : null}
+        {stop /* ru-code: inline stop slot, after the badge */}
       </span>
       <span className="col-start-3 row-start-1 min-w-14 text-right font-mono text-[.7rem] text-muted-foreground/80">
         <span className="inline-flex items-center gap-1">
@@ -198,8 +203,27 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
  * height invariant and its flat look survive; the zone component adds the
  * unfold that renders the fold's otherwise-dead fields.
  */
-function ExpandableAgentRow({ agent }: { agent: RuntimeSubagent }) {
-  return <AgentRowExpander agent={agent} row={<AgentRow agent={agent} />} />;
+function ExpandableAgentRow({
+  agent,
+  environmentId = null,
+  threadId = null,
+}: {
+  agent: RuntimeSubagent;
+  // ru-code (agentic-flow wave): the ids the per-row background stop dispatches
+  // with. Optional so the prop shape stays additive; every one of the FOUR call
+  // sites in this file (:419 phase members, :506 unphased members, :515 the
+  // bare-workflow row, :645 direct spawns) passes them, so the button's
+  // reachability is a property of the PANEL, not of which list a row landed in.
+  environmentId?: EnvironmentId | null;
+  threadId?: ThreadId | null;
+}) {
+  // ru-code (stop-button placement): compose the stop INTO the row's title line
+  // (AgentRow's `stop` slot); the expander no longer renders it.
+  const stop =
+    canStopAgent(agent) && threadId !== null ? (
+      <AgentStopButton agent={agent} environmentId={environmentId} threadId={threadId} />
+    ) : null;
+  return <AgentRowExpander agent={agent} row={<AgentRow agent={agent} stop={stop} />} />;
 }
 
 function workflowIsLive(group: AgentPanelWorkflowGroup): boolean {
@@ -329,9 +353,17 @@ function WorkflowScriptView({
 function PhaseSection({
   phase,
   defaultOpen = false,
+  // ru-code (agentic-flow wave, FIX ROUND 2): the two ids the per-row background
+  // stop needs (AgentStopButton.tsx:42 returns null without them). Threaded
+  // through the phase tree so the button's reachability is a property of the
+  // PANEL, not of which list a row happened to land in.
+  environmentId = null,
+  threadId = null,
 }: {
   phase: AgentPanelWorkflowGroup["phases"][number];
   defaultOpen?: boolean;
+  environmentId?: EnvironmentId | null; // ru-code (agentic-flow wave, FIX ROUND 2)
+  threadId?: ThreadId | null; // ru-code (agentic-flow wave, FIX ROUND 2)
 }) {
   const [open, setOpen] = useState(defaultOpen || phase.state === "running");
   const previousState = useRef(phase.state);
@@ -382,7 +414,14 @@ function PhaseSection({
       </button>
       {/* ru-code: expander seam */}
       {open
-        ? phase.members.map((member) => <ExpandableAgentRow key={member.id} agent={member} />)
+        ? phase.members.map((member) => (
+            <ExpandableAgentRow
+              key={member.id}
+              agent={member}
+              environmentId={environmentId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+              threadId={threadId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+            />
+          ))
         : null}
     </div>
   );
@@ -453,14 +492,30 @@ function ExpandedWorkflowSection({
         />
       ) : null}
       {group.phases.map((phase) => (
-        <PhaseSection key={phase.index} phase={phase} defaultOpen={!workflowIsLive(group)} />
+        <PhaseSection
+          key={phase.index}
+          phase={phase}
+          defaultOpen={!workflowIsLive(group)}
+          environmentId={environmentId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+          threadId={threadId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+        />
       ))}
       {/* ru-code: expander seam */}
       {group.unphasedMembers.map((member) => (
-        <ExpandableAgentRow key={member.id} agent={member} />
+        <ExpandableAgentRow
+          key={member.id}
+          agent={member}
+          environmentId={environmentId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+          threadId={threadId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+        />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
-        <ExpandableAgentRow agent={group.workflow} /> /* ru-code: expander seam */
+        /* ru-code: expander seam */
+        <ExpandableAgentRow
+          agent={group.workflow}
+          environmentId={environmentId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+          threadId={threadId} /* ru-code (agentic-flow wave, FIX ROUND 2) */
+        />
       ) : null}
     </section>
   );
@@ -576,8 +631,22 @@ export function AgentsPanel({
                 Direct spawns
               </div>
               {/* ru-code: expander seam */}
+              {/* ru-code (agentic-flow wave): the ids the per-row background
+                  stop needs.
+                  ru-code (agentic-flow wave, FIX ROUND 2): they now reach the
+                  workflow tree too. The old note here ("a background agent is
+                  never a workflow member") is true of every producer we ship —
+                  `kindFromPayload` makes a row a workflow member only on
+                  `parentAgentId` or a `:wf:` id, and nothing on the background
+                  poll path sets either — but it is a fact about today's
+                  producers, not an invariant of the panel. */}
               {model.directAgents.map((agent) => (
-                <ExpandableAgentRow key={agent.id} agent={agent} />
+                <ExpandableAgentRow
+                  key={agent.id}
+                  agent={agent}
+                  environmentId={environmentId}
+                  threadId={threadId}
+                />
               ))}
             </section>
           ) : null}

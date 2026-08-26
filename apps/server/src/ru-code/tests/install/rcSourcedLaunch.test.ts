@@ -421,7 +421,11 @@ describe("sourced launcher on Git Bash (composition only — paths are MSYS-conv
         `[ -f "/c/Users/dev/.ru-code/bin/env.sh" ] && . "/c/Users/dev/.ru-code/bin/env.sh"`,
       );
       expect(r.stdout).toContain(`'/c/Program Files/nodejs/node' --experimental-sqlite`);
-      expect(r.stdout).toContain(`'/c/Users/dev/.ru-code/bin/cli.js'`);
+      // The cli.js path is a NODE argument → baked in node form (to_node_path), NOT MSYS form:
+      // node.exe misreads "/c/..." as "<drive>:\c\..." when Git Bash path translation is off.
+      // Shell-consumed lines (rc guard, node binary, PATH prepend) stay MSYS-form above/below.
+      expect(r.stdout).toContain(`'C:/Users/dev/.ru-code/bin/cli.js'`);
+      expect(r.stdout).not.toContain(`'/c/Users/dev/.ru-code/bin/cli.js'`);
       expect(r.stdout).toContain(`export PATH="/c/Users/dev/.ru-code/bin:$PATH"`);
     } finally {
       sb.cleanup();

@@ -1,8 +1,6 @@
 .artifacts/
 test-results/
 
-# ru-code
-# Pin-runner debris — regenerated on every pins run (evidence *.json stays tracked).
-.artifacts-pins/test-output/
-.artifacts-pins/results.json
-.artifacts-pins/.last-run.json
+# ru-code: per-suite run artifacts (evidence, playwright results, fake-CLI logs) —
+# disposable, regenerated on every run; nothing under these dirs is tracked.
+.artifacts-*

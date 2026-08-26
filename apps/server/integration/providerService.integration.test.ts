@@ -45,7 +45,7 @@ const codexInstanceId = ProviderInstanceId.make("codex");
 const makeWorkspaceDirectory = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
-  const cwd = yield* fs.makeTempDirectory();
+  const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "pin-provider-service-integration-" });
   yield* fs.writeFileString(pathService.join(cwd, "README.md"), "v1\n");
   return cwd;
 }).pipe(Effect.provide(NodeServices.layer));

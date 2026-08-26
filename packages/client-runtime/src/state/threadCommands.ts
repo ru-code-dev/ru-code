@@ -6,7 +6,8 @@ import {
   type ArchiveThreadInput,
   type CreateThreadInput,
   type DeleteThreadInput,
-  type CompactThreadContextInput, // ru-code
+  type CompactThreadContextInput,
+  type StopThreadTaskInput, // ru-code
   type InterruptThreadTurnInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
@@ -26,7 +27,8 @@ import {
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
   archiveThread,
-  compactThreadContext, // ru-code
+  compactThreadContext,
+  stopThreadTask, // ru-code
   createThread,
   deleteThread,
   interruptThreadTurn,
@@ -53,6 +55,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 export type {
   ArchiveThreadInput,
   CompactThreadContextInput, // ru-code
+  StopThreadTaskInput, // ru-code (agentic-flow wave)
   CreateThreadInput,
   DeleteThreadInput,
   InterruptThreadTurnInput,
@@ -192,6 +195,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     compactContext: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:compact-context",
       execute: (input: CompactThreadContextInput) => compactThreadContext(input),
+      scheduler,
+      concurrency,
+    }),
+    // ru-code (agentic-flow wave): per-row background-agent stop.
+    stopTask: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:stop-task",
+      execute: (input: StopThreadTaskInput) => stopThreadTask(input),
       scheduler,
       concurrency,
     }),

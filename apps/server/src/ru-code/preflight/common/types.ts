@@ -14,7 +14,13 @@ export type CliCompatibility = "v1" | "v2";
 
 export type ProbeResult =
   | { readonly ok: true; readonly version: string }
-  | { readonly ok: false; readonly reason: "missing" | "broken" | "timeout" };
+  | {
+      readonly ok: false;
+      readonly reason: "missing" | "broken" | "timeout";
+      /** Combined stdout+stderr the failed probe produced, capped at 2000 chars. Diagnostic only —
+       * never parsed; written to STDERR (never stdout) by the caller. */
+      readonly outputTail?: string;
+    };
 
 export type CheckResult =
   | { readonly ok: true; readonly line: string }

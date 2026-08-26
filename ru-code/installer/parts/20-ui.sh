@@ -190,6 +190,8 @@ title_for() {
     git)          printf '%s' "Требуется Git" ;;
     cli-install)  printf '%s' "CLI-движок не установлен" ;;
     cli-update)   printf '%s' "Обновите CLI-движок" ;;
+    cli-broken)   printf '%s' "CLI-движок не запускается" ;;
+    cli-slow)     printf '%s' "CLI-движок работает слишком медленно" ;;
     stop-failed)  printf '%s' "Не удалось остановить приложение" ;;
     path)         printf '%s' "PATH не настроен" ;;
     starter)      printf '%s' "Стартовый проект не создан" ;;
@@ -214,6 +216,8 @@ body_for() {
     git)          printf '%s' "Установите: https://git-scm.com/downloads" ;;
     cli-install)  printf '%s' "$CLI_INSTALL_HINT" ;;
     cli-update)   printf '%s' "Нужна версия ≥ $CLI_MIN_VERSION. $CLI_UPDATE_HINT" ;;
+    cli-broken)   printf '%s' "Проверка версии завершилась с ошибкой. $CLI_INSTALL_HINT" ;;
+    cli-slow)     printf '%s' "Проверка версии не уложилась в отведённое время — оборудование может работать нестабильно." ;;
     stop-failed)  printf '%s' "Закройте работающее приложение и повторите установку." ;;
     path)         printf '%s' "Добавьте вручную: export PATH=\"$BIN_DIR:\$PATH\"" ;;
     starter)      printf '%s' "Приложение создаст его при первом запуске." ;;

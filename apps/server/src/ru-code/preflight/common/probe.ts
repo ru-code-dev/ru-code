@@ -12,6 +12,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { extractVersion } from "./version.ts";
 import type { ProbeResult } from "./types.ts";
 
+// ru-code: diagnostic-only cap — the raw output never feeds version parsing (extractVersion is
+// unaffected), it just rides along on a FAILED probe so the installer can log what the CLI
+// actually printed instead of a bare "broken". Omitted (not "") when there was no output at all,
+// so a silent failure's ProbeResult shape is unchanged.
+const OUTPUT_TAIL_MAX = 2_000;
+const outputTailOf = (combined: string): string | undefined =>
+  combined.length === 0 ? undefined : combined.slice(0, OUTPUT_TAIL_MAX);
+
 export const probeVersion = (
   command: string,
   args: ReadonlyArray<string>,
@@ -74,16 +82,26 @@ export const probeVersionByExit = (
       c.stderr?.on("data", (chunk: Buffer) => {
         stderr += chunk.toString("utf8");
       });
+      // ru-code: exactOptionalPropertyTypes — `outputTail` is OMITTED when there is no output,
+      // never assigned `undefined` (spread-when-present).
+      const tailOf = (): { readonly outputTail: string } | Record<never, never> => {
+        const tail = outputTailOf(`${stdout}${stderr}`);
+        return tail === undefined ? {} : { outputTail: tail };
+      };
       c.on("error", (error: NodeJS.ErrnoException) => {
-        finish({ ok: false, reason: error.code === "ENOENT" ? "missing" : "broken" });
+        finish({
+          ok: false,
+          reason: error.code === "ENOENT" ? "missing" : "broken",
+          ...tailOf(),
+        });
       });
       c.on("exit", (status: number | null) => {
         if (status !== 0) {
-          finish({ ok: false, reason: "broken" });
+          finish({ ok: false, reason: "broken", ...tailOf() });
           return;
         }
         const version = extractVersion(`${stdout}${stderr}`);
-        finish(version ? { ok: true, version } : { ok: false, reason: "broken" });
+        finish(version ? { ok: true, version } : { ok: false, reason: "broken", ...tailOf() });
       });
     } catch {
       finish({ ok: false, reason: "broken" });

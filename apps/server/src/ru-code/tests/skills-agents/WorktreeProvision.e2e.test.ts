@@ -69,8 +69,8 @@ const configLayer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const stateDir = yield* fs.makeTempDirectory();
-    const home = yield* fs.makeTempDirectory();
+    const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ru-worktree-provision-state-" });
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "ru-worktree-provision-home-" });
     return { stateDir, cliConfigDir: path.join(home, ".qwen") } as never;
   }),
 );
@@ -99,8 +99,10 @@ it.effect(
       const commands = yield* CommandCatalog;
       const gate = yield* SessionRespawnGate;
 
-      const projectRoot = yield* fs.makeTempDirectory();
-      const worktree = yield* fs.makeTempDirectory();
+      const projectRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "ru-worktree-provision-project-",
+      });
+      const worktree = yield* fs.makeTempDirectoryScoped({ prefix: "ru-worktree-provision-tree-" });
       const PID = "11111111-1111-1111-1111-111111111111";
       yield* repo.upsert(mkProject(PID, projectRoot));
       const thread = "thread-1";

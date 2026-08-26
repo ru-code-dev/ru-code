@@ -79,6 +79,23 @@ import {
   WARM_SLOT_WARMUP_TIMEOUT_MS,
 } from "@ru-code/qwen/constants";
 import { settleAndDelete, type AcpPendingKind } from "@ru-code/qwen/acp/QwenAcpPendingRequests";
+// ru-code (mid-turn wave, phase 3): the per-session queue + the shared wire contract.
+import {
+  claimDispatchSlot,
+  isDispatchSlotHeld,
+  releaseDispatchSlot,
+} from "./midturn/dispatchClaim.ts";
+import { makeMidTurnQueue, type MidTurnQueueItem } from "./midturn/MidTurnQueue.ts";
+import { type MidTurnDeliveryState } from "@t3tools/contracts"; // ru-code (mid-turn wave, P3c)
+import {
+  MidTurnDrainRequest,
+  midTurnDrainItem,
+  QWEN_MID_TURN_DRAIN_METHOD,
+  QWEN_TODO_STOP_GUARD_CLAIM_METHOD,
+  TodoStopGuardClaimRequest,
+  todoStopGuardClaimResponse,
+  type MidTurnDrainResponse,
+} from "./midturn/midTurnDrainContract.ts";
 import {
   type ProviderAdapterError,
   ProviderAdapterProcessError,
@@ -97,17 +114,54 @@ import { type AcpSessionRuntimeShape } from "./acp/QwenAcpSessionRuntime.ts";
 // header for why nothing in provider/acp/ needs to change.
 import {
   appendQwenAgentText,
+  classifyQwenAgentSpawnPermission,
   classifyQwenToolCallFrame,
+  readQwenResumedBackgroundTaskId,
   formatQwenAgentPlanLine,
   formatQwenAgentToolLine,
   formatQwenAgentWaitingLine,
+  isQwenSettledAgentFrame,
   isQwenSubAgentFrame,
+  isQwenV2WireFrame,
   openQwenAgentWindow,
+  stripQwenLaunchProse,
+  QWEN_MAX_OPEN_AGENT_WINDOWS,
+  QWEN_MAX_SETTLED_AGENT_IDS,
   QWEN_SUBAGENT_TASK_TYPE,
+  formatQwenGoalLine,
+  readQwenGoalCondition,
+  readQwenOrphanAgent,
+  reconcileQwenAgentToolCalls,
+  resolveQwenAgentWindow,
+  type QwenAgentFrame,
   type QwenAgentWindow,
   takeQwenAgentLine,
   withQwenAgentAttribution,
 } from "./acp/QwenAcpSubAgents.ts";
+// ru-code (agentic-flow wave): the background-agent surface. The contract
+// module carries the wire bytes (method names, decoders, the launch-line id
+// EXTRACTOR); the poll module carries the snapshot→delta translation.
+import {
+  isQwenTaskTerminal,
+  type QwenAgentTaskLifecycleStatus,
+  type QwenBackgroundNotificationFrame,
+  QWEN_BACKGROUND_END_TURN_METHOD,
+  QWEN_SESSION_TASKS_METHOD,
+  QWEN_SESSION_TASK_CANCEL_METHOD,
+  qwenBackgroundCompletionLine,
+  qwenTaskCancelParams,
+  readQwenBackgroundNotification,
+  readQwenSessionTasks,
+  readQwenTaskCancelOutcome,
+} from "./background/backgroundTaskContract.ts";
+import {
+  diffQwenBackgroundTasks,
+  isQwenPollPermanentFailure,
+  QWEN_BACKGROUND_POLL_INTERVAL_MS,
+  QWEN_BACKGROUND_POLL_MAX_STRIKES,
+  trackQwenBackgroundTask,
+  type QwenTrackedTask,
+} from "./background/backgroundPoll.ts";
 // ru-code (warm engine): the warm CLI process pool — take at startSession,
 // refill after a successful bind (acp-process-pool §2.3). Extracted to the
 // external package (generic over the slot runtime; host supplies the spawn).
@@ -257,6 +311,12 @@ export interface QwenAdapterLiveOptions {
    */
   readonly cancelGraceMs?: number;
   /**
+   * ru-code (agentic-flow wave): background-task poll cadence. Production omits
+   * it ⇒ QWEN_BACKGROUND_POLL_INTERVAL_MS. Tests pass a tiny value so a
+   * multi-tick assertion settles without a real wait.
+   */
+  readonly backgroundPollIntervalMs?: number;
+  /**
    * ru-code: boot prewarm override. Default: only the first/default qwen
    * instance prewarms the generic pool at adapter start; other instances pool
    * lazily on first use. Tests pin either behavior explicitly.
@@ -301,6 +361,40 @@ interface QwenSessionContext {
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   activeTurnId: TurnId | undefined;
+  /**
+   * ru-code (phase 4b, O1): a SYNCHRONOUS per-thread dispatch claim.
+   *
+   * `activeTurnId` is set ~40 lines and several yields into `sendTurnInternal`,
+   * and `finalize` clears it before the forked turn-end flush has issued its own
+   * prompt. That gap is real: nothing serialises the two producers of
+   * `session/prompt` for one thread — the reactor FORKS every send
+   * (ProviderCommandReactor.ts:1327-1329), the flush is forked onto the layer
+   * scope and is not in that lane at all, and `sendTurnInternal` is not under
+   * `withThreadLock`. Two dispatches could therefore both see "no turn running"
+   * and both call `acp.prompt`, and the second aborts the first
+   * (Session.ts:2285) — the wave's central invariant failing from the inside.
+   *
+   * Claimed and released with NO yield in between, so the check-and-set is
+   * atomic with respect to other fibers, and claimed at the FIRST synchronous
+   * opportunity rather than where `activeTurnId` lands.
+   *
+   * ru-code (phase 4c): an OWNER TOKEN, not a boolean. A boolean made three
+   * defects possible at once, all found by round-3 attack:
+   *
+   *   - the release was guarded on `activeCtx`, which is assigned ~200 lines
+   *     after the claim. A `sendTurn` that claimed and then hit the
+   *     `hiddenCompressActive` fail-fast returned in between, so the release was
+   *     SKIPPED on a live session and the thread bricked: every later send was
+   *     queued with a pending clock, no turn could start, nothing was ever
+   *     delivered. Now the release runs off the CLAIMED HANDLE, so it does not
+   *     depend on how far the turn got.
+   *   - the loser branch could FALL THROUGH (an unqueueable send) and then
+   *     release a claim it never took. Ownership makes that impossible, and the
+   *     loser branch now always returns as well.
+   *   - `compactContext` is a THIRD prompt producer and took no claim at all.
+   *     It now takes the same one.
+   */
+  turnDispatchOwner: string | undefined;
   // ru-code: turn identity per assistant item. The ACP runtime enqueues the
   // trailing AssistantItemCompleted AFTER session/prompt resolves, and the
   // notification fiber may consume it after the finalizer already cleared
@@ -363,19 +457,129 @@ interface QwenSessionContext {
   // and stashes the outcome here instead; compactContext reads it after the
   // prompt settles to emit the timeline row / fail the call.
   hiddenCompressActive?: boolean;
-  // ru-code (sub-agents): the ONE root-agent window that can be open at a time
-  // (qwen awaits each `agent` tool call before starting the next —
-  // qwen-code Session.ts:353-359/:881). While it is set, every UNSTAMPED frame
-  // belongs to that child: text goes to the row's live line instead of the chat,
-  // the child's plan is parked on the row instead of replacing the parent's, and
-  // a permission prompt marks the row as waiting. Opened by AgentRootStarted,
-  // cleared by AgentRootSettled; a session that dies mid-window is swept by the
-  // client's sessionLive:false pass (subagentRuntime.ts:650-661).
-  subAgentWindow?: QwenAgentWindow | undefined;
+  // ru-code (agents wave): EVERY open root-agent window, keyed by its task id
+  // (= the `agent` call's own toolCallId, which qwen passes to each child frame
+  // as `_meta.parentToolCallId`). Was a single slot, because qwen 0.13.1's ACP
+  // path awaited each `agent` call before starting the next. That stopped being
+  // true: 0.21.1 batches consecutive `agent` calls and runs them through a
+  // bounded pool (qwen Session.ts:6621-6627 + runBounded :6742-6796, default cap
+  // 10), so several roots are open at once and their frames interleave.
+  subAgentWindows: Map<string, QwenAgentWindow>;
+  // ru-code (agents wave): the SERIAL window — the most recently opened one still
+  // open. This is NOT a legacy leftover: two frame kinds reach the wire with no
+  // subagent tag even at 0.21.1, so for them it is the PRIMARY (only) signal —
+  //   · a child's PLAN  — PlanEmitter.emitPlan takes no subagentMeta and passes
+  //     none (qwen PlanEmitter.ts:27-39), reached via the TodoWrite branch of
+  //     ToolCallEmitter.emitResult (tool-call-emitter.ts:166-180);
+  //   · a child's PERMISSION REQUEST — SubAgentTracker.ts:223-226 builds
+  //     `_meta: { toolName, ...interactionMetaFields }` and nothing else.
+  // It is additionally the fallback for untagged TEXT, which is what a legacy
+  // 0.13.1 engine sends for everything (its SubAgentTracker had no way to tag
+  // message chunks at all). Tag first, serial window second — never the reverse.
+  serialAgentTaskId?: string | undefined;
+  // ru-code (agents wave): has THIS session seen proof the engine is 0.21.1?
+  // Once it has, an UNTAGGED chunk is the PARENT's and belongs in the chat, even
+  // while a child is running — because a 0.21.1 engine tags all child text. On a
+  // 0.13.1 engine (which could tag no message chunk at all) an untagged chunk
+  // inside an open window is the child's, exactly as before the wave.
+  //
+  // ru-code (phase 4, f-1): the proof used to be "we saw a tagged TEXT chunk",
+  // which only arrives once a child has spoken. Six Session.ts sites emit
+  // untagged non-empty chunks directly (mapping §3a) and `SE:7893` fires from
+  // inside the concurrent agent batch — so a notice about agent B could land on
+  // agent A's live line in the window before A said anything. `_meta.provenance`
+  // is stamped on every 0.21.1 tool-call frame including the agent spawn's own
+  // and does not exist at 0.13.1, so latching on it moves the proof earlier than
+  // any text can arrive.
+  //
+  // This is the whole reason attribution needs no configuration: the engine's
+  // capability is DEMONSTRATED on the wire rather than declared. The alternative
+  // fact available to us, ServerConfig.cliCompatibility, is a shipped-node file
+  // probe — a proxy for the install layout, not for the wire — and it reads
+  // `"v1"` on every Windows install by construction (branding NODE_BIN_PATHS
+  // win32 is ""), so trusting it would put every Windows user of a real 0.21.1
+  // CLI on the legacy path. A stamp we have actually SEEN cannot be wrong.
+  sawV2AgentWire?: boolean;
+  // ru-code (agents wave): inner tool-call ids already published live, per agent.
+  // Deliberately NOT a field on QwenAgentWindow: that type is the row's LIVE-LINE
+  // state (text/emitted/pending/anchor), and reconciliation bookkeeping is a
+  // different concern with a different lifetime.
+  seenAgentToolUseIds: Map<string, Set<string>>;
+  // ru-code (phase 4, B-1): task ids whose run has already reached a terminal
+  // row this session. Adoption consults it so a tagged straggler arriving after
+  // the settle is DROPPED rather than re-opening a completed run.
+  //
+  // ru-code (phase 4b, R-6): BOUNDED, unlike its sibling. The claim that it
+  // could be unbounded "for the same reason as seenAgentToolUseIds" was wrong:
+  // that map's entries are DELETED at settle/evict/teardown, so it is bounded by
+  // live agents, while this set only ever grows. Worse, the eviction path adds
+  // to it, which turned QWEN_MAX_OPEN_AGENT_WINDOWS — a memory bound whose whole
+  // stated purpose is that "a runaway stream must not let one thread accumulate
+  // windows forever" — into a converter from one unbounded structure to another.
+  // Insertion-ordered FIFO, trimmed by rememberSettledAgent.
+  settledAgentTaskIds: Set<string>;
   hiddenCompressOutcome?:
     | { readonly kind: "success"; readonly preTokens: number; readonly postTokens: number }
     | { readonly kind: "error"; readonly message: string }
     | undefined;
+  // ─── ru-code (agentic-flow wave): background agents ───────────────────────
+  //
+  // A background launch produces NO live wire traffic at all — the tracker is
+  // wired to an emitter the background runtime never uses and is torn down
+  // within the tick anyway (research §2.1). Polling
+  // `qwen/status/session/tasks` is the only signal that exists (§2.3), so the
+  // row's whole lifetime after `task.started` is driven from here.
+  /** Every background task this session is watching, keyed by its qwen task id. */
+  readonly backgroundTasks: Map<string, QwenTrackedTask>;
+  /** Row metadata from the launch frame — the poll snapshot has no title. */
+  readonly backgroundMeta: Map<string, { readonly title?: string; readonly role?: string }>;
+  /**
+   * The third per-session fiber, beside the notification and child-exit ones.
+   * DEMAND-DRIVEN (RULINGS 2026-08-27): forked on the first launch detection or
+   * post-load probe, interrupted the moment every task is terminal, never
+   * running on a session that has no background work.
+   */
+  backgroundPollFiber: Fiber.Fiber<void, never> | undefined;
+  /** Consecutive poll failures; see QWEN_BACKGROUND_POLL_MAX_STRIKES. */
+  backgroundPollStrikes: number;
+  /** True once the poll has been struck out permanently for this session. */
+  backgroundPollDisabled: boolean;
+  /**
+   * The OPEN background assistant item, if one is streaming. qwen's
+   * self-initiated pseudo-turn (research §3.3) speaks with no `session/prompt`
+   * of ours enclosing it, so its content gets an item of its own instead of
+   * joining whatever assistant segment happens to be open — which is precisely
+   * the byte-level splice the P1 repro pins.
+   */
+  backgroundItem: { readonly itemId: string; readonly taskId: string } | undefined;
+  /** Monotonic suffix for background item ids within this session. */
+  backgroundItemIndex: number;
+  /**
+   * Task ids whose completion has already been said in the chat, by EITHER
+   * route. The push (qwen's pseudo-turn) and the pull (the poll's terminal
+   * fallback) both consult it, so a completion can never be announced twice.
+   */
+  readonly backgroundChatDelivered: Set<string>;
+  /**
+   * ru-code (agentic-flow wave, P3c): terminals the POLL has seen but the PUSH
+   * has not announced, with how many ticks they have waited.
+   *
+   * The push can genuinely be lost — qwen's notification queue caps at 20 and
+   * evicts silently (research §16.6), and any `session/prompt` landing
+   * mid-delivery discards the queue outright (§10.4) — so the pull has to be
+   * able to say it instead. The grace exists because qwen DEFERS the pseudo-turn
+   * while our prompt is in flight (§3.2): announcing immediately would beat a
+   * delivery that was merely waiting its turn, and the model's own narration is
+   * strictly richer than the line we can rebuild.
+   */
+  readonly backgroundPendingChat: Map<
+    string,
+    {
+      readonly label: string;
+      readonly status: QwenAgentTaskLifecycleStatus;
+      ticks: number;
+    }
+  >;
 }
 
 // ru-code: live view of the session fields the item-turn attribution reads
@@ -663,6 +867,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const nativeEventLogger = options?.nativeEventLogger ?? undefined;
 
     const sessions = new Map<ThreadId, QwenSessionContext>();
+    // ru-code (mid-turn wave, phase 3): the per-session mid-turn message queue.
+    // Adapter-scoped and keyed by threadId, exactly like `sessions` — one queue
+    // per live session, gone when the session is. In-memory is AUTHORITATIVE:
+    // the drain responder is a synchronous splice over this map and never
+    // touches storage (see MidTurnQueue's header for why that is structural
+    // rather than a convention).
+    const midTurnQueue = makeMidTurnQueue();
     // ru-code (warm engine): per-thread teardown latches. An instant-settle
     // stop resolves client-side immediately and parks the dying process's
     // cancel→grace→SIGKILL in a background fiber; the latch marks that window.
@@ -721,6 +932,8 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         ...(options?.environment ? { environment: options.environment } : {}),
         childProcessSpawner,
         cliJs: resolved.bin,
+        // ru-code: resolved profile dir — the registry's HOME row on every warm-slot spawn.
+        homeDir: resolved.dir,
         // Neutral spawn cwd — pre-session the process is project-
         // agnostic; the thread's cwd arrives via bindAndStart.
         cwd: serverConfig.stateDir,
@@ -872,6 +1085,36 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
 
+    // ru-code (mid-turn wave, P3c): announce a delivery-state transition for
+    // every queued message that carries an orchestration id. Ingestion turns
+    // these into `thread.message.delivery-state` commands, which re-emit
+    // `thread.message-sent` and land the mark on the row.
+    //
+    // Emitted at the moment of ACTUAL HANDOFF, never at send time: a mark that
+    // flipped on acceptance would show a delivered tick for text the model
+    // never saw.
+    const emitDeliveryMarks = (
+      threadId: ThreadId,
+      items: ReadonlyArray<MidTurnQueueItem>,
+      deliveryState: MidTurnDeliveryState,
+    ) =>
+      Effect.forEach(
+        items.filter((item) => item.messageId !== undefined),
+        (item) =>
+          makeEventStamp().pipe(
+            Effect.flatMap((stamp) =>
+              offerRuntimeEvent({
+                type: "message.delivery-state",
+                ...stamp,
+                provider: PROVIDER,
+                threadId,
+                payload: { messageId: item.messageId!, deliveryState },
+              }),
+            ),
+          ),
+        { discard: true },
+      );
+
     /**
      * ru-code (sub-agents): the agent row's LIVE LINE. `task.progress.summary`
      * is the only channel the panel row prefers (subagentRuntime.ts:519-527 is
@@ -913,6 +1156,182 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
       );
 
     /**
+     * ru-code (phase 4b, R-6): remember a terminal, keeping the set bounded.
+     * A straggler is a frame still in flight when its agent settled, so it
+     * arrives within a few frames of the terminal — never generations later.
+     * Holding ten times the concurrency cap means a tombstone survives ten full
+     * generations of concurrent agents before it is retired, which no in-flight
+     * frame can outlive, while the set can never grow without limit.
+     */
+    const rememberSettledAgent = (ctx: QwenSessionContext, taskId: string): void => {
+      ctx.settledAgentTaskIds.delete(taskId);
+      ctx.settledAgentTaskIds.add(taskId);
+      while (ctx.settledAgentTaskIds.size > QWEN_MAX_SETTLED_AGENT_IDS) {
+        const oldest = ctx.settledAgentTaskIds.values().next().value;
+        if (oldest === undefined) break;
+        ctx.settledAgentTaskIds.delete(oldest);
+      }
+    };
+
+    /**
+     * ru-code (agentic-flow wave, FIX ROUND 3): OPEN A ROOT AGENT ROW.
+     *
+     * Extracted verbatim from the `AgentRootStarted` arm because the DEFAULT
+     * runtime mode reaches the same event from a different frame — the spawn's
+     * `session/request_permission` (F-A3) — and two copies of the window cap,
+     * the eviction terminal and the `task.started` payload is exactly how the
+     * two wires drift apart.
+     *
+     * Opens the attribution window (from here until this call settles, every
+     * UNSTAMPED frame is this child's — see the window proof in
+     * QwenAcpSubAgents) and the task row.
+     */
+    const openAgentRootWindow = (
+      ctx: QwenSessionContext,
+      frame: Extract<QwenAgentFrame, { readonly _tag: "AgentRootStarted" }>,
+    ) =>
+      Effect.gen(function* () {
+        // ru-code (agents wave): the cap is a memory bound against a runaway
+        // stream, not a policy — it mirrors qwen's own default tool-concurrency
+        // cap, so a well-behaved engine never reaches it. Oldest is evicted
+        // rather than refusing the new one: the new agent is the one actively
+        // producing frames.
+        if (ctx.subAgentWindows.size >= QWEN_MAX_OPEN_AGENT_WINDOWS) {
+          const oldest = ctx.subAgentWindows.keys().next().value;
+          const evicted = oldest === undefined ? undefined : ctx.subAgentWindows.get(oldest);
+          if (oldest !== undefined && evicted !== undefined) {
+            // ru-code (phase 4, f-12): an evicted window used to vanish with no
+            // terminal, leaving its row "Working" until teardown. Evicting is
+            // already a last resort; doing it silently made the row lie. Close
+            // it like any other non-completion.
+            ctx.subAgentWindows.delete(oldest);
+            ctx.seenAgentToolUseIds.delete(oldest);
+            rememberSettledAgent(ctx, oldest);
+            if (ctx.serialAgentTaskId === oldest) {
+              ctx.serialAgentTaskId = [...ctx.subAgentWindows.keys()].at(-1);
+            }
+            yield* offerRuntimeEvent({
+              type: "task.completed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+              payload: {
+                taskId: RuntimeTaskId.make(evicted.taskId),
+                status: "stopped",
+                taskType: QWEN_SUBAGENT_TASK_TYPE,
+                toolUseId: evicted.toolUseId,
+                ...(evicted.title ? { title: evicted.title } : {}),
+                ...(evicted.role ? { role: evicted.role } : {}),
+                detail: "The agent stopped: too many agents at once.",
+              },
+            });
+          }
+        }
+        ctx.subAgentWindows.set(frame.taskId, openQwenAgentWindow(frame));
+        ctx.serialAgentTaskId = frame.taskId;
+        // Open the task BEFORE its content: the chat's spawn-CTA row anchors on
+        // the first task row of the batch, and the fold only accepts
+        // tool.progress heartbeats for a task it already knows.
+        yield* offerRuntimeEvent({
+          type: "task.started",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(frame.taskId),
+            taskType: QWEN_SUBAGENT_TASK_TYPE,
+            toolUseId: frame.toolUseId,
+            // `title` is what the panel row shows; `description` is what
+            // ingestion turns into the row detail the CTA anchors on.
+            ...(frame.title ? { title: frame.title, description: frame.title } : {}),
+            ...(frame.role ? { role: frame.role } : {}),
+          },
+        });
+      });
+
+    /**
+     * ru-code (agentic-flow wave, FIX ROUND 3, F-A3): THE GATED SPAWN, OPENED.
+     *
+     * Called at the moment we hand qwen an APPROVAL, which is this wire's exact
+     * analogue of `emitStart`: `Session.ts:7861-7871` emits the args frame only
+     * when the call is about to execute, and on the gated wire the call is about
+     * to execute precisely when the user allowed it. A declined spawn therefore
+     * opens nothing, and a row is never shown for a run that never happened.
+     *
+     * The latch is set HERE, with the window, so the invariant R-4b states — a
+     * window is never open while the latch is unset — holds by construction on
+     * this wire too. Without it the next untagged PARENT notice would be read as
+     * the child's narration. This frame proves a 0.21.1 engine on its own:
+     * v0.13.1 built the same `RequestPermissionRequest.toolCall` struct with no
+     * `_meta` key at all (`git show v0.13.1:…/Session.ts`, `:782-793`).
+     *
+     * DEFENCE IN DEPTH, measured, not assumed: on the real wire the PREPARING
+     * frame precedes this RPC and already carries `_meta.provenance`, which the
+     * tool-call path latches (`isQwenV2WireFrame`), so deleting this line leaves
+     * the suite green (mutation M32, recorded GREEN in fix3-report.md). It earns
+     * its place only for a stream that reveals a complete function call with no
+     * preparation at all — which we cannot prove qwen never produces, and which
+     * would otherwise open a window with the latch unset.
+     */
+    const openGatedAgentSpawn = (
+      ctx: QwenSessionContext | undefined,
+      params: EffectAcpSchema.RequestPermissionRequest,
+    ) =>
+      Effect.gen(function* () {
+        if (ctx === undefined) return;
+        const spawn = classifyQwenAgentSpawnPermission(params);
+        if (spawn._tag !== "AgentRootStarted") return;
+        // A retried approval for a call we already opened (or already settled)
+        // must not open a second row for the same agent.
+        if (ctx.subAgentWindows.has(spawn.taskId) || ctx.settledAgentTaskIds.has(spawn.taskId)) {
+          return;
+        }
+        ctx.sawV2AgentWire = true;
+        yield* openAgentRootWindow(ctx, spawn);
+      });
+
+    /**
+     * ru-code (agents wave): adopt an agent we only know from a frame's tag —
+     * its root `tool_call` was missed or dropped. Opens the window AND emits the
+     * `task.started` the fold needs, because a heartbeat for a task it never saw
+     * open is ignored by design (subagentRuntime's no-phantom-agent rule). Titled
+     * from the subagent type: the description lives on the root frame we never
+     * got, and inventing one would put a fake name on a real run.
+     */
+    const adoptOrphanAgent = (
+      ctx: QwenSessionContext,
+      orphan: { readonly taskId: string; readonly role?: string },
+    ) =>
+      Effect.gen(function* () {
+        if (ctx.subAgentWindows.size >= QWEN_MAX_OPEN_AGENT_WINDOWS) return undefined;
+        const window = openQwenAgentWindow({
+          _tag: "AgentRootStarted",
+          taskId: orphan.taskId,
+          toolUseId: orphan.taskId,
+          ...(orphan.role ? { role: orphan.role } : {}),
+        });
+        ctx.subAgentWindows.set(orphan.taskId, window);
+        ctx.serialAgentTaskId = orphan.taskId;
+        yield* offerRuntimeEvent({
+          type: "task.started",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(orphan.taskId),
+            taskType: QWEN_SUBAGENT_TASK_TYPE,
+            toolUseId: orphan.taskId,
+            description: window.description,
+            ...(orphan.role ? { role: orphan.role, title: orphan.role } : {}),
+          },
+        });
+        return window;
+      });
+
+    /**
      * ru-code (P2 zombie settle): the ONLY `task.completed` a sub-agent open
      * at teardown ever gets when its own `AgentRootSettled` loses the race —
      * teardown interrupts the notification fiber, so that frame (if qwen was
@@ -928,29 +1347,551 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
      */
     const settleOpenSubAgentAsStopped = (ctx: QwenSessionContext) =>
       Effect.gen(function* () {
-        const window = ctx.subAgentWindow;
-        if (window === undefined) return;
-        ctx.subAgentWindow = undefined;
-        const tail = takeQwenAgentLine(window);
-        if (tail !== undefined) {
-          yield* offerAgentProgress(ctx, window, { summary: tail });
+        // ru-code (agents wave): drain EVERY open window, not one. With concurrent
+        // roots a teardown can find several, and a row left behind is a permanent
+        // "Working" zombie. Snapshot-then-clear before any yield keeps the
+        // original idempotency guard: a real AgentRootSettled that already closed
+        // a window finds it gone, and a second teardown call is a no-op.
+        const windows = [...ctx.subAgentWindows.values()];
+        if (windows.length === 0) return;
+        ctx.subAgentWindows.clear();
+        ctx.serialAgentTaskId = undefined;
+        // ru-code (phase 4, f-12): the per-agent seen-sets were previously freed
+        // only on the settle path, so a teardown or an eviction leaked them for
+        // the life of the session context.
+        for (const window of windows) {
+          ctx.seenAgentToolUseIds.delete(window.taskId);
+          rememberSettledAgent(ctx, window.taskId);
+        }
+        // ru-code (agents wave): a crash is NOT the user's Stop. Both used to
+        // settle with "Stopped by the user." — telling someone whose CLI was
+        // OOM-killed that they stopped it themselves. `childExitObserved` is set
+        // by the child-exit watcher (:2518-2546) before it schedules teardown, so
+        // it is the one fact that separates the two at this point.
+        const crashed = ctx.childExitObserved === true;
+        for (const window of windows) {
+          const tail = takeQwenAgentLine(window);
+          if (tail !== undefined) {
+            yield* offerAgentProgress(ctx, window, { summary: tail });
+          }
+          yield* offerRuntimeEvent({
+            type: "task.completed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+            payload: {
+              taskId: RuntimeTaskId.make(window.taskId),
+              status: "stopped",
+              taskType: QWEN_SUBAGENT_TASK_TYPE,
+              toolUseId: window.toolUseId,
+              ...(window.title ? { title: window.title } : {}),
+              ...(window.role ? { role: window.role } : {}),
+              detail: crashed ? "The agent stopped: the CLI exited." : "Stopped by the user.",
+            },
+          });
+        }
+      });
+
+    // ─── ru-code (agentic-flow wave): the background-task poll ───────────────
+    //
+    // Everything below exists because a background agent is INVISIBLE on the
+    // wire: `SubAgentTracker` is wired to an emitter the background runtime
+    // never emits on, and it is unsubscribed within the same tick anyway
+    // (research §2.1/§2.2). Polling `qwen/status/session/tasks` is the only
+    // raw-ACP-reachable signal that exists (§2.3).
+
+    const backgroundPollIntervalMs =
+      options?.backgroundPollIntervalMs ?? QWEN_BACKGROUND_POLL_INTERVAL_MS;
+
+    /** The ACP session id the poll addresses — minted at start, kept on the cursor. */
+    const acpSessionIdOf = (ctx: QwenSessionContext): string | undefined =>
+      parseQwenResume(ctx.session.resumeCursor)?.sessionId;
+
+    const readAcpErrorCode = (error: unknown): number | undefined =>
+      typeof error === "object" && error !== null && "code" in error
+        ? typeof (error as { code: unknown }).code === "number"
+          ? (error as { code: number }).code
+          : undefined
+        : undefined;
+
+    const readAcpErrorMessage = (error: unknown): string | undefined =>
+      typeof error === "object" && error !== null && "errorMessage" in error
+        ? typeof (error as { errorMessage: unknown }).errorMessage === "string"
+          ? (error as { errorMessage: string }).errorMessage
+          : undefined
+        : undefined;
+
+    /**
+     * One poll delta → the panel row. `task.progress` is the channel the fold
+     * reads a live line from (subagentRuntime.ts:569-608) and `task.completed`
+     * the one it settles on (:638-678) — the SAME two the foreground agent path
+     * already uses, so a background row is an ordinary agent row fed from a
+     * different source rather than a second kind of row.
+     */
+    const offerBackgroundDelta = (
+      ctx: QwenSessionContext,
+      delta: ReturnType<typeof diffQwenBackgroundTasks>["deltas"][number],
+    ) =>
+      Effect.gen(function* () {
+        // ru-code (agentic-flow wave, FIX ROUND 1): THE TITLE CHAIN. A `task.*` payload with no
+        // `title` names its card after its own id — `asString(payload.title) ??
+        // asString(payload.detail) ?? id` (subagentRuntime.ts:362) — and this
+        // wave strips `detail` from the launch by ruling (D-P3a-4), so the id is
+        // the only thing left to fall back to. `backgroundMeta` is in-memory and
+        // per-session, but the SNAPSHOT always carries a name of its own:
+        // `serializeAgentTask` writes `label` and `description` unconditionally
+        // (tasksSnapshot.ts:47-49), so qwen's own words close the chain even
+        // when nothing was remembered locally.
+        const meta = ctx.backgroundMeta.get(delta.taskId);
+        if (delta._tag === "BackgroundProgress") {
+          yield* offerRuntimeEvent({
+            type: "task.progress",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            payload: {
+              taskId: RuntimeTaskId.make(delta.taskId),
+              description: delta.description,
+              taskType: QWEN_SUBAGENT_TASK_TYPE,
+              isBackgrounded: true,
+              status: delta.status,
+              title: meta?.title ?? delta.description,
+              ...(delta.role ? { role: delta.role } : {}),
+              ...(delta.toolUseId ? { toolUseId: delta.toolUseId } : {}),
+              ...(delta.summary ? { summary: delta.summary } : {}),
+              ...(delta.lastToolName ? { lastToolName: delta.lastToolName } : {}),
+              ...(delta.typedUsage ? { typedUsage: delta.typedUsage } : {}),
+              ...(delta.error ? { error: delta.error } : {}),
+            },
+          });
+          return;
         }
         yield* offerRuntimeEvent({
           type: "task.completed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
           payload: {
-            taskId: RuntimeTaskId.make(window.taskId),
-            status: "stopped",
+            taskId: RuntimeTaskId.make(delta.taskId),
+            status: delta.status,
             taskType: QWEN_SUBAGENT_TASK_TYPE,
-            toolUseId: window.toolUseId,
-            ...(window.title ? { title: window.title } : {}),
-            ...(window.role ? { role: window.role } : {}),
-            detail: "Stopped by the user.",
+            isBackgrounded: true,
+            ...(delta.toolUseId ? { toolUseId: delta.toolUseId } : {}),
+            title: meta?.title ?? delta.title ?? delta.label,
+            ...(delta.role ? { role: delta.role } : {}),
+            ...(delta.summary ? { summary: delta.summary } : {}),
+            ...(delta.detail ? { detail: delta.detail } : {}),
+            ...(delta.typedUsage ? { typedUsage: delta.typedUsage } : {}),
           },
         });
+      });
+
+    /**
+     * ru-code (agentic-flow wave, P3c): PULL IS THE GUARANTEE.
+     *
+     * Says a completion the push never announced, using qwen's OWN sentence
+     * (`background-tasks.ts:1556-1564`) rebuilt from the snapshot. Three gates,
+     * each load-bearing:
+     *
+     *   · ONE FULL TICK of grace — qwen defers the pseudo-turn while a prompt is
+     *     in flight (§3.2), and the model's own narration is strictly richer
+     *     than the line we can rebuild, so the push gets first refusal;
+     *   · the session must be IDLE by our own bookkeeping (no active turn, no
+     *     dispatch claim). While a prompt is in flight qwen CANNOT be delivering,
+     *     so waiting costs nothing and speaking would be premature;
+     *   · `backgroundChatDelivered` — the same set the push writes, so a
+     *     completion can never be announced twice whichever route wins.
+     */
+    const announcePendingBackgroundChat = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        if (ctx.backgroundPendingChat.size === 0) return;
+        const busy = ctx.activeTurnId !== undefined || isDispatchSlotHeld(ctx);
+        // Iterating the live Map is safe here BECAUSE every `delete` below
+        // targets the entry currently being visited, which a Map iterator
+        // tolerates; a snapshot copy would only hide that fact.
+        for (const [taskId, pending] of ctx.backgroundPendingChat) {
+          if (ctx.backgroundChatDelivered.has(taskId)) {
+            ctx.backgroundPendingChat.delete(taskId);
+            continue;
+          }
+          if (busy) continue;
+          if (pending.ticks < 1) {
+            pending.ticks += 1;
+            continue;
+          }
+          ctx.backgroundPendingChat.delete(taskId);
+          yield* offerBackgroundChat(
+            ctx,
+            { taskId },
+            qwenBackgroundCompletionLine({ label: pending.label, status: pending.status }),
+          );
+          // Closed immediately: there is no `_qwencode/end_turn` coming for a
+          // completion qwen never delivered, so nothing else would ever close it
+          // and its text would sit latent in ingestion's buffer.
+          yield* bankBackgroundItem(ctx);
+        }
+      });
+
+    /**
+     * ONE poll. Returns true when the fiber should stop — either everything is
+     * terminal (the demand-driven rule) or the channel has been struck out.
+     *
+     * A poll NEVER fabricates a terminal. A snapshot that omits a task we are
+     * watching means the 32-cap evicted an already-notified terminal
+     * (background-tasks.ts:1661-1676), never that a live task died; and a
+     * struck-out poll leaves the rows exactly as they were, for the teardown
+     * path to settle honestly.
+     */
+    const backgroundPollTick = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const sessionId = acpSessionIdOf(ctx);
+        if (sessionId === undefined) return true;
+        const answer = yield* Effect.exit(
+          ctx.acp.request(QWEN_SESSION_TASKS_METHOD, { sessionId }),
+        );
+        if (Exit.isFailure(answer)) {
+          const error = answer.cause.reasons.find(Cause.isFailReason)?.error;
+          const permanent = isQwenPollPermanentFailure({
+            errorCode: readAcpErrorCode(error),
+            errorMessage: readAcpErrorMessage(error),
+          });
+          ctx.backgroundPollStrikes += 1;
+          if (permanent || ctx.backgroundPollStrikes >= QWEN_BACKGROUND_POLL_MAX_STRIKES) {
+            ctx.backgroundPollDisabled = true;
+            yield* Effect.logDebug("[cli-adapter] background task poll struck out", {
+              threadId: ctx.threadId,
+              permanent,
+              strikes: ctx.backgroundPollStrikes,
+            });
+            return true;
+          }
+          return false;
+        }
+        const rows = readQwenSessionTasks(answer.value);
+        if (rows === undefined) {
+          // A well-formed transport answer that is not the documented envelope
+          // counts as a failure of the CHANNEL, not of one task.
+          ctx.backgroundPollStrikes += 1;
+          return ctx.backgroundPollStrikes >= QWEN_BACKGROUND_POLL_MAX_STRIKES;
+        }
+        ctx.backgroundPollStrikes = 0;
+        const diff = diffQwenBackgroundTasks(ctx.backgroundTasks, rows);
+        ctx.backgroundTasks.clear();
+        for (const [taskId, tracked] of diff.next) ctx.backgroundTasks.set(taskId, tracked);
+        for (const delta of diff.deltas) {
+          yield* offerBackgroundDelta(ctx, delta);
+          if (delta._tag !== "BackgroundTerminal") continue;
+          // ru-code (agentic-flow wave, P3c): PULL IS THE GUARANTEE. Remember the
+          // terminal so the fallback can say it if the push never does.
+          if (!ctx.backgroundChatDelivered.has(delta.taskId)) {
+            ctx.backgroundPendingChat.set(delta.taskId, {
+              label: delta.label,
+              status: delta.lifecycleStatus,
+              ticks: 0,
+            });
+          }
+          ctx.backgroundMeta.delete(delta.taskId);
+        }
+        yield* announcePendingBackgroundChat(ctx);
+        // The fiber may not stop while a completion is still owed to the chat.
+        return diff.allTerminal && ctx.backgroundPendingChat.size === 0;
+      });
+
+    /**
+     * Fork the poll if it is not already running. Called from the launch
+     * classifier and from the post-load probe — never on a timer, never for a
+     * session with no background work (RULINGS 2026-08-27).
+     */
+    const ensureBackgroundPoll = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        if (ctx.backgroundPollDisabled) return;
+        if (ctx.backgroundPollFiber !== undefined) return;
+        const fiber = yield* Effect.gen(function* () {
+          while (true) {
+            if (ctx.stopped) return;
+            const done = yield* backgroundPollTick(ctx);
+            if (done) break;
+            yield* Effect.sleep(backgroundPollIntervalMs);
+          }
+          ctx.backgroundPollFiber = undefined;
+          // ru-code: session-scoped like its two sibling fibers — a poll owned
+          // by the calling fiber would die the moment a short-lived caller
+          // (recovery, a reactor fiber) completed, silently freezing the rows.
+        }).pipe(Effect.forkIn(ctx.scope));
+        ctx.backgroundPollFiber = fiber;
+      });
+
+    /**
+     * ru-code (agentic-flow wave, live-issues T3): RE-ARM A ROW QWEN BROUGHT BACK.
+     *
+     * qwen's lifecycle allows `'completed' → 'running'` (research §16.1,
+     * `restartCompletedAgent`, background-tasks.ts:724-748), reached only by
+     * `send_message` to that task. Our side had three independent reasons to
+     * miss it: the diff skips a settled task, the poll fiber had already
+     * stopped on `allTerminal`, and the row's remembered title was deleted. The
+     * row then read "Completed" for an agent that was genuinely working, and —
+     * being settled — offered no stop control either.
+     *
+     * Re-seeding the tracked entry is EXACTLY what `trackQwenBackgroundTask`
+     * does for a fresh launch, so the poll's own diff does the rest through the
+     * one code path it already has; the title comes back from the snapshot's
+     * unconditional `description` (tasksSnapshot.ts:47-49) via
+     * `offerBackgroundDelta`'s existing fallback, so no meta re-adoption is
+     * owed. The dedupe key is cleared because the NEXT terminal is a second,
+     * genuinely new completion — suppressing it would leave the resumed run's
+     * ending unsaid.
+     *
+     * Only a task THIS thread already tracks is re-armed: the poll ignores
+     * snapshot rows it never saw launched (backgroundPoll.ts's
+     * `if (previous === undefined) continue`), and adopting a stranger here
+     * would put work on the panel this thread never started.
+     */
+    const readoptResumedBackgroundTask = (ctx: QwenSessionContext, taskId: string | undefined) =>
+      Effect.gen(function* () {
+        if (taskId === undefined) return;
+        const tracked = ctx.backgroundTasks.get(taskId);
+        if (tracked === undefined || !tracked.settled) return;
+        ctx.backgroundTasks.set(taskId, { status: "running", progressKey: "", settled: false });
+        ctx.backgroundChatDelivered.delete(taskId);
+        yield* ensureBackgroundPoll(ctx);
+      });
+
+    const stopBackgroundPoll = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const fiber = ctx.backgroundPollFiber;
+        if (fiber === undefined) return;
+        ctx.backgroundPollFiber = undefined;
+        yield* Fiber.interrupt(fiber);
+      });
+
+    /**
+     * ru-code (P3e): every background row still open at teardown settles as
+     * STOPPED — the card stays, only its liveness goes (RULINGS 2026-08-27).
+     *
+     * Background tasks genuinely die with the CLI: their registry is in-memory
+     * with no disk load in its constructor (research §14.3), so a row left
+     * "Working" after the child is gone is a lie the user cannot clear. The
+     * detail distinguishes a crash from the user's own Stop for the same reason
+     * `settleOpenSubAgentAsStopped` does.
+     */
+    const settleBackgroundTasksAsStopped = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const open = [...ctx.backgroundTasks.entries()].filter(([, tracked]) => !tracked.settled);
+        if (open.length === 0) return;
+        for (const [taskId] of open) {
+          ctx.backgroundTasks.set(taskId, {
+            status: "cancelled",
+            progressKey: "",
+            settled: true,
+          });
+        }
+        const crashed = ctx.childExitObserved === true;
+        for (const [taskId] of open) {
+          const meta = ctx.backgroundMeta.get(taskId);
+          ctx.backgroundMeta.delete(taskId);
+          yield* offerRuntimeEvent({
+            type: "task.completed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            payload: {
+              taskId: RuntimeTaskId.make(taskId),
+              status: "stopped",
+              taskType: QWEN_SUBAGENT_TASK_TYPE,
+              isBackgrounded: true,
+              ...(meta?.title ? { title: meta.title } : {}),
+              ...(meta?.role ? { role: meta.role } : {}),
+              detail: crashed ? "The agent stopped: the CLI exited." : "Stopped by the user.",
+            },
+          });
+        }
+      });
+
+    // ─── ru-code (agentic-flow wave, P3c): the background chat message ───────
+    //
+    // qwen's completion pseudo-turn is a genuine turn on ITS side and no turn at
+    // all on ours (research §3.3/§4). Claude's adapter answers the same shape by
+    // minting a synthetic turn (ClaudeAdapter.ts:2890-2929); we do not need to,
+    // and deliberately do not:
+    //
+    //   · a message's identity is `assistant:<itemId>` when it carries no turn
+    //     (ProviderRuntimeIngestion.ts:1101-1102 + :265-268), and the SAME id is
+    //     what its `item.completed` finalises on (:1867-1868). So a dedicated,
+    //     turnless item is already a message of its own — no second turn needed;
+    //   · minting a turn while a REAL one is running would put two live turns on
+    //     one thread, and the projection's `latestTurn` has exactly one slot.
+    //     Claude never faces this (it mints only when no turn exists); qwen does,
+    //     because our prompt can land while the pseudo-turn is mid-flight (§11.5).
+    //
+    // Closing the item is not cosmetic: an unclosed one leaves its text in
+    // ingestion's buffer, invisible to every client reading persisted state,
+    // until something unrelated flushes it (bg-probe/run7.log §1.3).
+
+    const backgroundItemId = (ctx: QwenSessionContext, taskId: string): string => {
+      ctx.backgroundItemIndex += 1;
+      return `background:${ctx.threadId}:${taskId}:${ctx.backgroundItemIndex}`;
+    };
+
+    /** Close the open background message, if any. Idempotent. */
+    const bankBackgroundItem = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const open = ctx.backgroundItem;
+        if (open === undefined) return;
+        ctx.backgroundItem = undefined;
+        yield* offerRuntimeEvent(
+          makeAcpAssistantItemEvent({
+            stamp: yield* makeEventStamp(),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            // No turn, on purpose: see the block comment above.
+            turnId: undefined,
+            itemId: open.itemId,
+            lifecycle: "item.completed",
+          }),
+        );
+      });
+
+    /**
+     * Stream one pseudo-turn frame into the chat. Both frame kinds of one
+     * notification (qwen's canned line and the model's own words, §10.2 steps
+     * 1 and 6) share a taskId, so they share an item; a DIFFERENT task means a
+     * different notification — qwen never batches them (§16.6) — so the open
+     * one is banked first.
+     */
+    const offerBackgroundChat = (
+      ctx: QwenSessionContext,
+      frame: {
+        readonly taskId?: string;
+        readonly source?: QwenBackgroundNotificationFrame["source"];
+      },
+      text: string,
+    ) =>
+      Effect.gen(function* () {
+        if (text.length === 0) return;
+        const taskId = frame.taskId ?? "unattributed";
+        // ru-code (agentic-flow wave, FIX ROUND 3, F-A2): CHECK, then write. The
+        // dedupe used to be one-directional — this function WROTE
+        // `backgroundChatDelivered` and only the pull read it — so a push that
+        // qwen delivered LATE (its drain is gated by `pendingPrompt` / the todo
+        // stop guard, Session.ts:5688-5697/:5767-5775, with no timer to retry it)
+        // said the same completion the fallback had already said. Both
+        // directions consult the same set here, in the one place that also
+        // writes it, so the check and the write cannot drift apart again.
+        //
+        // ONLY the DISPLAY frame is deduped: `background_notification_response`
+        // carries the model's own words about the run (§10.2 step 6), which the
+        // fallback reconstructs nothing of, so suppressing it would lose the only
+        // copy. An unattributed frame is never deduped — with no taskId there is
+        // nothing to compare, and guessing would silence a real second message.
+        if (
+          frame.taskId !== undefined &&
+          frame.source !== "background_notification_response" &&
+          ctx.backgroundChatDelivered.has(taskId)
+        ) {
+          return;
+        }
+        if (ctx.backgroundItem !== undefined && ctx.backgroundItem.taskId !== taskId) {
+          yield* bankBackgroundItem(ctx);
+        }
+        if (ctx.backgroundItem === undefined) {
+          const itemId = backgroundItemId(ctx, taskId);
+          ctx.backgroundItem = { itemId, taskId };
+          yield* offerRuntimeEvent(
+            makeAcpAssistantItemEvent({
+              stamp: yield* makeEventStamp(),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              turnId: undefined,
+              itemId,
+              lifecycle: "item.started",
+            }),
+          );
+        }
+        ctx.backgroundChatDelivered.add(taskId);
+        yield* offerRuntimeEvent(
+          makeAcpContentDeltaEvent({
+            stamp: yield* makeEventStamp(),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: undefined,
+            itemId: ctx.backgroundItem.itemId,
+            text,
+            rawPayload: undefined,
+          }),
+        );
+      });
+
+    /**
+     * ru-code (agentic-flow wave, P3e): the POST-LOAD PROBE.
+     *
+     * `session/load` makes qwen scan its meta sidecars and re-register every
+     * task it left at `status:'running'` as `'paused'` — and it does so BEFORE
+     * the load response returns (acpAgent.ts:4523 awaits
+     * `#restoreBackgroundAgentsOnResume`, which awaits
+     * `loadPausedBackgroundAgents`; research §15.1). Firing the probe on the
+     * RESOLVED response is therefore race-free by construction: the entries are
+     * already in the registry the poll reads.
+     *
+     * Unlike an ordinary tick this one ADOPTS: a rehydrated task has no launch
+     * frame in this session, so nothing else can open its row. Ids are immutable
+     * across crash → paused → resumed (§15.3), which is what makes adopting by
+     * id and then merging by id safe.
+     */
+    const probeBackgroundTasksAfterLoad = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const sessionId = acpSessionIdOf(ctx);
+        if (sessionId === undefined) return;
+        const answer = yield* Effect.exit(
+          ctx.acp.request(QWEN_SESSION_TASKS_METHOD, { sessionId }),
+        );
+        if (Exit.isFailure(answer)) {
+          // A 0.13.1 engine answers -32601 here; that is not an error worth
+          // surfacing, it just means this session has no background feature.
+          const error = answer.cause.reasons.find(Cause.isFailReason)?.error;
+          if (
+            isQwenPollPermanentFailure({
+              errorCode: readAcpErrorCode(error),
+              errorMessage: readAcpErrorMessage(error),
+            })
+          ) {
+            ctx.backgroundPollDisabled = true;
+          }
+          return;
+        }
+        const rows = readQwenSessionTasks(answer.value);
+        if (rows === undefined || rows.length === 0) return;
+        const adopted = rows.filter((row) => row.isBackgrounded && !isQwenTaskTerminal(row.status));
+        if (adopted.length === 0) return;
+        for (const row of adopted) {
+          trackQwenBackgroundTask(ctx.backgroundTasks, row.id);
+          ctx.backgroundMeta.set(row.id, {
+            title: row.description,
+            ...(row.subagentType !== undefined ? { role: row.subagentType } : {}),
+          });
+          yield* offerRuntimeEvent({
+            type: "task.started",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            payload: {
+              taskId: RuntimeTaskId.make(row.id),
+              taskType: QWEN_SUBAGENT_TASK_TYPE,
+              isBackgrounded: true,
+              title: row.description,
+              description: row.description,
+              ...(row.subagentType !== undefined ? { role: row.subagentType } : {}),
+              ...(row.toolUseId !== undefined ? { toolUseId: row.toolUseId } : {}),
+            },
+          });
+        }
+        // The same diff every tick runs, so a rehydrated `paused` row reaches
+        // the panel as `idle` through exactly one code path.
+        const diff = diffQwenBackgroundTasks(ctx.backgroundTasks, rows);
+        ctx.backgroundTasks.clear();
+        for (const [taskId, tracked] of diff.next) ctx.backgroundTasks.set(taskId, tracked);
+        for (const delta of diff.deltas) yield* offerBackgroundDelta(ctx, delta);
+        if (!diff.allTerminal) yield* ensureBackgroundPoll(ctx);
       });
 
     const getThreadSemaphore = (threadId: string) =>
@@ -1060,7 +2001,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          // ru-code (agents wave): the contract has always defined "error"
+          // (providerRuntime.ts:106) and this adapter never emitted it — every
+          // teardown claimed a graceful exit, including one triggered by the
+          // child dying on its own. `childExitObserved` is set by the child-exit
+          // watcher before it schedules teardown, so it is the fact that
+          // separates "we closed it" from "it died".
+          payload: { exitKind: ctx.childExitObserved === true ? "error" : "graceful" },
         });
       });
 
@@ -1166,6 +2113,18 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     ) =>
       Effect.gen(function* () {
         ctx.stopped = true;
+        // ru-code (mid-turn wave, phase 3): the session is ending — stop button,
+        // mode change, compaction restart, child crash, stopSession, stopAll.
+        // EVERY one of those funnels through here before branching into the
+        // instant-settle vs classic teardown tails, so this is the single place
+        // the reset is guaranteed to run exactly once per session end (the two
+        // `sessions.delete` sites downstream are alternative branches, not both).
+        //
+        // Dropping the queue is what makes "nothing auto-fires after a stop"
+        // true; the dropped items are reported as `reset` so their balloons can
+        // flip to NOT-DELIVERED. qwen's own stop path agrees — it skips the
+        // drain entirely when the signal is aborted (Session.ts:4516-4522).
+        yield* emitDeliveryMarks(ctx.threadId, midTurnQueue.reset(ctx.threadId), "not-delivered");
 
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
@@ -1173,6 +2132,16 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         // interrupts the notification fiber — the real `AgentRootSettled`
         // (if any) would otherwise be lost and the agent row would zombie.
         yield* settleOpenSubAgentAsStopped(ctx);
+        // ru-code (agentic-flow wave, P3e): the same treatment for BACKGROUND
+        // rows, and for the same reason. A background task's registry is
+        // in-memory with no disk load in its constructor (research §14.3), so
+        // it genuinely dies with the child — a row left "Working" is a lie the
+        // user cannot clear. The card stays; only its liveness goes
+        // (RULINGS 2026-08-27). The poll fiber is stopped FIRST so it cannot
+        // race a snapshot in against the terminals we are about to write.
+        yield* stopBackgroundPoll(ctx);
+        yield* settleBackgroundTasksAsStopped(ctx);
+        yield* bankBackgroundItem(ctx);
 
         // ru-code (warm engine): instant-settle stop. An end-force teardown
         // with a prompt actually in flight settles the turn CLIENT-SIDE at
@@ -1293,7 +2262,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          // ru-code (agents wave): the contract has always defined "error"
+          // (providerRuntime.ts:106) and this adapter never emitted it — every
+          // teardown claimed a graceful exit, including one triggered by the
+          // child dying on its own. `childExitObserved` is set by the child-exit
+          // watcher before it schedules teardown, so it is the fact that
+          // separates "we closed it" from "it died".
+          payload: { exitKind: ctx.childExitObserved === true ? "error" : "graceful" },
         });
         yield* Effect.logDebug("[cli-adapter] ACP session aborted", {
           threadId: ctx.threadId,
@@ -1549,6 +2524,8 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   // bare command runs directly (see buildCliSpawn). Per-instance via profile
                   // default / binaryPath override, falling back to the boot preflight cli.js.
                   cliJs: resolved.bin,
+                  // ru-code: resolved profile dir — the registry's HOME row on every cold spawn.
+                  homeDir: resolved.dir,
                   cwd,
                   ...(settingsOverlay ? { settingsOverlay } : {}),
                   clientInfo: { name: "t3-code", version: "0.0.0" },
@@ -1621,7 +2598,97 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             yield* processJournal.record({ pid: acp.childPid, kind: "session" });
           }
 
+          // ru-code (phase 4, m7): the ACP session id this connection is bound
+          // to, captured right after start. The drain responder is registered
+          // BEFORE the session exists, so it reads this holder rather than a
+          // value it could have closed over; it is always set by the time a
+          // drain can fire (drains happen mid-TURN, long after start).
+          let boundAcpSessionId: string | undefined;
           const started = yield* Effect.gen(function* () {
+            // ru-code (mid-turn wave, phase 3): the DRAIN RESPONDER.
+            //
+            // Registered by EXACT METHOD NAME with a decoding schema, never via
+            // `handleUnknownExtRequest` — the unknown-fallback is the catch-all
+            // for every unregistered ext method, so putting the drain there
+            // would answer unrelated vendor methods with a drain response
+            // instead of letting them reject with -32601. Same shape as the
+            // port's own precedent (CursorAdapter.ts:574).
+            //
+            // The body is `Effect.sync` over a SYNCHRONOUS splice. That is the
+            // whole point: qwen races this answer against a 2s deadline
+            // (Session.ts:516) and our transport dispatches inbound ext
+            // requests INLINE on the stdin pump (effect-acp protocol.ts:458-462),
+            // so a responder that awaited I/O would stall every inbound frame
+            // and could deadlock. `takeForDrain` returns a plain value, so
+            // awaiting here is a type error, not a review question.
+            yield* acp.handleExtRequest(QWEN_MID_TURN_DRAIN_METHOD, MidTurnDrainRequest, (params) =>
+              Effect.gen(function* () {
+                // ru-code (phase 4, m7): the decoded `sessionId` was previously
+                // decoded and then thrown away, the handler answering purely
+                // from the closure's threadId. Correct today (one ACP client per
+                // thread, one registration per session start) but silently wrong
+                // the day a connection serves two sessions. Answer EMPTY for a
+                // session we do not recognise rather than splicing the wrong
+                // queue — an empty answer is always valid and costs qwen nothing.
+                if (boundAcpSessionId !== undefined && params.sessionId !== boundAcpSessionId) {
+                  yield* Effect.logWarning("[qwen-adapter] drain for an unknown session", {
+                    threadId: input.threadId,
+                    requested: params.sessionId,
+                    bound: boundAcpSessionId,
+                  });
+                  return { items: [], hasQueuedPrompt: false } satisfies MidTurnDrainResponse;
+                }
+                // The SPLICE stays inside `Effect.sync`, which is the
+                // structural half of the no-I/O rule: the splice itself cannot
+                // await. The other half is that the only effect this body yields
+                // (`emitDeliveryMarks`) publishes to an UNBOUNDED PubSub and so
+                // never blocks — the type system does not enforce that part, so
+                // do not add an I/O yield here (phase-4 finding m6). Caps at ten and LEAVES
+                // THE REMAINDER QUEUED: qwen's capMidTurnDrainItems
+                // (Session.ts:662-669) slices and DISCARDS the surplus, so an
+                // over-long answer would destroy messages in both places.
+                const taken = yield* Effect.sync(() => midTurnQueue.takeForDrain(input.threadId));
+                const response: MidTurnDrainResponse = {
+                  // `items` is ALWAYS present, even empty: `{}` fails
+                  // isValidMidTurnDrainResponse (Session.ts:769-796) and
+                  // flips `reliable`, which gates qwen's todoStopGuard.
+                  items: taken.map((queued) => midTurnDrainItem(queued)),
+                  hasQueuedPrompt: midTurnQueue.size(input.threadId) > 0,
+                };
+                // ru-code (P3c): DELIVERED only here — the agent has actually
+                // taken these. Publishing to an unbounded PubSub does not block,
+                // so the 2s answer budget is untouched.
+                yield* emitDeliveryMarks(input.threadId, taken, "delivered");
+                return response;
+              }),
+            );
+            // ru-code (phase 4, M5): the SECOND responder qwen needs.
+            //
+            // Answering the drain alone is not enough: a `hasQueuedPrompt: true`
+            // answer on a todoStopGuard drain makes qwen immediately call this
+            // method, and an unanswered call hard-suspends its todo
+            // auto-continuation for the whole session. Registered by exact name
+            // with a schema, same as the drain.
+            yield* acp.handleExtRequest(
+              QWEN_TODO_STOP_GUARD_CLAIM_METHOD,
+              TodoStopGuardClaimRequest,
+              (params) =>
+                Effect.sync(() => {
+                  // ru-code (phase 4b, FR2): honour `sessionId`, exactly as the
+                  // drain responder eleven lines above does. The first version
+                  // of this handler decoded the field and threw it away —
+                  // repeating verbatim the m7 defect the same commit had just
+                  // fixed next door. An unrecognised session gets the neutral
+                  // answer, which lets qwen carry on unchanged.
+                  if (boundAcpSessionId !== undefined && params.sessionId !== boundAcpSessionId) {
+                    return todoStopGuardClaimResponse({ queuedCount: 0, promptId: undefined });
+                  }
+                  return todoStopGuardClaimResponse({
+                    queuedCount: midTurnQueue.size(input.threadId),
+                    promptId: params.promptId,
+                  });
+                }),
+            );
             // ru-code: catch every CLI vendor extension notification.
             // Always log the raw payload so unknown methods surface.
             // For slash-command progress + result notifications (compress,
@@ -1783,8 +2850,23 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 // says WHICH agent is holding for you instead of reading "Working"
                 // while nothing happens. Any later child frame moves it back to
                 // running (subagentRuntime.ts:515-521), so no un-marking is owed.
-                if (ctx?.subAgentWindow !== undefined) {
-                  yield* offerAgentProgress(ctx, ctx.subAgentWindow, {
+                // ru-code (agents wave): a child's permission request carries no
+                // tag either (qwen SubAgentTracker.ts:223-226 stamps only
+                // toolName), so this is the second place the serial window is the
+                // PRIMARY signal rather than a fallback.
+                // ru-code (agentic-flow wave, FIX ROUND 3, F-A3): except when the
+                // frame IS a top-level spawn. That request is the PARENT asking
+                // to launch a new agent, not a running child pausing for input,
+                // and with concurrent roots (qwen batches `agent` calls,
+                // Session.ts:6742-6796) the serial window it would otherwise mark
+                // "waiting" belongs to a different agent entirely.
+                const gatedSpawn = classifyQwenAgentSpawnPermission(params);
+                const waitingWindow =
+                  ctx === undefined || gatedSpawn._tag !== "PlainToolCall"
+                    ? undefined
+                    : resolveQwenAgentWindow(ctx.subAgentWindows, ctx.serialAgentTaskId, undefined);
+                if (ctx !== undefined && waitingWindow !== undefined) {
+                  yield* offerAgentProgress(ctx, waitingWindow, {
                     summary: formatQwenAgentWaitingLine(toolName),
                     status: "waiting",
                   });
@@ -1960,6 +3042,9 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 if (ctx.currentRuntimeMode === "full-access") {
                   const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
                   if (autoApprovedOptionId !== undefined) {
+                    // The host answers for the user; the spawn still executes,
+                    // so its row is still owed (F-A3).
+                    yield* openGatedAgentSpawn(ctx, params);
                     return {
                       outcome: {
                         outcome: "selected" as const,
@@ -2027,6 +3112,20 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   );
                   return { outcome: { outcome: "cancelled" } as const };
                 }
+                // ru-code (agentic-flow wave, FIX ROUND 3, F-A3): the user
+                // allowed it, so the spawn is about to run — open its row before
+                // the child's first frame can arrive.
+                //
+                // ru-code (FIX ROUND 3 ADDENDUM): gated on an ALLOW kind, and
+                // that is load-bearing. A REJECTION also returns through this
+                // `selected` path — `decline` maps to `reject_once`
+                // (`decisionToPermissionKind`) and echoes qwen's own reject
+                // option id — so opening here unconditionally gave a refused
+                // spawn a row, which the incoming `emitError` terminal then
+                // settled as a failed agent run that never happened.
+                if (targetKind === "allow_once" || targetKind === "allow_always") {
+                  yield* openGatedAgentSpawn(ctx, params);
+                }
                 return {
                   outcome: { outcome: "selected" as const, optionId: matchedOptionId },
                 };
@@ -2092,6 +3191,9 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             Effect.mapError((error) => remapStartFailureThroughClassifier("session/start", error)),
           );
 
+          // ru-code (phase 4, m7): bind the responder to this session's id.
+          boundAcpSessionId = started.sessionId;
+
           const resumeOutcome: "fresh" | "resumed" | "resume-fallback-fresh" =
             resumeSessionId === undefined
               ? "fresh"
@@ -2131,6 +3233,19 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           };
 
           ctx = {
+            subAgentWindows: new Map<string, QwenAgentWindow>(),
+            seenAgentToolUseIds: new Map<string, Set<string>>(),
+            settledAgentTaskIds: new Set<string>(),
+            // ru-code (agentic-flow wave): background-task state.
+            backgroundTasks: new Map<string, QwenTrackedTask>(),
+            backgroundMeta: new Map(),
+            backgroundPollFiber: undefined,
+            backgroundPollStrikes: 0,
+            backgroundPollDisabled: false,
+            backgroundItem: undefined,
+            backgroundItemIndex: 0,
+            backgroundChatDelivered: new Set<string>(),
+            backgroundPendingChat: new Map(),
             threadId: input.threadId,
             session,
             scope: sessionScope,
@@ -2141,6 +3256,7 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             pendingUserInputs,
             turns: [],
             activeTurnId: undefined,
+            turnDispatchOwner: undefined, // ru-code (phase 4b/4c, O1)
             itemTurnIds: new Map(),
             lastTurnId: undefined,
             turnFinalized: undefined,
@@ -2216,7 +3332,14 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     // child's, which is a corruption, not a leak. Parked on the
                     // agent row instead: progress count + the live step, so
                     // nothing the user needs is lost.
-                    const planWindow = ctx.subAgentWindow;
+                    // ru-code (agents wave): a child's plan carries NO tag even at
+                    // 0.21.1 (qwen PlanEmitter.ts:27-39 takes no subagentMeta), so
+                    // the serial window is the PRIMARY signal here, not a fallback.
+                    const planWindow = resolveQwenAgentWindow(
+                      ctx.subAgentWindows,
+                      ctx.serialAgentTaskId,
+                      event.rawPayload,
+                    );
                     if (planWindow !== undefined) {
                       const planLine = formatQwenAgentPlanLine(event.payload);
                       if (planLine !== undefined && planLine !== planWindow.emitted) {
@@ -2251,6 +3374,22 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     // ELSE the frame means for the Agents surface. A frame with no
                     // sub-agent meta takes the default arm and is byte-identical to
                     // today's behaviour.
+                    // ru-code (phase 4, f-1): latch the engine generation off the
+                    // FIRST provenance-stamped tool call — which is the agent
+                    // spawn frame itself, long before any child text. Latched
+                    // here, on the tool-call path, precisely so an untagged
+                    // non-empty chunk arriving while a window is open (six
+                    // Session.ts sites do exactly that, mapping §3a) is already
+                    // known to be the parent's.
+                    if (isQwenV2WireFrame(event.rawPayload)) ctx.sawV2AgentWire = true;
+                    // ru-code (agentic-flow wave, live-issues T3): a `send_message`
+                    // that resumed a background task brings its row back to life.
+                    // Not an agent frame — it falls through to the ordinary
+                    // tool-item path below exactly as before.
+                    yield* readoptResumedBackgroundTask(
+                      ctx,
+                      readQwenResumedBackgroundTaskId(event.toolCall, event.rawPayload),
+                    );
                     const agentFrame = classifyQwenToolCallFrame(event.toolCall, event.rawPayload);
                     const itemEvent = makeAcpToolCallEvent({
                       stamp: yield* makeEventStamp(),
@@ -2262,13 +3401,109 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     });
                     switch (agentFrame._tag) {
                       case "AgentRootStarted": {
-                        // ru-code (sub-agents): open the attribution window. From
-                        // here until this call settles, every UNSTAMPED frame is
-                        // this child's — see the window proof in QwenAcpSubAgents.
-                        ctx.subAgentWindow = openQwenAgentWindow(agentFrame);
-                        // Open the task BEFORE its content: the chat's spawn-CTA row
-                        // anchors on the first task row of the batch, and the fold only
-                        // accepts tool.progress heartbeats for a task it already knows.
+                        yield* openAgentRootWindow(ctx, agentFrame);
+                        yield* offerRuntimeEvent(
+                          withQwenAgentAttribution(itemEvent, agentFrame.taskId),
+                        );
+                        return;
+                      }
+                      case "AgentSpawnPending": {
+                        // ru-code (agentic-flow wave, FIX ROUND 2): the opening
+                        // frame of a spawn that is going to detach. NOTHING
+                        // agent-shaped happens here on purpose:
+                        //
+                        //   · NO `task.started` — the row for this launch is
+                        //     opened by `AgentBackgroundLaunched` below, keyed by
+                        //     qwen's real registry id. A row keyed by this frame's
+                        //     wire tool call id is unreachable by every producer
+                        //     that speaks that registry id, so it could never be
+                        //     settled: it is exactly the immortal "running" card
+                        //     the owner's live test showed one of per agent.
+                        //   · NO WINDOW — a window exists to attribute UNTAGGED
+                        //     child frames, and a background child produces none
+                        //     (§2.2). The window this frame used to open was never
+                        //     closed either, so every untagged PARENT chunk after
+                        //     a background launch was at risk of being read as the
+                        //     child's.
+                        //
+                        //   · NO ITEM EVENT — and this is the point, not an
+                        //     omission. The item's home is decided by `agentId`
+                        //     (`withQwenAgentAttribution`), and this frame cannot
+                        //     name one: for a detached run the row does not exist
+                        //     yet, and for the argless preparing frame the call
+                        //     may never execute at all
+                        //     (`emitPreparationDiscarded`,
+                        //     tool-call-emitter.ts:135-156). The very next frame
+                        //     for this SAME `toolCallId` — the real-args opening
+                        //     frame, or the launch update — creates the item with
+                        //     the right home, in the same tick.
+                        return;
+                      }
+                      case "AgentSpawnDiscarded": {
+                        // ru-code (agentic-flow wave, FIX ROUND 3, F-A1): the
+                        // call never happened. NOTHING is emitted — no task row,
+                        // no terminal, and no item event (its preparing frame
+                        // produced none either, so there is nothing to settle and
+                        // a `failed` tool item would be a timeline entry for a
+                        // call that never ran).
+                        //
+                        // NOTHING IS REMEMBERED either, and that is the second
+                        // half of qwen's semantics: each model stream owns its
+                        // tracker (tool-call-preparation-tracker.ts:11-15) and
+                        // `discard` clears it (`:68-70`), so a RETRIED stream
+                        // observes the same callId again and the call really runs.
+                        // A tombstone here (`rememberSettledAgent`) would make
+                        // every frame of that real run a dropped straggler.
+                        return;
+                      }
+                      case "AgentBackgroundLaunched": {
+                        // ru-code (agentic-flow wave, FIX ROUND 2): belt and
+                        // braces for the one case qwen itself calls undecidable
+                        // from args — a fork, whose opening frame is classified
+                        // foreground (toolClassification.ts:44-48) and may still
+                        // detach. If such a frame opened a provisional row, it is
+                        // settled HERE rather than left running forever; the
+                        // detached run's own row is opened below under the real
+                        // id. Same treatment an evicted window gets.
+                        const provisional = ctx.subAgentWindows.get(agentFrame.toolUseId);
+                        if (provisional !== undefined) {
+                          ctx.subAgentWindows.delete(agentFrame.toolUseId);
+                          ctx.seenAgentToolUseIds.delete(agentFrame.toolUseId);
+                          rememberSettledAgent(ctx, agentFrame.toolUseId);
+                          if (ctx.serialAgentTaskId === agentFrame.toolUseId) {
+                            ctx.serialAgentTaskId = [...ctx.subAgentWindows.keys()].at(-1);
+                          }
+                          yield* offerRuntimeEvent({
+                            type: "task.completed",
+                            ...(yield* makeEventStamp()),
+                            provider: PROVIDER,
+                            threadId: ctx.threadId,
+                            ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                            payload: {
+                              taskId: RuntimeTaskId.make(provisional.taskId),
+                              status: "stopped",
+                              taskType: QWEN_SUBAGENT_TASK_TYPE,
+                              toolUseId: provisional.toolUseId,
+                              ...(provisional.title ? { title: provisional.title } : {}),
+                              ...(provisional.role ? { role: provisional.role } : {}),
+                              detail: "The agent moved to the background.",
+                            },
+                          });
+                        }
+                        // ru-code (agentic-flow wave, P3a): a detached run was
+                        // ANNOUNCED. Open a RUNNING row and hand the rest of its
+                        // life to the poll — the wrapping call's `completed`
+                        // status is about the launch, not the agent (§1.2).
+                        //
+                        // No window is opened: a window exists to attribute
+                        // untagged child frames, and a background child produces
+                        // none at all (§2.2). Opening one would make the next
+                        // untagged PARENT chunk read as the child's.
+                        trackQwenBackgroundTask(ctx.backgroundTasks, agentFrame.taskId);
+                        ctx.backgroundMeta.set(agentFrame.taskId, {
+                          ...(agentFrame.title !== undefined ? { title: agentFrame.title } : {}),
+                          ...(agentFrame.role !== undefined ? { role: agentFrame.role } : {}),
+                        });
                         yield* offerRuntimeEvent({
                           type: "task.started",
                           ...(yield* makeEventStamp()),
@@ -2278,33 +3513,126 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                           payload: {
                             taskId: RuntimeTaskId.make(agentFrame.taskId),
                             taskType: QWEN_SUBAGENT_TASK_TYPE,
+                            // ru-code (agentic-flow wave): the ONE fact that
+                            // separates this row from a foreground agent's for
+                            // the panel — a detached task is the only kind the
+                            // host can address individually while it runs.
+                            isBackgrounded: true,
                             toolUseId: agentFrame.toolUseId,
-                            // `title` is what the panel row shows; `description` is what
-                            // ingestion turns into the row detail the CTA anchors on.
                             ...(agentFrame.title
                               ? { title: agentFrame.title, description: agentFrame.title }
                               : {}),
                             ...(agentFrame.role ? { role: agentFrame.role } : {}),
                           },
                         });
+                        // The wrapping tool call belongs to the agent, not the
+                        // main timeline — same re-homing the foreground root
+                        // gets. Rebuilt WITHOUT the launch prose: `agentId` only
+                        // moves the row, it does not sanitise what the row says.
                         yield* offerRuntimeEvent(
-                          withQwenAgentAttribution(itemEvent, agentFrame.taskId),
+                          withQwenAgentAttribution(
+                            makeAcpToolCallEvent({
+                              stamp: yield* makeEventStamp(),
+                              provider: PROVIDER,
+                              threadId: ctx.threadId,
+                              turnId: ctx.activeTurnId,
+                              toolCall: stripQwenLaunchProse(event.toolCall),
+                              rawPayload: event.rawPayload,
+                            }),
+                            agentFrame.taskId,
+                          ),
                         );
+                        yield* ensureBackgroundPoll(ctx);
                         return;
                       }
                       case "AgentRootSettled": {
+                        // ru-code (agentic-flow wave, FIX ROUND 3 ADDENDUM,
+                        // orchestrator-RATIFIED): THE TERMINAL OF A RUN THAT
+                        // NEVER HAPPENED. `emitError` (tool-call-emitter.ts:216-240)
+                        // answers every `earlyErrorResponse` — a rejected
+                        // permission being the everyday one (Session.ts:7059,
+                        // :7698-7707) — with `status:'failed'`, NO `rawOutput`
+                        // and, unlike a discarded preparation, no `_meta.phase`
+                        // to recognise it by. The terminal mapping below then
+                        // reads every field as undefined and emits a titleless
+                        // `task.completed`, which `getOrCreate` turns into a
+                        // permanent red card named after the wire call id
+                        // (subagentRuntime.ts:651-666 → :362) — the F-A1 symptom
+                        // on a second producer.
+                        //
+                        // The condition is BOTH halves, and each is load-bearing:
+                        //   · no `AgentResultDisplay` — a run that produced one
+                        //     really ran, whatever its status, and must settle;
+                        //   · no row this session opened — a window still open,
+                        //     or an id already remembered as settled, means a
+                        //     card EXISTS, and leaving it unsettled is the
+                        //     immortal "Working" row this wave exists to kill.
+                        //     So a genuine mid-run failure with no result display
+                        //     still settles its row exactly as before.
+                        //
+                        // Nothing is remembered: the id was never a row, and a
+                        // provider that reused the call id later must not find a
+                        // tombstone. The frame is not swallowed either — it falls
+                        // through to the item event WITHOUT agent attribution, so
+                        // the refusal reaches the timeline as an ordinary failed
+                        // tool item, which is exactly what every non-agent tool's
+                        // rejection already does (`PlainToolCall`).
+                        if (
+                          !agentFrame.hasResultDisplay &&
+                          !ctx.subAgentWindows.has(agentFrame.taskId) &&
+                          !ctx.settledAgentTaskIds.has(agentFrame.taskId)
+                        ) {
+                          yield* offerRuntimeEvent(itemEvent);
+                          return;
+                        }
                         // ru-code (sub-agents): flush whatever narration is still
                         // under the quantum, then close the window. Without the
                         // flush an agent that ends mid-sentence loses its last
                         // words — and on a run with no result at all (a cancel)
                         // that flushed line is the ONLY thing the row ever shows.
-                        const settlingWindow = ctx.subAgentWindow;
-                        if (settlingWindow?.taskId === agentFrame.taskId) {
+                        const settlingWindow = ctx.subAgentWindows.get(agentFrame.taskId);
+                        if (settlingWindow !== undefined) {
                           const tail = takeQwenAgentLine(settlingWindow);
                           if (tail !== undefined) {
                             yield* offerAgentProgress(ctx, settlingWindow, { summary: tail });
                           }
-                          ctx.subAgentWindow = undefined;
+                          // ru-code (agents wave): reconcile the batched tool-call
+                          // snapshot BEFORE closing the row. qwen represents a
+                          // child's tool history twice — live per-call frames and
+                          // this rollup on the parent's terminal frame (contract
+                          // §2.5) — and the rollup is the ONLY copy when the live
+                          // frames never arrived (a sub-sub-agent's calls never
+                          // reach the wire individually at all, §9.2). Replaying
+                          // only what we did NOT already see keeps a normal run
+                          // byte-identical while a lossy one stops under-reporting.
+                          for (const call of reconcileQwenAgentToolCalls(
+                            event.toolCall.data["rawOutput"],
+                            ctx.seenAgentToolUseIds.get(agentFrame.taskId) ?? new Set<string>(),
+                          )) {
+                            yield* offerRuntimeEvent({
+                              type: "tool.progress",
+                              ...(yield* makeEventStamp()),
+                              provider: PROVIDER,
+                              threadId: ctx.threadId,
+                              ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                              payload: {
+                                taskId: RuntimeTaskId.make(agentFrame.taskId),
+                                ...(call.toolName ? { toolName: call.toolName } : {}),
+                                toolUseId: call.toolUseId,
+                                parentToolUseId: agentFrame.taskId,
+                              },
+                            });
+                          }
+                          ctx.subAgentWindows.delete(agentFrame.taskId);
+                          ctx.seenAgentToolUseIds.delete(agentFrame.taskId);
+                          rememberSettledAgent(ctx, agentFrame.taskId);
+                          if (ctx.serialAgentTaskId === agentFrame.taskId) {
+                            // The serial signal follows the newest window still
+                            // open, so an untagged frame after this settle lands on
+                            // a live sibling rather than on nothing.
+                            const remaining = [...ctx.subAgentWindows.keys()];
+                            ctx.serialAgentTaskId = remaining.at(-1);
+                          }
                         }
                         // Close the task AFTER its content, mirroring the open above.
                         yield* offerRuntimeEvent(
@@ -2335,6 +3663,31 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                         return;
                       }
                       case "AgentInnerTool": {
+                        // ru-code (phase 4c, R3-1): adopt from a TOOL frame too.
+                        // Adoption used to run only on the text/thought paths, so
+                        // on the permission-gated wire — where nothing else opens
+                        // the window — a child that tool-called before it narrated
+                        // had its heartbeats dropped by the fold (which bails on a
+                        // taskId it has not seen open), and a child that never
+                        // narrated materialised already-Completed, never having
+                        // shown as running. Reading/grepping before speaking is the
+                        // common opening move, so this was the common case.
+                        //
+                        // Must precede the heartbeat below: `task.started` has to
+                        // reach the fold BEFORE the first `tool.progress` for that
+                        // task, or the fold drops it. On the auto-approved wire
+                        // this is unreachable — the spawn `tool_call` opened the
+                        // window before any child frame — so it cannot regress it;
+                        // `readQwenOrphanAgent` returns undefined for both an open
+                        // window and a settled one.
+                        const innerOrphan = readQwenOrphanAgent(
+                          ctx.subAgentWindows,
+                          ctx.settledAgentTaskIds,
+                          event.rawPayload,
+                        );
+                        if (innerOrphan !== undefined) {
+                          yield* adoptOrphanAgent(ctx, innerOrphan);
+                        }
                         // ru-code (sub-agents): the tool's RESULT, on the terminal
                         // frame, is the single most informative thing the child
                         // produces — and `tool.progress` cannot carry it (the fold
@@ -2358,15 +3711,17 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                             parentToolUseId: agentFrame.taskId,
                           },
                         });
-                        const innerWindow = ctx.subAgentWindow;
+                        // ru-code (agents wave): remember the live call so the
+                        // settle's rollup does not replay it as a duplicate.
+                        const seenForAgent =
+                          ctx.seenAgentToolUseIds.get(agentFrame.taskId) ?? new Set<string>();
+                        seenForAgent.add(agentFrame.toolUseId);
+                        ctx.seenAgentToolUseIds.set(agentFrame.taskId, seenForAgent);
+                        const innerWindow = ctx.subAgentWindows.get(agentFrame.taskId);
                         const innerLine = agentFrame.settled
                           ? formatQwenAgentToolLine(agentFrame.toolName, agentFrame.detail)
                           : undefined;
-                        if (
-                          innerLine !== undefined &&
-                          innerWindow !== undefined &&
-                          innerWindow.taskId === agentFrame.taskId
-                        ) {
+                        if (innerLine !== undefined && innerWindow !== undefined) {
                           innerWindow.emitted = innerLine;
                           yield* offerAgentProgress(ctx, innerWindow, {
                             summary: innerLine,
@@ -2383,6 +3738,100 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                         return;
                     }
                   }
+                  case "ThoughtDelta": {
+                    // ru-code (agents wave): a child's THINKING. At 0.21.1 it is
+                    // tagged (qwen SubAgentTracker.ts:304-310 → the thought branch
+                    // of emitMessage), so it lands on the owning row's live line —
+                    // the same channel its narration uses, because to a reader of
+                    // the panel "what is it doing" and "what is it thinking" are
+                    // one story.
+                    //
+                    // An UNTAGGED thought is the PARENT's, and it is dropped here,
+                    // exactly as it was before this wave: qwen's parent thinking
+                    // has never had a surface in this app (no `reasoning` item is
+                    // rendered anywhere), and inventing one is a product change,
+                    // not an ingestion fix. Called out in the phase-3 report.
+                    if (isQwenSubAgentFrame(event.rawPayload)) ctx.sawV2AgentWire = true;
+                    const thoughtWindow = resolveQwenAgentWindow(
+                      ctx.subAgentWindows,
+                      // A thought never falls back to the serial window: qwen 0.13.1
+                      // emitted no thought frame we could attribute, so there is no
+                      // legacy behaviour to preserve here.
+                      undefined,
+                      event.rawPayload,
+                    );
+                    const thoughtOrphan =
+                      thoughtWindow === undefined
+                        ? readQwenOrphanAgent(
+                            ctx.subAgentWindows,
+                            ctx.settledAgentTaskIds,
+                            event.rawPayload,
+                          )
+                        : undefined;
+                    const thoughtTarget =
+                      thoughtWindow ??
+                      (thoughtOrphan === undefined
+                        ? undefined
+                        : yield* adoptOrphanAgent(ctx, thoughtOrphan));
+                    // ru-code (phase 4b, R-1): NO settled-straggler drop here, on
+                    // purpose. The text path needs one because an unrouted chunk
+                    // falls through to the parent's chat; a thought has no such
+                    // fall-through — an unrouted thought already does nothing — so
+                    // the guard would be dead code. If thoughts ever gain a chat
+                    // surface (phase-3 OPEN 1), it must be added back with it.
+                    if (thoughtTarget !== undefined) {
+                      const line = appendQwenAgentText(thoughtTarget, event.text);
+                      if (line !== undefined) {
+                        yield* offerAgentProgress(ctx, thoughtTarget, { summary: line });
+                      }
+                    }
+                    return;
+                  }
+                  case "BackgroundTurnEnded": {
+                    // ru-code (agentic-flow wave, FIX ROUND 1, owner GO 2026-08-27): the signal is
+                    // back in the native ACP log. Registering it by exact method
+                    // name took it off `handleUnknownExtNotification`, which was
+                    // the path doing this logging. Mirrors `ContentDelta` below.
+                    yield* logNative(
+                      ctx.threadId,
+                      QWEN_BACKGROUND_END_TURN_METHOD,
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    // ru-code (agentic-flow wave, P3c): the pseudo-turn is over.
+                    // This arrives IN ORDER with the frames it terminates (see
+                    // the variant's doc in AcpRuntimeModel) — closing the message
+                    // here is what gets it persisted instead of left latent in
+                    // ingestion's buffer.
+                    yield* bankBackgroundItem(ctx);
+                    return;
+                  }
+                  case "GoalSignal": {
+                    // ru-code (agents wave): `/goal` state. qwen's own reference
+                    // host treats these as required UI-state updates and exempts
+                    // them from turn-boundary suppression (contract §9.1), so
+                    // dropping them silently — which is what an empty-text chunk
+                    // did before — loses the only signal that a goal was set,
+                    // achieved or abandoned.
+                    //
+                    // Carried on `runtime.warning`, which ingestion renders with
+                    // tone "info" using the adapter's own message as the row label
+                    // (ProviderRuntimeIngestion.ts:494-511). No new contract event:
+                    // this is a session notice, and one already exists.
+                    const condition = readQwenGoalCondition(event.payload);
+                    yield* offerRuntimeEvent({
+                      type: "runtime.warning",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                      payload: {
+                        message: formatQwenGoalLine(event.signal, event.payload),
+                        detail: { goal: event.payload, ...(condition ? { condition } : {}) },
+                      },
+                    });
+                    return;
+                  }
                   case "ContentDelta": {
                     yield* logNative(
                       ctx.threadId,
@@ -2398,11 +3847,58 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     // monologue is spliced into the parent's chat bubble. It
                     // becomes the agent row's live line instead — the same channel
                     // ClaudeAdapter.ts:3263 feeds for its children.
-                    const textWindow = ctx.subAgentWindow;
-                    if (textWindow !== undefined) {
-                      const line = appendQwenAgentText(textWindow, event.text);
+                    // ru-code (agents wave): tag first, serial window second.
+                    // A 0.21.1 child's text carries its own parentToolCallId, so
+                    // concurrent children no longer cross-talk; a 0.13.1 child's
+                    // does not, and the serial window still catches it.
+                    // A TAGGED text chunk is the other proof of a 0.21.1 engine
+                    // (provenance is tool-call-only, so a text-only stream has no
+                    // other). Kept alongside the tool-call latch, not replaced by
+                    // it: the provenance stamp is EARLIER, never broader.
+                    // ru-code (agentic-flow wave, P3c): a pseudo-turn frame is
+                    // NOT the parent's narration and belongs to no turn of ours
+                    // — it gets a message of its own. Checked first because it
+                    // is decided by a structured `_meta.source` the parent path
+                    // never carries, so nothing below can misread it.
+                    const backgroundFrame = readQwenBackgroundNotification(event.rawPayload);
+                    if (backgroundFrame !== undefined) {
+                      yield* offerBackgroundChat(ctx, backgroundFrame, event.text);
+                      return;
+                    }
+                    if (isQwenSubAgentFrame(event.rawPayload)) ctx.sawV2AgentWire = true;
+                    const textWindow = resolveQwenAgentWindow(
+                      ctx.subAgentWindows,
+                      // Proven tagger ⇒ untagged text is the PARENT's: no serial
+                      // fallback for this frame kind.
+                      ctx.sawV2AgentWire === true ? undefined : ctx.serialAgentTaskId,
+                      event.rawPayload,
+                    );
+                    const textOrphan =
+                      textWindow === undefined
+                        ? readQwenOrphanAgent(
+                            ctx.subAgentWindows,
+                            ctx.settledAgentTaskIds,
+                            event.rawPayload,
+                          )
+                        : undefined;
+                    const textTarget =
+                      textWindow ??
+                      (textOrphan === undefined
+                        ? undefined
+                        : yield* adoptOrphanAgent(ctx, textOrphan));
+                    // ru-code (phase 4, B-1): a settled agent's straggler has no
+                    // row left and is not the parent's — drop it rather than
+                    // letting it fall through to the chat.
+                    if (
+                      textTarget === undefined &&
+                      isQwenSettledAgentFrame(ctx.settledAgentTaskIds, event.rawPayload)
+                    ) {
+                      return;
+                    }
+                    if (textTarget !== undefined) {
+                      const line = appendQwenAgentText(textTarget, event.text);
                       if (line !== undefined) {
-                        yield* offerAgentProgress(ctx, textWindow, { summary: line });
+                        yield* offerAgentProgress(ctx, textTarget, { summary: line });
                       }
                       return;
                     }
@@ -2515,6 +4011,18 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
+          // ru-code (agentic-flow wave, P3e): the boot sweep's other half.
+          //
+          // Gated on `resumed` because that is the ONLY outcome that can have
+          // rehydrated anything: `session/new` provably never calls
+          // `loadPausedBackgroundAgents` — the restore hook is not even in that
+          // code path's shape (research §15.5) — and a fallback-to-fresh minted
+          // a brand-new id whose sidecar directory cannot exist. Probing those
+          // would be polling an idle session, which the rulings forbid.
+          if (resumeOutcome === "resumed") {
+            yield* probeBackgroundTasksAfterLoad(ctx);
+          }
+
           // ru-code (warm engine): refill only after a successful bind (I-8) —
           // idle slot deaths are never auto-respawned, so no crash-loops. The
           // spawn is inline (deterministic counts); the warmup RPCs fork.
@@ -2582,8 +4090,291 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
       );
     };
 
-    const sendTurn: QwenAdapterShape["sendTurn"] = (input) =>
+    /**
+     * ru-code (mid-turn wave, phase 3): THE NO-SECOND-PROMPT INVARIANT, moved
+     * server-side.
+     *
+     * Until this wave the rule "a mid-turn send must never become a second
+     * session/prompt" was enforced ONLY in the browser
+     * (apps/web/src/ru-code/composer/sendGate.ts). That was load-bearing: a
+     * second prompt makes qwen abort the in-flight one
+     * (Session.ts:2285 `this.pendingPrompt?.abort()`), truncating the answer.
+     * Phase 3 relaxes the composer, so the invariant has to live here instead.
+     *
+     * Returns the ACTIVE turn's id, not a fresh one: a queued message does not
+     * start a turn, it JOINS the running one — so no `turn.started` /
+     * `turn.completed` pair is emitted for it. That is why this check sits
+     * ahead of the turnId generation rather than inside the main body.
+     */
+    /**
+     * ru-code (phase 4, M1): read this send's attachments into ACP image blocks.
+     *
+     * Shared by the ordinary dispatch and by the mid-turn ENQUEUE, so a queued
+     * message carries exactly the blocks an immediate send would have. Resolving
+     * at enqueue (not at drain) is deliberate: this does real file I/O, and the
+     * drain responder must stay a synchronous splice.
+     */
+    const resolveAttachmentBlocks = (input: Parameters<QwenAdapterShape["sendTurn"]>[0]) =>
       Effect.gen(function* () {
+        const blocks: Array<EffectAcpSchema.ContentBlock> = [];
+        for (const attachment of input.attachments ?? []) {
+          const attachmentPath = resolveAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment,
+          });
+          if (!attachmentPath) {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/prompt",
+              detail: `Invalid attachment id '${attachment.id}'.`,
+            });
+          }
+          const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "session/prompt",
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+          blocks.push({
+            type: "image",
+            data: Buffer.from(bytes).toString("base64"),
+            mimeType: attachment.mimeType,
+          });
+        }
+        return blocks;
+      });
+
+    const tryQueueMidTurnMessage = (input: Parameters<QwenAdapterShape["sendTurn"]>[0]) =>
+      Effect.gen(function* () {
+        const text = input.input?.trim();
+        const hasAttachments = (input.attachments?.length ?? 0) > 0;
+        // ru-code (phase 4, B1): ANY send shape counts. Gating on text alone let
+        // an attachment-only send fall through to an ordinary dispatch, which at
+        // qwen aborts the running turn (Session.ts:2285) — the exact damage this
+        // whole wave exists to prevent.
+        if (!text && !hasAttachments) return undefined;
+        const ctx = sessions.get(input.threadId);
+        if (ctx === undefined) return undefined;
+        // ru-code (phase 4b, O1): a turn counts as running from the moment a
+        // dispatch CLAIMS the thread, not from the later moment `activeTurnId`
+        // lands. Without the claim there is a window — after `finalize` clears
+        // `activeTurnId`, before the forked turn-end flush sets its own — in
+        // which this returns `undefined` and the send is dispatched straight
+        // into a second `session/prompt`.
+        // ru-code (phase 4c): a COMPACTION claim is not a running turn. Queueing
+        // here would swallow the send and delete the long-standing B5 fail-fast
+        // contract (`hiddenCompress.e2e`, `compactionHistoryPipeline.e2e`), which
+        // requires the send to FAIL with "Context compaction is in progress" and
+        // emit a `turn.completed`. Let it through to that fail-fast.
+        if (ctx.hiddenCompressActive) return undefined;
+        const activeTurnId = ctx.activeTurnId;
+        if (activeTurnId === undefined && !isDispatchSlotHeld(ctx)) return undefined;
+        // ru-code (phase 4, M1): carry the attachments. qwen's own validator
+        // accepts image blocks in a drain item (Session.ts:558-584); dropping
+        // them while marking the message delivered was our bug, not a protocol
+        // limit.
+        // ru-code (phase 4b, FR1): resolution runs in the OUTER gen — before
+        // `turnId`, before `finalize`, outside the `catchCause`/`onExit` net the
+        // file documents as covering "EVERY exit from this turn". So it carries
+        // its OWN failure handling: a message that cannot even be prepared is
+        // NOT DELIVERED and must say so. Letting the error escape produced no
+        // turn events, an unclassified error at the reactor, and — worst — no
+        // mark at all, leaving the balloon silent forever.
+        const resolved = yield* Effect.exit(resolveAttachmentBlocks(input));
+        if (Exit.isFailure(resolved)) {
+          const unpreparable: MidTurnQueueItem = {
+            id: yield* cryptoUuid,
+            text: text ?? "",
+            content: [],
+            ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+          };
+          yield* Effect.logWarning("[qwen-adapter] mid-turn message could not be prepared", {
+            threadId: input.threadId,
+            cause: Cause.pretty(resolved.cause),
+          });
+          // Surfaced to the user as the standard not-delivered mark rather than
+          // swallowed — the message never reached the queue, let alone a model.
+          yield* emitDeliveryMarks(input.threadId, [unpreparable], "not-delivered");
+          return {
+            threadId: input.threadId,
+            turnId: activeTurnId ?? ctx.lastTurnId ?? TurnId.make(yield* cryptoUuid),
+            ...(ctx.session.resumeCursor !== undefined
+              ? { resumeCursor: ctx.session.resumeCursor }
+              : {}),
+          };
+        }
+        const attachmentBlocks = resolved.value;
+        const content: Array<EffectAcpSchema.ContentBlock> = [
+          ...(text ? [{ type: "text" as const, text }] : []),
+          ...attachmentBlocks,
+        ];
+        const item: MidTurnQueueItem = {
+          id: yield* cryptoUuid,
+          text: text ?? "",
+          content,
+          // ru-code (phase 4, m8): carry the turn-shaping options so a mid-turn
+          // model switch or plan-mode toggle is not silently discarded.
+          turnOptions: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            ...(input.interactionMode !== undefined
+              ? { interactionMode: input.interactionMode }
+              : {}),
+            ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+          },
+          // ru-code (P3c): the orchestration row this mark will address.
+          ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+        };
+        midTurnQueue.enqueue(input.threadId, item);
+        // PENDING at the send point — the balloon shows its clock immediately,
+        // while the message genuinely has not been handed to the model yet.
+        yield* emitDeliveryMarks(input.threadId, [item], "pending");
+        yield* Effect.logDebug("[qwen-adapter] mid-turn message queued", {
+          threadId: input.threadId,
+          turnId: activeTurnId,
+          queued: midTurnQueue.size(input.threadId),
+        });
+        return {
+          threadId: input.threadId,
+          // The claim may be held by a dispatch that has not published its
+          // turnId yet; fall back to the last known turn so the caller always
+          // gets a usable id.
+          turnId: activeTurnId ?? ctx.lastTurnId ?? TurnId.make(yield* cryptoUuid),
+          ...(ctx.session.resumeCursor !== undefined
+            ? { resumeCursor: ctx.session.resumeCursor }
+            : {}),
+        };
+      });
+
+    /**
+     * ru-code (mid-turn wave, phase 3): `sendTurn` widened with one internal,
+     * ru-code-owned parameter. `flushItems`, when present, means "this call IS
+     * the turn-end flush of these already-queued messages" — it skips the
+     * mid-turn guard (there is no turn running any more) and builds the prompt
+     * from the items instead of `input.input`, so each queued message stays its
+     * own ContentBlock and message boundaries survive the flush.
+     *
+     * The public `sendTurn` below is the same function with the parameter
+     * omitted, so `QwenAdapterShape` is untouched.
+     */
+    const sendTurnInternal = (
+      input: Parameters<QwenAdapterShape["sendTurn"]>[0],
+      flushItems?: ReadonlyArray<MidTurnQueueItem>,
+      // ru-code: the annotation is REQUIRED, not decorative — `flushMidTurnQueue`
+      // calls back into this function, so without it TS cannot break the
+      // inference cycle and falls back to `any` (TS7023).
+    ): ReturnType<QwenAdapterShape["sendTurn"]> =>
+      Effect.gen(function* () {
+        // ru-code (mid-turn wave): a send that lands while a turn is running is
+        // QUEUED for the drain / turn-end flush — never dispatched. A flush is
+        // exempt: it runs after the turn settled and is the delivery itself.
+        if (flushItems === undefined) {
+          const queued = yield* tryQueueMidTurnMessage(input);
+          if (queued !== undefined) return queued;
+        }
+
+        // ru-code (phase 4b, O1): CLAIM the thread's dispatch slot.
+        //
+        // Check-and-set with no yield between, so it is atomic against other
+        // fibers. Whoever loses does NOT dispatch — a second `session/prompt`
+        // on a live session aborts the first (Session.ts:2285), which is the
+        // damage the whole wave exists to prevent, and the forked turn-end
+        // flush skips the mid-turn guard BY CONSTRUCTION (`flushItems` is always
+        // defined for it) so it cannot self-correct.
+        // The token is minted BEFORE the check so that the check and the set
+        // remain adjacent with no `yield*` between them — that adjacency is what
+        // makes the claim atomic across fibers, and minting inline would have
+        // broken it.
+        // ru-code (phase 4c): COMPACTION IS NOT A TURN, and a send during one
+        // has its own long-standing contract — the B5 fail-fast, pinned by
+        // `hiddenCompress.e2e` and `compactionHistoryPipeline.e2e`: the send
+        // FAILS with "Context compaction is in progress" and emits a
+        // `turn.completed`. Taking the dispatch claim for compaction would have
+        // swallowed those sends into the queue instead, silently deleting that
+        // contract — which is exactly what happened on the first attempt here.
+        //
+        // So compaction is checked BEFORE the claim, and neither branch claims:
+        //   - a FLUSH requeues (its messages stay pending and ride a later
+        //     flush — losing them to `not-delivered` would be a real regression
+        //     for something that is only waiting);
+        //   - an ordinary send falls through WITHOUT claiming and meets the B5
+        //     fail-fast further down, exactly as before this wave. Not claiming
+        //     is what makes it impossible to leak a claim on that path.
+        const compactionCtx = sessions.get(input.threadId);
+        if (compactionCtx?.hiddenCompressActive === true && flushItems !== undefined) {
+          midTurnQueue.requeueFront(input.threadId, flushItems);
+          yield* Effect.logDebug("[qwen-adapter] flush deferred — compaction in progress", {
+            threadId: input.threadId,
+            messages: flushItems.length,
+          });
+          return {
+            threadId: input.threadId,
+            turnId: compactionCtx.activeTurnId ?? TurnId.make(yield* cryptoUuid),
+          };
+        }
+
+        const dispatchToken = yield* cryptoUuid;
+        let dispatchClaim: { readonly ctx: QwenSessionContext; readonly token: string } | undefined;
+        const dispatchCtx =
+          compactionCtx?.hiddenCompressActive === true ? undefined : sessions.get(input.threadId);
+        // ru-code (phase 4e, FRESH-I): route off the PRIMITIVE's refusal.
+        //
+        // This used to pre-check the field inline and then call
+        // `claimDispatchSlot` while discarding its return — so the adapter's
+        // dispatch decision consulted its own copy of the exclusion rule, not
+        // the primitive's, and a refusal would have been recorded as a held
+        // claim. Both halves are gone: the claim attempt IS the decision, and
+        // `dispatchClaim` is only recorded when the slot is genuinely ours.
+        if (dispatchCtx !== undefined) {
+          if (!claimDispatchSlot(dispatchCtx, dispatchToken)) {
+            if (flushItems !== undefined) {
+              // A flush that lost: put the messages BACK, oldest-first, and let
+              // the winning turn's own end-of-turn flush carry them. They keep
+              // their pending mark, which is the truth — they have not been
+              // delivered.
+              midTurnQueue.requeueFront(input.threadId, flushItems);
+              yield* Effect.logDebug("[qwen-adapter] flush lost the dispatch race — requeued", {
+                threadId: input.threadId,
+                messages: flushItems.length,
+              });
+              return {
+                threadId: input.threadId,
+                turnId: dispatchCtx.activeTurnId ?? TurnId.make(yield* cryptoUuid),
+              };
+            }
+            // An ordinary send that lost: queue it, exactly as a mid-turn send.
+            const late = yield* tryQueueMidTurnMessage(input);
+            if (late !== undefined) return late;
+            // ru-code (phase 4c, FRESH-C): and if it could not even be queued
+            // (an empty send), STILL return. Falling through here would proceed
+            // as a full turn and its `finalize` would release a claim this turn
+            // never took, re-opening the very window the claim exists to close.
+            return {
+              threadId: input.threadId,
+              turnId: dispatchCtx.activeTurnId ?? TurnId.make(yield* cryptoUuid),
+            };
+          }
+          dispatchClaim = { ctx: dispatchCtx, token: dispatchToken };
+          // ru-code (agentic-flow wave, P3d): DISPATCH BANKING.
+          //
+          // qwen's `prompt()` aborts the in-flight notification pseudo-turn and
+          // discards its whole queue outright (research §10.4/§11.5) — a user
+          // send at the wrong moment silently destroys an undelivered
+          // completion. We cannot stop that on qwen's side; what we CAN
+          // guarantee is that whatever already reached us is closed and
+          // persisted before the prompt goes out, instead of sitting open in a
+          // message that the new turn is about to talk over.
+          //
+          // Rides the claim deliberately: the claim is the one point every
+          // prompt producer passes through (ordinary send, mid-turn flush and
+          // `compactContext` all take it), so banking here cannot be bypassed by
+          // adding a fourth producer later.
+          yield* bankBackgroundItem(dispatchCtx);
+        }
         // ru-code: turnId + turn.started are the genuine FIRST acts — emitted
         // BEFORE requireSession — so EVERY exit from this turn (a requireSession
         // / D2 failure, a validation / D1 failure, a prompt failure, a defect,
@@ -2615,6 +4406,17 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             if (finalized) return; // check-and-set, no yield between ⇒ atomic
             finalized = true;
             if (activeCtx) activeCtx.activeTurnId = undefined; // clear the active turn marker
+            // ru-code (agentic-flow wave, P3d): bank at the turn boundary too.
+            //
+            // A completion can land MID-TURN — qwen defers the pseudo-turn while
+            // our prompt is in flight, but a delivery already underway when the
+            // prompt arrives keeps emitting (research §11.5). Its `end_turn` is
+            // then the thing qwen aborts, so the message would stay open with
+            // its text stuck in ingestion's buffer, invisible to every client
+            // reading persisted state until something unrelated flushed it
+            // (bg-probe/run7.log §1.3). The turn settling is that "something",
+            // made deliberate.
+            if (activeCtx) yield* bankBackgroundItem(activeCtx);
             const { timelineText, ...payload } = opts;
             // ru-code: Timeline surface → a failed-task work-log row carrying the
             // exact classified text as its summary, emitted BEFORE the
@@ -2644,6 +4446,55 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             });
             // Release abortSession's ordering barrier (I5): a `session.exited`
             // may now safely follow this `turn.completed` on the same consumer.
+            // ru-code (phase 4, M2 + M4): TERMINALISE THE QUEUE HERE.
+            //
+            // `finalize` is the single choke point every turn exit passes
+            // through — success, failure, cancel, defect and external interrupt
+            // all reach it (it is the sole writer of `turn.completed`). Two
+            // distinct populations need terminalising:
+            //
+            //  1. `flushItems` — the messages THIS turn is carrying, when it is
+            //     a flush turn. Their mark must follow the turn's real outcome,
+            //     which is only known here: `sendTurnInternal` RECOVERS a failed
+            //     turn into a successful return, so the flush's caller cannot
+            //     see the failure from its exit at all. That is why the marks
+            //     moved here from `flushMidTurnQueue`.
+            //  2. anything still QUEUED on a non-success exit. A failed turn
+            //     does not end the session — the classifier exists to keep the
+            //     thread usable — so without this the messages keep a pending
+            //     clock forever AND are injected into the next, unrelated turn.
+            // ru-code (phase 4c, FRESH-A/FRESH-C): release the dispatch claim
+            // off the CLAIMED HANDLE, and only if we still own it.
+            //
+            // Releasing through `activeCtx` was the bug: that is assigned ~200
+            // lines after the claim, so any early return in between — notably
+            // the `hiddenCompressActive` fail-fast, which the wave's own forked
+            // compaction makes ordinary — skipped the release and bricked the
+            // thread. `dispatchClaim` is captured AT the claim, so the release
+            // no longer depends on how far the turn got. The owner check makes a
+            // non-claimant turn unable to release someone else's claim.
+            if (dispatchClaim !== undefined) {
+              releaseDispatchSlot(dispatchClaim.ctx, dispatchClaim.token);
+            }
+            const delivered = opts.state === "completed";
+            if (flushItems !== undefined && flushItems.length > 0) {
+              yield* emitDeliveryMarks(
+                input.threadId,
+                flushItems,
+                delivered ? "delivered" : "not-delivered",
+              );
+            }
+            if (!delivered) {
+              const stranded = midTurnQueue.reset(input.threadId);
+              if (stranded.length > 0) {
+                yield* Effect.logDebug("[qwen-adapter] turn did not complete — queue reset", {
+                  threadId: input.threadId,
+                  state: opts.state,
+                  stranded: stranded.length,
+                });
+                yield* emitDeliveryMarks(input.threadId, stranded, "not-delivered");
+              }
+            }
             yield* Deferred.succeed(turnFinalized, undefined);
           });
 
@@ -2762,7 +4613,19 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           };
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-          if (input.input?.trim()) {
+          // ru-code (mid-turn wave, phase 3): a FLUSH carries the queued
+          // messages as ONE ContentBlock EACH, so the boundaries the user typed
+          // survive into the next turn instead of being joined into one blob.
+          // The composer reminder is deliberately not re-applied — these texts
+          // were already accepted verbatim when they were queued.
+          if (flushItems !== undefined) {
+            // ru-code (phase 4, M1): the queued BLOCKS, not just the text — an
+            // attachment must survive the flush route exactly as it survives
+            // the drain route.
+            for (const queued of flushItems) {
+              promptParts.push(...queued.content);
+            }
+          } else if (input.input?.trim()) {
             // ru-code: strip the chip fences AND inject the right system-reminder (single skill/agent,
             // or a CHAIN reminder for 2+ chips) in one step; see buildComposerReminder.
             const composerReminder = buildComposerReminder(input.input.trim());
@@ -2773,36 +4636,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             }
             promptParts.push({ type: "text", text: composerReminder.text });
           }
-          if (input.attachments && input.attachments.length > 0) {
-            for (const attachment of input.attachments) {
-              const attachmentPath = resolveAttachmentPath({
-                attachmentsDir: serverConfig.attachmentsDir,
-                attachment,
-              });
-              if (!attachmentPath) {
-                return yield* new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "session/prompt",
-                  detail: `Invalid attachment id '${attachment.id}'.`,
-                });
-              }
-              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "session/prompt",
-                      detail: cause.message,
-                      cause,
-                    }),
-                ),
-              );
-              promptParts.push({
-                type: "image",
-                data: Buffer.from(bytes).toString("base64"),
-                mimeType: attachment.mimeType,
-              });
-            }
+          // ru-code (phase 4, M1): the SAME resolver the mid-turn enqueue uses,
+          // so a queued message and an immediately-sent one carry identical
+          // blocks. A flush already holds resolved blocks, so it skips this.
+          if (flushItems === undefined) {
+            promptParts.push(...(yield* resolveAttachmentBlocks(input)));
           }
 
           if (promptParts.length === 0) {
@@ -3082,6 +4920,16 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             yield* maybeAutoCompactAfterTurn(input.threadId).pipe(Effect.forkIn(layerScope));
           }
 
+          // ru-code (mid-turn wave, phase 3): deliver anything the drain did not
+          // take. Runs AFTER `finalize` above, so `activeTurnId` is already
+          // cleared and the flush is an ordinary next turn, never a second
+          // prompt on a live one. A CANCELLED turn is skipped on purpose: a stop
+          // RESETS the queue (nothing auto-fires after a stop), which the
+          // teardown path does.
+          if (result.stopReason !== "cancelled") {
+            yield* flushMidTurnQueue(input.threadId).pipe(Effect.forkIn(layerScope));
+          }
+
           return {
             threadId: input.threadId,
             turnId,
@@ -3133,6 +4981,84 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         );
       });
 
+    /**
+     * ru-code (mid-turn wave, phase 3): the public shape — `sendTurnInternal`
+     * with the flush parameter omitted. `QwenAdapterShape` is unchanged.
+     */
+    const sendTurn: QwenAdapterShape["sendTurn"] = (input) => sendTurnInternal(input);
+
+    /**
+     * ru-code (mid-turn wave, phase 3): THE TURN-END FLUSH.
+     *
+     * Anything still queued when a turn settles is delivered as the NEXT
+     * `session/prompt`. This is the ONLY delivery route that exists against an
+     * engine that never polls (qwen 0.13.1 has no drain at all — no
+     * `craft/drainMidTurnQueue`, no `packages/acp-bridge`), and it is also the
+     * catch-all for a turn too short to reach a tool-round boundary, or one
+     * whose drain channel was permanently disabled by the 3-strike /
+     * -32601 latch (Session.ts:4774-4783).
+     *
+     * Ordering matters and is the thing R7 pins: this runs AFTER the turn has
+     * finalized, so the flush prompt can never be the second prompt of a live
+     * turn (which would abort it at qwen, Session.ts:2285).
+     */
+    const flushMidTurnQueue = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const pending = midTurnQueue.takeAllForFlush(threadId);
+        if (pending.length === 0) return;
+        yield* Effect.logDebug("[qwen-adapter] flushing mid-turn queue as next turn", {
+          threadId,
+          messages: pending.length,
+        });
+        // ru-code (phase 4, M4): mark AFTER the handoff actually succeeded.
+        //
+        // This used to emit `delivered` FIRST and swallow the send's failure
+        // into a log line — precisely the lie this file's own rule forbids
+        // ("Emitted at the moment of ACTUAL HANDOFF, never at send time").
+        // Because `delivered` renders NOTHING, a failed flush was
+        // indistinguishable from a message that genuinely landed.
+        //
+        // Boundaries survive: `sendTurnInternal` builds one ContentBlock per
+        // item rather than joining them into a single string.
+        // The marks are emitted by the flush TURN's own `finalize`, keyed off
+        // its real outcome — not here. `sendTurnInternal` recovers a failed turn
+        // into a successful return, so an exit check at this call site cannot
+        // tell a delivered flush from a rejected one, which is exactly how the
+        // pre-fix code reported `delivered` for a prompt the model never saw.
+        // ru-code (phase 4, m8): re-apply the options the FIRST queued message
+        // carried. The flush is one turn, so one set of options applies; taking
+        // the earliest is the least surprising choice and matches the order the
+        // user sent them in.
+        // ru-code (phase 4b, FR7): no cast — the item holds the real contract
+        // types, so a change to `ProviderSendTurnInput` is a type error here
+        // rather than a silent mismatch at runtime.
+        const flushOptions = pending[0]?.turnOptions ?? {};
+        yield* sendTurnInternal(
+          {
+            threadId,
+            input: pending[0]?.text ?? "",
+            ...(flushOptions.modelSelection !== undefined
+              ? { modelSelection: flushOptions.modelSelection }
+              : {}),
+            ...(flushOptions.interactionMode !== undefined
+              ? { interactionMode: flushOptions.interactionMode }
+              : {}),
+            ...(flushOptions.runtimeMode !== undefined
+              ? { runtimeMode: flushOptions.runtimeMode }
+              : {}),
+          },
+          pending,
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("[qwen-adapter] mid-turn flush failed", {
+              threadId,
+              messages: pending.length,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      });
+
     const interruptTurn: QwenAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
@@ -3157,8 +5083,17 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     // throw — no row exists yet, the reactor's failure activity is the surface.
     const compactContext: NonNullable<QwenAdapterShape["compactContext"]> = (threadId) =>
       Effect.gen(function* () {
+        // ru-code (phase 4c, FRESH-B): compaction is the THIRD producer of
+        // `session/prompt` (it dispatches `/compress` below), and it was guarded
+        // by `activeTurnId` ALONE — verbatim the predicate the dispatch claim
+        // exists because it is insufficient. `activeTurnId` is not set until
+        // ~200 lines into a turn, so a forked flush that had already claimed the
+        // slot was invisible here and both fibers could prompt at once
+        // (Session.ts:2285 then aborts one). Mint the token before the check so
+        // the check-and-set stays adjacent, exactly as `sendTurnInternal` does.
+        const compactToken = yield* cryptoUuid;
         const ctx = yield* requireSession(threadId);
-        if (ctx.activeTurnId !== undefined) {
+        if (ctx.activeTurnId !== undefined || isDispatchSlotHeld(ctx)) {
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "session/prompt",
@@ -3174,6 +5109,26 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           });
         }
         if (ctx.hiddenCompressActive) return; // one compaction at a time
+        // Take the SAME claim every other producer takes, so a concurrent
+        // `sendTurnInternal` sees the slot held and queues instead of
+        // dispatching. Released in this function's own finalizer below.
+        // ru-code (phase 4e, FRESH-I): honour the refusal here too. The guard
+        // above already refuses a held slot, so this cannot fire today — but the
+        // primitive's contract says a refusal means MUST NOT dispatch, and a
+        // caller that discards it is one edit away from dispatching on a claim
+        // it does not hold. Refusing here keeps `hiddenCompressActive` off as
+        // well, so no state is left half-set.
+        if (!claimDispatchSlot(ctx, compactToken)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/prompt",
+            detail: "Context compaction isn't available while a turn is running.",
+          });
+        }
+        // ru-code (agentic-flow wave, P3d): the THIRD prompt producer banks too.
+        // The rule is "every dispatch, not every send" — a compaction prompt
+        // destroys qwen's notification queue exactly like a user's does.
+        yield* bankBackgroundItem(ctx);
         ctx.hiddenCompressActive = true;
         ctx.hiddenCompressOutcome = undefined;
 
@@ -3314,6 +5269,12 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           Effect.onExit(() =>
             Effect.gen(function* () {
               ctx.hiddenCompressActive = false;
+              // ru-code (phase 4c, FRESH-B): release the dispatch claim on the
+              // SAME guaranteed path — onExit runs on interruption too, which is
+              // exactly the lesson FRESH-A taught about releasing off a path that
+              // an early return can skip. Owner-checked, so a claim taken by a
+              // turn is never released here.
+              releaseDispatchSlot(ctx, compactToken);
               if (compactionRowClosed) return;
               yield* completeTask({ status: "stopped", summary: "Compaction interrupted." });
             }),
@@ -3493,6 +5454,87 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         return { threadId, turns: ctx.turns };
       });
 
+    /**
+     * ru-code (agentic-flow wave, P3e): stop ONE background agent.
+     *
+     * `qwen/control/session/task/cancel` is raw-ACP reachable — it is a `case`
+     * in `acpAgent.ts`'s own `extMethodInternal` switch (:9373), not a daemon
+     * route (research §14.1). All THREE params are required and validated;
+     * `taskKind` in particular has no default and anything outside
+     * `agent|shell|monitor` is an `invalidParams` rejection (:9388-9397), which
+     * is why it is sent explicitly rather than left to a default that does not
+     * exist.
+     *
+     * The reply is never an error for a no-op: an unknown or already-terminal
+     * task answers `{cancelled:false, reason}` (:9415). We therefore do not fail
+     * the caller on a refusal — a stop the user pressed a moment too late is
+     * not an error condition, it is the task having finished first.
+     *
+     * The ROW is not settled here. `cancel()` mutates the live registry entry
+     * (:9420 → background-tasks.ts:919) and `serializeAgentTask` reads that same
+     * object (§14.1, object identity), so the next poll reports `cancelled` and
+     * the row settles through the one path every other terminal takes. Writing
+     * a terminal here as well would be a second writer for the same fact.
+     */
+    const stopBackgroundTask: NonNullable<QwenAdapterShape["stopBackgroundTask"]> = (
+      threadId,
+      taskId,
+    ) =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        const sessionId = acpSessionIdOf(ctx);
+        // ru-code (ap-final T2): a cancel we never SENT must never report
+        // success — the caller's only feedback is the reactor's
+        // `provider.task.stop.failed` row, and that row is written from this
+        // effect's failure. Unreachable on the v0.21.1 path (the ctx is built
+        // with its resumeCursor already filled from `session/new`, `:3223`), so
+        // it is defence in depth, not an observed state — see
+        // `backgroundStopFailureSurface.e2e.test.ts`'s closing note.
+        if (sessionId === undefined) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: QWEN_SESSION_TASK_CANCEL_METHOD,
+            detail: `no live ACP session for thread ${threadId}`,
+          });
+        }
+        const answer = yield* ctx.acp
+          .request(QWEN_SESSION_TASK_CANCEL_METHOD, qwenTaskCancelParams({ sessionId, taskId }))
+          .pipe(
+            Effect.mapError((error) =>
+              mapAcpToAdapterError(PROVIDER, threadId, QWEN_SESSION_TASK_CANCEL_METHOD, error),
+            ),
+          );
+        const outcome = readQwenTaskCancelOutcome(answer);
+        yield* Effect.logDebug("[cli-adapter] background task cancel", {
+          threadId,
+          taskId,
+          cancelled: outcome.cancelled,
+          reason: outcome.reason ?? null,
+          status: outcome.status ?? null,
+        });
+        // ru-code (ap-final T2): qwen distinguishes its two refusals and so must
+        // we (acpAgent.ts:9408-9415, `reason = task ? 'not_running' :
+        // 'not_found'`). `not_running` is the documented idempotent no-op — the
+        // task already settled and the row is already showing its real terminal
+        // (ProviderAdapter.ts:89-92) — so it stays a success; making it a
+        // failure would put "Could not stop the agent" on screen every time a
+        // stop raced the agent's own completion. `not_found` is the opposite:
+        // the row the user pressed stop on does not exist in this session's
+        // registry, nothing was cancelled, and swallowing that is precisely the
+        // "I clicked and nothing happened, and nothing said anything" report.
+        if (!outcome.cancelled && outcome.reason === "not_found") {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: QWEN_SESSION_TASK_CANCEL_METHOD,
+            detail: `qwen has no background task ${taskId} in session ${sessionId}`,
+          });
+        }
+        // A cancel on a session whose poll had already stopped (everything was
+        // terminal, then the user pressed stop on a stale row) must still be
+        // able to observe the outcome.
+        if (outcome.cancelled) yield* ensureBackgroundPoll(ctx);
+      });
+
     const stopSession: QwenAdapterShape["stopSession"] = (threadId) =>
       withThreadLock(
         threadId,
@@ -3576,6 +5618,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
               // own call — before settleActiveTurnForTeardown interrupts the
               // notification fiber.
               yield* settleOpenSubAgentAsStopped(ctx);
+              // ru-code (agentic-flow wave, P3e): same reasoning as the sibling
+              // call in abortSessionTeardown — this fast path bypasses it.
+              yield* stopBackgroundPoll(ctx);
+              yield* settleBackgroundTasksAsStopped(ctx);
+              yield* bankBackgroundItem(ctx);
               yield* settleActiveTurnForTeardown(ctx, MAINTENANCE_METHOD);
             }),
           { concurrency: "unbounded", discard: true },
@@ -3654,6 +5701,7 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
       sendTurn,
       interruptTurn,
       compactContext, // ru-code
+      stopBackgroundTask, // ru-code (agentic-flow wave)
       readThread,
       rollbackThread,
       respondToRequest,

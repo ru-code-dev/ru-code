@@ -350,6 +350,15 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
     }),
   };
   for (const key of [
+    // ru-code (agentic-flow wave, live-issues T2): a DECLARED member of the
+    // contract's linkage bundle (providerRuntime.ts:583-591) that this copier
+    // never carried, so `task.started` / `task.progress` / `task.completed`
+    // dropped it and every background row folded to `isBackgrounded: false` —
+    // no stop square on a running agent (AgentStopButton.tsx:29). Only
+    // `task.updated`'s hand-spread (:694-696), the vestige of the field's old
+    // home, survived; ClaudeAdapter emits it there alone (:3301-3303), which is
+    // why the loss read as qwen-specific.
+    "isBackgrounded",
     "taskType",
     "agentId",
     "title",
@@ -1532,6 +1541,22 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
+
+      // ru-code (mid-turn wave, P3c): the adapter announcing that ONE queued
+      // message changed delivery state. Handled first and returned early — it
+      // touches no lifecycle, no turn, no activity row; it only marks a message
+      // row, via the same re-emission path the assistant pair uses.
+      if (event.type === "message.delivery-state") {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.delivery-state",
+          commandId: yield* providerCommandId(event, "message-delivery-state"),
+          threadId: thread.id,
+          messageId: MessageId.make(event.payload.messageId),
+          deliveryState: event.payload.deliveryState,
+          createdAt: event.createdAt,
+        });
+        return;
+      }
 
       let loadedThreadDetail: OrchestrationThread | null | undefined;
       const getLoadedThreadDetail = () =>

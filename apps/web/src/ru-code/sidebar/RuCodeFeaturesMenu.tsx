@@ -6,17 +6,21 @@ import { SidebarMenu } from "~/components/ui/sidebar";
 import { SidebarAutoUpdatePill } from "../auto-update-ui/notify/SidebarAutoUpdatePill";
 import { GlobalPanelNav } from "../skills-agents/rightGlobalPanel";
 
+// ru-code: owner decision — every panel trigger lives in the footer icon rows now
+// (SidebarChrome). The text-menu variant is KEPT, gated off, for later reuse.
+const PANEL_TEXT_MENU_ENABLED = false;
+
 export function RuCodeFeaturesMenu() {
   return (
     <>
       {/* ru-code: auto-update availability pill — folded in from SidebarChrome's footer. */}
       <SidebarAutoUpdatePill />
-      {/* ru-code: skills/agents/commands/MCP nav — moved here from the sidebar body for
-          persistent visibility. All four rows stay visible; GlobalPanelNav renders them with
-          t3's own SidebarMenuButton at its default size (no fork styling). */}
-      <SidebarMenu>
-        <GlobalPanelNav />
-      </SidebarMenu>
+      {/* ru-code: text-menu panel nav — gated off (see PANEL_TEXT_MENU_ENABLED), not deleted. */}
+      {PANEL_TEXT_MENU_ENABLED && (
+        <SidebarMenu>
+          <GlobalPanelNav />
+        </SidebarMenu>
+      )}
     </>
   );
 }

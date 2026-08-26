@@ -71,6 +71,24 @@ describe("install logging", () => {
     }
   });
 
+  it("captures the preflight's own stderr report into the journal (2>/dev/null removed)", () => {
+    const sb = makeSandbox();
+    try {
+      const marker = "[preflight] report-marker-xyz\n";
+      const preflight = writeFakePreflight(sb, { ourRoot: sb.appRoot, report: marker });
+      writeFakeRelease(sb);
+      sb.write("home/.bashrc", "# shell\n");
+
+      const r = runInstaller(sb, { preflight });
+
+      expect(r.status).toBe(0);
+      const log = readLog(sb);
+      expect(log).toContain("report-marker-xyz");
+    } finally {
+      sb.cleanup();
+    }
+  });
+
   it("emits no raw ANSI to the screen on a non-TTY run", () => {
     const sb = makeSandbox();
     try {

@@ -4,7 +4,7 @@
 /** Fixed loopback port the background daemon binds by default (overridable via --port). */
 export const DEFAULT_DAEMON_PORT = 7777;
 
-/** Loopback host the daemon always binds — never a wildcard (corporate no-open-bind rule). */
+/** Loopback host the daemon always binds — never a wildcard. */
 export const DEFAULT_DAEMON_HOST = "127.0.0.1";
 
 /**

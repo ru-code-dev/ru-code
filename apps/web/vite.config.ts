@@ -181,6 +181,12 @@ export default defineConfig(() => {
         "@clerk/clerk-js",
         "@clerk/react/internal",
         "@pierre/diffs",
+        // ru-code: dnd-kit keeps its drag state in a React CONTEXT — two copies means the
+        // pixso gallery's sortable items register with a different provider than the one
+        // that renders, and every drag silently no-ops (H-L13).
+        "@dnd-kit/core",
+        "@dnd-kit/sortable",
+        "@dnd-kit/utilities",
         "@pierre/diffs/editor",
         "@pierre/diffs/react",
         "@pierre/diffs/worker/worker.js",

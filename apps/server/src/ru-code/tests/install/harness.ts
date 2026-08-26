@@ -218,6 +218,10 @@ export function writeFakePreflight(
     readonly legacyRoot?: string;
     /** qwen bin path emitted as CLI_JS (drives the warm-up). Omitted → CLI_JS not emitted. */
     readonly cliJs?: string;
+    /** HOW the warm-up runs CLI_JS, emitted as CLI_SPAWN_KIND. Omitted → not emitted (≡node). */
+    readonly cliSpawnKind?: "node" | "cmd" | "direct";
+    /** Package-identity value emitted as CLI_IDENTITY (exported into the warm-up env). */
+    readonly cliIdentity?: string;
     /** qwen profile dir emitted as CONFIG_DIR (the warm-up target). */
     readonly configDir?: string;
     /** Linux-relocation alternative profile dir emitted as CONFIG_DIR_ALT. */
@@ -229,8 +233,9 @@ export function writeFakePreflight(
     readonly checkNode?: "ok" | "fail";
     readonly checkGit?: "ok" | "fail";
     readonly checkCli?: "ok" | "fail";
-    /** CLI-engine kind: missing (→cli-install) / old (→cli-update). Defaults from checkCli. */
-    readonly checkCliKind?: "ok" | "old" | "missing";
+    /** CLI-engine kind: missing (→cli-install) / old (→cli-update) / broken (→cli-broken) /
+     * slow (→cli-slow). Defaults from checkCli. */
+    readonly checkCliKind?: "ok" | "old" | "missing" | "broken" | "slow";
   } = {},
 ): string {
   const emit = opts.emitKeys ?? true;
@@ -241,6 +246,8 @@ export function writeFakePreflight(
     lines.push(`APP_BIN=${opts.appBin ?? "ru-code"}`);
     lines.push(`NODE_OK=${nodeOk}`);
     if (opts.cliJs !== undefined) lines.push(`CLI_JS=${opts.cliJs}`);
+    if (opts.cliSpawnKind !== undefined) lines.push(`CLI_SPAWN_KIND=${opts.cliSpawnKind}`);
+    if (opts.cliIdentity !== undefined) lines.push(`CLI_IDENTITY=${opts.cliIdentity}`);
     if (opts.configDir !== undefined) lines.push(`CONFIG_DIR=${opts.configDir}`);
     if (opts.configDirAlt !== undefined) lines.push(`CONFIG_DIR_ALT=${opts.configDirAlt}`);
     if (opts.legacyRoot !== undefined) lines.push(`LEGACY_ROOT=${opts.legacyRoot}`);

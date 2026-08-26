@@ -584,9 +584,26 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     return true;
   }
 
-  return (
-    latestTurnChanged ||
-    input.localDispatch.sessionStatus !== (session?.status ?? null) ||
-    input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
-  );
+  // ru-code (agentic-flow wave, ap-final T3): the dispatch is answered by the
+  // TURN, never by a bare session touch.
+  //
+  // This used to also return true on any `session.status` or `session.updatedAt`
+  // change. After a Stop the next send must re-create the session
+  // (`stopped → starting → ready → running`), and `stopped → starting` is such a
+  // change — arriving long before `turn.started`. Acknowledging there released
+  // the local dispatch mid-respawn, which nulls BOTH `isSendBusy` (ChatView.tsx:641)
+  // and `localDispatchStartedAt` (`:639`). With `phase` still "connecting" and
+  // `isConnecting` dead (`:1405`), `isWorking` went false and the working row
+  // unmounted; and had it stayed up, its timer start was gone too, rendering the
+  // static «Работаю…» (MessagesTimeline.tsx:1303-1310). One predicate, both of
+  // the owner's symptoms.
+  //
+  // The bar is now the same one the running branch above already applies: the
+  // turn the dispatch asked for must exist AND have started. A send that never
+  // produces a turn is not stranded here — `threadError` and pending approvals
+  // short-circuit at the top (`:548-550`).
+  if (!latestTurnChanged) {
+    return false;
+  }
+  return latestTurn !== null && latestTurn.startedAt !== null;
 }

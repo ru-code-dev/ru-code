@@ -38,6 +38,7 @@ import { isElectron } from "../../env";
 import { useOpenInPreferredEditor } from "../../editorPreferences";
 import { formatShortcutLabel } from "../../keybindings";
 import { cn } from "../../lib/utils";
+import { keybindingConflictDescription } from "../../ru-code/keybindings/conflictDescription"; // ru-code
 import {
   primaryServerAvailableEditorsAtom,
   primaryServerKeybindingsAtom,
@@ -268,10 +269,7 @@ function UnknownWhenVariableWarning({
 
 function KeybindingConflictWarning({ labels }: { labels: ReadonlyArray<string> }) {
   if (labels.length === 0) return null;
-  const description =
-    labels.length === 1
-      ? `Conflicts with ${labels[0]}.`
-      : `Conflicts with ${labels.slice(0, 3).join(", ")}${labels.length > 3 ? ", and more" : ""}.`;
+  const description = keybindingConflictDescription(labels); // ru-code: locale-aware, see conflictDescription.ts
 
   return (
     <Tooltip>

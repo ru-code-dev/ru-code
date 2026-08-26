@@ -11,7 +11,9 @@ import {
   parseKeybindingWhenExpression,
 } from "@t3tools/shared/keybindings";
 
+import { getLocale } from "@ru-code/localization"; // ru-code: locale-aware command labels
 import { isMacPlatform } from "../../lib/utils";
+import { localizedCommandLabel } from "../../ru-code/keybindings/commandLabels"; // ru-code
 
 export type KeybindingSource = "Default" | "Custom" | "Project";
 
@@ -267,10 +269,11 @@ export function buildKeybindingCommandOptions(
 
 export function commandLabel(command: KeybindingCommand): string {
   const raw = String(command);
-  if (raw.startsWith("script.") && raw.endsWith(".run")) {
-    return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;
-  }
-  return raw.split(".").map(titleCaseCommandSegment).join(": ");
+  const fallback =
+    raw.startsWith("script.") && raw.endsWith(".run")
+      ? `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`
+      : raw.split(".").map(titleCaseCommandSegment).join(": ");
+  return localizedCommandLabel(raw, fallback, getLocale()); // ru-code: RU display label, EN key unchanged
 }
 
 function titleCaseCommandSegment(segment: string): string {

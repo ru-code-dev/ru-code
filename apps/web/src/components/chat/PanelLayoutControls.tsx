@@ -3,6 +3,10 @@ import { memo } from "react";
 
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  rightPanelToggleAriaLabel,
+  rightPanelToggleTooltip,
+} from "../../ru-code/chat/panelToggleLabels"; // ru-code
 
 interface PanelLayoutControlsProps {
   showTerminalControl?: boolean;
@@ -66,11 +70,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               className="shrink-0 [-webkit-app-region:no-drag]"
               pressed={rightPanelOpen}
               onPressedChange={onToggleRightPanel}
-              aria-label={
-                liveAgentCount > 0
-                  ? `Toggle right panel, ${liveAgentCount} ${liveAgentCount === 1 ? "agent" : "agents"} working`
-                  : "Toggle right panel"
-              }
+              aria-label={rightPanelToggleAriaLabel(liveAgentCount)}
               variant="ghost"
               size="sm"
               disabled={!rightPanelAvailable}
@@ -89,11 +89,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
         />
         <TooltipPopup side="bottom">
           {rightPanelAvailable
-            ? `Toggle right panel${rightPanelShortcutLabel ? ` (${rightPanelShortcutLabel})` : ""}${
-                liveAgentCount > 0
-                  ? ` · ${liveAgentCount} ${liveAgentCount === 1 ? "agent" : "agents"} working`
-                  : ""
-              }`
+            ? rightPanelToggleTooltip(rightPanelShortcutLabel, liveAgentCount)
             : "Right panel is unavailable"}
         </TooltipPopup>
       </Tooltip>

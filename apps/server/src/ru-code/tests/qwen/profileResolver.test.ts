@@ -9,6 +9,7 @@ import { QwenSettings } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import {
+  buildQwenSpawnBaseEnv,
   formatQwenModelId,
   resolveCliProfileSettings,
   resolveDefaultAuthMethod,
@@ -16,7 +17,7 @@ import {
   type CliPreflight,
 } from "../../qwen/profileResolver.ts";
 import { buildCliSpawn, isJsEntry } from "@ru-code/qwen/spawn";
-import { resolveCliProfile } from "@ru-code/branding";
+import { CLI_HOME_ENV_VAR, resolveCliProfile } from "@ru-code/branding";
 
 const decode = Schema.decodeSync(QwenSettings);
 // A realistic boot preflight: a fork's detected cli.js + its config dir.
@@ -264,5 +265,35 @@ describe("resolved bin → spawn shape (node vs direct command)", () => {
     const spawn = buildCliSpawn(r.bin, ["--acp"]);
     expect(spawn.command).toBe(process.execPath);
     expect(spawn.args).toEqual(["/opt/qwen/cli.js", "--acp"]);
+  });
+});
+
+// ru-code: QWEN_HOME injection — the ONE base env every qwen spawn (ACP cold,
+// warm slot, textgen, version probe) is built from in QwenDriver.create.
+describe("buildQwenSpawnBaseEnv — QWEN_HOME injection", () => {
+  it("injects the preflight CLI profile dir as QWEN_HOME", () => {
+    const env = buildQwenSpawnBaseEnv("/home/u/.qwen", { PATH: "/usr/bin" });
+    expect(env[CLI_HOME_ENV_VAR]).toBe("/home/u/.qwen");
+    expect(env["PATH"]).toBe("/usr/bin"); // base env preserved
+  });
+
+  it("wins over an inherited shell QWEN_HOME", () => {
+    const env = buildQwenSpawnBaseEnv("/home/u/.qwen", {
+      [CLI_HOME_ENV_VAR]: "/somewhere/else",
+    });
+    expect(env[CLI_HOME_ENV_VAR]).toBe("/home/u/.qwen");
+  });
+
+  it("an empty/blank dir injects nothing and returns the base env untouched", () => {
+    const base = { PATH: "/usr/bin" };
+    expect(buildQwenSpawnBaseEnv("", base)).toBe(base);
+    expect(buildQwenSpawnBaseEnv("   ", base)).toBe(base);
+    expect(buildQwenSpawnBaseEnv("", base)[CLI_HOME_ENV_VAR]).toBeUndefined();
+  });
+
+  it("does not mutate the provided base env", () => {
+    const base: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+    buildQwenSpawnBaseEnv("/home/u/.qwen", base);
+    expect(base[CLI_HOME_ENV_VAR]).toBeUndefined();
   });
 });

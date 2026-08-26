@@ -139,10 +139,35 @@ export const QWEN_KIND = "qwen";
 export const PREFLIGHT_CLI_PROBE_DIRNAME = `.qwen`;
 
 /**
+ * NODE_BIN_PATHS — WHERE the CLI-SHIPPED node runtime lives per platform (the ng CLI bundles its
+ * own node at a fixed path). One path per platform, `""` = no shipped runtime (probe skipped).
+ * Presence of this binary is the ng GENERATION MARKER: the preflight resolver reports
+ * `compatibility: "v2"` when it exists (preflight/common/resolve.ts → ServerConfig.cliCompatibility
+ * → plain ACP model ids, no textgen `--auth-type`), and the bash installer prefers it as
+ * `$NODE_PATH` (scripts/build-installer.ts injects this table as @@SHIPPED_NODE_*@@ tokens).
+ * Lives in branding — the shared leaf both the preflight and the installer build import — so the
+ * value exists ONCE. Filled per deployment, like the CLI probe paths.
+ */
+export const NODE_BIN_PATHS: Record<"darwin" | "linux" | "win32", string> = {
+  darwin: "/opt/gigacode/runtime/node/bin/node",
+  linux: "/opt/gigacode/runtime/node/bin/node",
+  win32: "", // fill per deployment (shipped-node path unknown for Windows yet)
+};
+
+/**
  * Env-var prefix the CLI reads for its system-settings path + no-relaunch flag.
  * A qwen fork edits this to its own prefix, same as the dot-dir above.
  */
 export const CLI_ENV_VAR_PREFIX = "QWEN_CODE";
+
+/**
+ * Env var carrying the CLI's profile (home) directory into every spawned CLI
+ * process — the absolute dir the boot preflight resolved (ServerConfig.cliConfigDir,
+ * e.g. `/Users/x/.qwen`). Injected at the driver's single spawn-env convergence
+ * point so ACP sessions, warm slots, text generation and the version probe all
+ * carry it. A qwen fork edits this to the name its build actually reads.
+ */
+export const CLI_HOME_ENV_VAR = "QWEN_HOME";
 
 /**
  * DEFAULT_PROVIDER_INSTANCE_ID — the single source of the app's default provider. This is a

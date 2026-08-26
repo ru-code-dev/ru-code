@@ -77,6 +77,10 @@ export class ServerConfig extends Context.Service<
     readonly cliJs: string;
     readonly cliConfigDir: string;
     readonly cliDetected: boolean;
+    // ru-code: CLI generation from the startup preflight — "v2" ⇔ the CLI-shipped
+    // node runtime exists (ng CLI: plain ACP model ids, no textgen --auth-type);
+    // "v1" keeps every legacy dispatch behavior.
+    readonly cliCompatibility: "v1" | "v2";
     readonly staticDir: string | undefined;
     readonly devUrl: URL | undefined;
     readonly devAllowedOrigins: ReadonlyArray<string>;
@@ -192,6 +196,8 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     cliJs: `${baseDir}/cli.js`,
     cliConfigDir: baseDir,
     cliDetected: true,
+    // ru-code: tests default to the legacy generation — v2 behavior is opted into per test.
+    cliCompatibility: "v1",
     ...derivedPaths,
     mode: "web",
     autoBootstrapProjectFromCwd: false,

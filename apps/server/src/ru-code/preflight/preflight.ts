@@ -50,9 +50,15 @@ const main = async (): Promise<void> => {
   process.stdout.write(`CONFIG_DIR=${resolution.configDir}\n`);
   process.stdout.write(`CONFIG_DIR_ALT=${resolution.configDirAlt}\n`);
   process.stdout.write(`SOURCE=${resolution.source}\n`);
+  // ru-code: shipped-node marker → CLI generation. Informational for the installer (bash resolves
+  // its own $NODE_PATH before node can run); the APP reads the same facts via resolveStartupQwenCli.
+  process.stdout.write(`NODE_BIN=${resolution.nodeBin}\n`);
+  process.stdout.write(`COMPATIBILITY=${resolution.compatibility}\n`);
   if (resolution.legacyRoot) process.stdout.write(`LEGACY_ROOT=${resolution.legacyRoot}\n`);
   writeInfo(`app root        : ${resolution.ourRoot}`);
   writeInfo(`CLI profile dir : ${resolution.configDir}  (создаётся при первом запуске)`);
+  if (resolution.nodeBin)
+    writeInfo(`node (shipped)  : ${resolution.nodeBin}  [${resolution.compatibility}]`);
 
   // qwen is a DEPENDENCY. Bin present → version-check (ok / old); bin MISSING → "missing". The bash
   // installer decides whether missing/old blocks (per CLI_FATAL). Skip the probe when node is out of

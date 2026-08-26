@@ -192,12 +192,40 @@ prep_temp() {
 # node floor (bash) + preflight (node, NO NODE_FLAGS)
 # ============================================================================
 check_node_floor() {
+  # ru-code: prefer the CLI-SHIPPED node runtime (fixed per-OS path, injected at build time from
+  # preflight's NODE_BIN_PATHS) over the OS node. Found+runnable ⇒ it becomes $NODE_PATH for the
+  # WHOLE flow (preflight, warm-up, the generated wrapper/env.sh launcher, launch_app) — the OS
+  # node is then not required at all. Missing/broken ⇒ the pre-existing OS-node flow, unchanged.
+  local shipped=""
+  case "$OS" in
+    darwin)  shipped="@@SHIPPED_NODE_DARWIN@@" ;;
+    linux)   shipped="@@SHIPPED_NODE_LINUX@@" ;;
+    windows) shipped="@@SHIPPED_NODE_WIN32@@" ;;
+  esac
+  if [ -n "$shipped" ] && [ -f "$shipped" ]; then
+    local sv
+    sv=$("$shipped" -v 2>/dev/null | sed 's/^v//')
+    if [ -n "$sv" ]; then
+      local sm
+      sm=$(printf '%s' "$sv" | cut -d. -f1)
+      case "$sm" in ''|*[!0-9]*) sm=0 ;; esac
+      if [ "$sm" -ge "$NODE_MIN_MAJOR" ]; then
+        NODE_PATH="$shipped"
+        log "node: shipped runtime $shipped (v$sv)"
+        return 0
+      fi
+      log "node: shipped runtime $shipped is v$sv (< $NODE_MIN_MAJOR) — falling back to OS node"
+    else
+      log "node: shipped runtime present at $shipped but not runnable — falling back to OS node"
+    fi
+  fi
   command_exists node || fail_recommendation node-install
   local v
   v=$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)
   case "$v" in ''|*[!0-9]*) v=0 ;; esac
   [ "$v" -ge "$NODE_MIN_MAJOR" ] || fail_recommendation node-update
   NODE_PATH="$(command -v node 2>/dev/null || printf 'node')"
+  log "node: OS runtime $NODE_PATH"
 }
 
 # The preflight ships INSIDE the bundle (extracted into the clone by phase_prepare), so we run the

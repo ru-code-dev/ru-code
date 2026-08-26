@@ -57,6 +57,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     cliJs: `${baseDir}/cli.js`, // ru-code
     cliConfigDir: baseDir, // ru-code
     cliDetected: true, // ru-code
+    cliCompatibility: "v1", // ru-code: tests default to the legacy generation
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,

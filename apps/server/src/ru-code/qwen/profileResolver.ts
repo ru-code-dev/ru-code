@@ -7,6 +7,7 @@
 
 import {
   asAuthMethodId,
+  CLI_HOME_ENV_VAR,
   resolveCliProfile,
   type AuthMethodId,
   type CliProfile,
@@ -42,6 +43,20 @@ export const resolveCliProfileSettings = (
   const dir = dirOverride.length > 0 ? dirOverride : (profile.dirDefault ?? preflight.cliConfigDir);
   return { profile, name: profile.name, artifact: profile.artifact, bin, dir };
 };
+
+/**
+ * ru-code: the base spawn env for EVERY qwen invocation — `baseEnv` plus
+ * {@link CLI_HOME_ENV_VAR} (`QWEN_HOME`) set to the preflight-resolved CLI profile
+ * dir. The dir is always absolute (built from `os.homedir()` by the resolver), so
+ * no path processing happens here; an empty dir injects nothing. The injected
+ * value wins over an inherited shell variable, while per-instance environment
+ * variables (merged AFTER this base in the driver) still override it.
+ */
+export const buildQwenSpawnBaseEnv = (
+  cliConfigDir: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv =>
+  cliConfigDir.trim().length > 0 ? { ...baseEnv, [CLI_HOME_ENV_VAR]: cliConfigDir } : baseEnv;
 
 /**
  * ru-code: the session-start ACP `authenticate` methodId for an instance —

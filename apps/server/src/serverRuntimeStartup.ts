@@ -49,6 +49,7 @@ import { runQwenBootSweep } from "./ru-code/startup/qwenBootSweep.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
+  isLoopbackHost,
   isWildcardHost,
   issueHeadlessServeAccessInfo,
 } from "./startupAccess.ts";
@@ -275,8 +276,13 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
   const localUrl = `http://localhost:${serverConfig.port}`;
+  // ru-code: a loopback bind (the daemon's default --host 127.0.0.1) displays and opens as
+  // `localhost` — browsers keep PER-ORIGIN security state (Chrome's per-site V8 toggle, Edge
+  // Enhanced Security run 127.0.0.1 jitless → no WebAssembly → the ghostty terminal dies)
+  // while `localhost` resolves to the same listener. Display/open only: the bind host, the
+  // persisted `origin`, and every CLI fetch target are untouched.
   const bindUrl =
-    serverConfig.host && !isWildcardHost(serverConfig.host)
+    serverConfig.host && !isWildcardHost(serverConfig.host) && !isLoopbackHost(serverConfig.host)
       ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
       : localUrl;
   const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;

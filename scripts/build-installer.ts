@@ -22,6 +22,7 @@ import {
   BRAND_GRADIENT_FROM,
   BRAND_GRADIENT_TO,
   SUPPORT_CHANNEL_URL,
+  NODE_BIN_PATHS,
   USE_RC_SOURCED_LAUNCHER,
 } from "@ru-code/branding";
 
@@ -55,6 +56,12 @@ const CONFIG: Record<string, string> = {
   APP_COMMAND, // bundle filename prefix, e.g. "ru-code"
   // Runtime
   NODE_FLAGS: "--experimental-sqlite --disable-warning=ExperimentalWarning",
+  // ru-code: CLI-SHIPPED node runtime — fixed per-OS paths the installer probes BEFORE falling
+  // back to the OS node. Injected straight from branding's NODE_BIN_PATHS (the single source,
+  // shared with the app's startup preflight). Empty = no shipped runtime (bash skips the probe).
+  SHIPPED_NODE_DARWIN: NODE_BIN_PATHS.darwin,
+  SHIPPED_NODE_LINUX: NODE_BIN_PATHS.linux,
+  SHIPPED_NODE_WIN32: NODE_BIN_PATHS.win32,
   NODE_ENGINE_RANGE,
   NODE_MIN_MAJOR: minMajorFromRange(NODE_ENGINE_RANGE),
   CLI_MIN_VERSION,

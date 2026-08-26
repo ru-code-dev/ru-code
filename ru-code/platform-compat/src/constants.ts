@@ -41,7 +41,7 @@ export const PORT_SCAN_WINDOWS_METHOD: "node" | "powershell" = "node";
  * The shipped value is set at release time and is whatever the declaration below says — this
  * comment describes the options only and never states which one is in force.
  */
-export const TERMINAL_UI_VISIBILITY: "all" | "hide-windows" | "hidden" = "hide-windows";
+export const TERMINAL_UI_VISIBILITY: "all" | "hide-windows" | "hidden" = "all";
 
 /**
  * Which shell the Windows terminal prefers. The chosen shell becomes the FIRST spawn

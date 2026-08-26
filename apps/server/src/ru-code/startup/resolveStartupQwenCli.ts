@@ -14,7 +14,7 @@
 // never runs twice.
 
 import { resolveQwenCli } from "../preflight/common/resolve.ts";
-import type { ResolveOptions } from "../preflight/common/types.ts";
+import type { CliCompatibility, ResolveOptions } from "../preflight/common/types.ts";
 
 export interface StartupQwenCli {
   /** Default base dir: resolver ourRoot when located, else `~/.<app>`. */
@@ -25,6 +25,8 @@ export interface StartupQwenCli {
   readonly cliConfigDir: string;
   /** True ⇒ enable the qwen provider; false ⇒ qwen disabled (non-fatal). */
   readonly cliDetected: boolean;
+  /** `"v2"` ⇔ the CLI-shipped node runtime was found (ng CLI dispatch rules). */
+  readonly cliCompatibility: CliCompatibility;
 }
 
 /**
@@ -40,5 +42,6 @@ export const resolveStartupQwenCli = (options: ResolveOptions = {}): StartupQwen
     cliJs: resolution.cliJs,
     cliConfigDir: resolution.configDir,
     cliDetected: resolution.cliDetected,
+    cliCompatibility: resolution.compatibility,
   };
 };

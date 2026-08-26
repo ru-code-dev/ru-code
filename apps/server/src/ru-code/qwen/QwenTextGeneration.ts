@@ -133,6 +133,12 @@ export interface QwenTextGenerationOptions {
    * persisted slug passes through untouched with the settings-resolved auth.
    */
   readonly getServedModels?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
+  /**
+   * ru-code: CLI generation (ServerConfig.cliCompatibility). "v2" (ng CLI) removed
+   * the `--auth-type` flag — a `-p` run gets `--model` only and the CLI resolves
+   * auth from its own registry. Absent/"v1" keeps the legacy flag pair.
+   */
+  readonly compatibility?: "v1" | "v2";
 }
 
 export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(function* (
@@ -161,6 +167,11 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
     const slug = model?.trim();
     if (!slug) {
       return [];
+    }
+    // ru-code (v2): the ng CLI rejects `--auth-type` ("Unknown arguments: auth-type")
+    // and resolves the model's auth itself — send `--model` alone.
+    if (options?.compatibility === "v2") {
+      return ["--model", slug];
     }
     return [
       "--model",

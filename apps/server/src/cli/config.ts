@@ -454,6 +454,7 @@ export const resolveServerConfig = (
       cliJs: process.env["RU_CODE_CLI_JS"] ?? qwenCli.cliJs, // ru-code
       cliConfigDir: qwenCli.cliConfigDir, // ru-code
       cliDetected: qwenCli.cliDetected, // ru-code
+      cliCompatibility: qwenCli.cliCompatibility, // ru-code: v2 ⇔ shipped node present (ng CLI)
       ...derivedPaths,
       serverTracePath,
       host,

@@ -23,6 +23,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { NODE_BIN_PATHS } from "@ru-code/branding";
+
 import { CLI_BIN_PATHS } from "../paths.ts";
 import { APP_DIR, CLI_DIR, LINUX_SAFE_DIR, LINUX_USE_SAFE_DIR_FOR_CLI } from "./constants.ts";
 import { expand } from "./expand.ts";
@@ -78,11 +80,23 @@ const resolveCliJs = (platformKey: PlatformKey, env: NodeJS.ProcessEnv): string 
   return "";
 };
 
+/**
+ * The CLI-SHIPPED node runtime, when its fixed per-platform path (NODE_BIN_PATHS) exists — the ng
+ * generation marker. `""` per platform disables the probe; a missing file just means "v1".
+ */
+const resolveNodeBin = (platformKey: PlatformKey, env: NodeJS.ProcessEnv): string => {
+  const pattern = NODE_BIN_PATHS[platformKey];
+  if (!pattern) return "";
+  const candidate = expand(pattern, env);
+  return isFile(candidate) ? candidate : "";
+};
+
 export const resolveQwenCli = (options: ResolveOptions = {}): CliResolution => {
   const platformKey = toPlatformKey(options.platform ?? process.platform);
   const env = options.env ?? process.env;
   const parents = resolveParents(platformKey);
   const cliJs = resolveCliJs(platformKey, env);
+  const nodeBin = resolveNodeBin(platformKey, env);
   return {
     ourRoot: path.join(parents.appParent, APP_DIR),
     configDir: path.join(parents.cliParent, CLI_DIR),
@@ -90,6 +104,9 @@ export const resolveQwenCli = (options: ResolveOptions = {}): CliResolution => {
     cliJs,
     cliDetected: cliJs !== "",
     source: cliJs !== "" ? "config-path" : "none",
+    nodeBin,
+    // ru-code: shipped node present ⇔ ng CLI ⇒ v2 dispatch (plain model ids, no --auth-type).
+    compatibility: nodeBin !== "" ? "v2" : "v1",
     ...(parents.reloc ? { legacyRoot: path.join(os.homedir(), APP_DIR) } : {}),
   };
 };

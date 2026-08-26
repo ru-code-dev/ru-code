@@ -43,7 +43,7 @@ import { QwenCompactionHistory } from "./compaction/QwenCompactionHistory.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { readAutoCompactContext } from "./autoCompactSetting.ts";
 // ru-code: resolve the instance's effective CLI identity (profile + settings + preflight).
-import { resolveCliProfileSettings } from "./profileResolver.ts";
+import { buildQwenSpawnBaseEnv, resolveCliProfileSettings } from "./profileResolver.ts";
 import { buildInitialQwenProviderSnapshot, checkQwenProviderStatus } from "./QwenProvider.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../../provider/makeManagedServerProvider.ts";
@@ -118,7 +118,14 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
       // ru-code: resolved cli.js + detection flag, threaded from the startup preflight.
       const serverConfig = yield* ServerConfig;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // ru-code: ALL qwen spawns (ACP cold sessions, warm slots, text generation,
+      // version probe) draw their env from this ONE merge — QWEN_HOME is injected
+      // into the base here so every invocation carries the preflight-resolved CLI
+      // profile dir; explicit per-instance env vars still override it.
+      const processEnv = mergeProviderInstanceEnvironment(
+        environment,
+        buildQwenSpawnBaseEnv(serverConfig.cliConfigDir),
+      );
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -176,6 +183,8 @@ export const QwenDriver: ProviderDriver<QwenSettings, QwenDriverEnv> = {
           getServedModels: getDiscoveredModels.pipe(
             Effect.map((discoveredModels) => serveQwenModels(effectiveConfig, discoveredModels)),
           ),
+          // ru-code: v2 (ng CLI) drops `--auth-type` from -p runs.
+          compatibility: serverConfig.cliCompatibility,
         },
       );
 

@@ -2855,20 +2855,29 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           // — the CLI runs its own defaults; blocking would deadlock stock-qwen
           // bootstrap (discovery needs a session, a session needs a send).
           if (input.modelSelection?.model) {
-            // ru-code: qwen selects both model AND auth in-session via the encoded
-            // `${slug}(${authMethod})` (its formatAcpModelId). authMethod is the
-            // SERVED model's own — a discovered model's auth comes from the
-            // session advertisement, not from settings (dispatching the
-            // instance default for it makes qwen reject the setModel).
-            const discoveredModelsForAuth = modelDiscoveryStore
-              ? yield* modelDiscoveryStore.get(boundInstanceId)
-              : [];
-            const authMethod = resolveServedModelAuthMethod(
-              qwenSettings,
-              serveQwenModels(qwenSettings, discoveredModelsForAuth),
-              input.modelSelection.model,
-            );
-            const encodedModel = formatQwenModelId(input.modelSelection.model, authMethod);
+            // ru-code: model encoding is GENERATION-dependent (ServerConfig.cliCompatibility).
+            //   v1 (legacy CLI): qwen selects both model AND auth in-session via the encoded
+            //   `${slug}(${authMethod})` (its formatAcpModelId). authMethod is the SERVED
+            //   model's own — a discovered model's auth comes from the session advertisement,
+            //   not from settings (dispatching the instance default makes qwen reject it).
+            //   v2 (ng CLI, shipped-node marker): the CLI advertises PLAIN model ids and
+            //   resolves auth itself from its own registry — the plain slug is sent verbatim
+            //   (it then also matches the advertised config-option values our runtime
+            //   validates against). No auth suffix exists on this wire anymore.
+            let encodedModel: string;
+            if (serverConfig.cliCompatibility === "v2") {
+              encodedModel = input.modelSelection.model;
+            } else {
+              const discoveredModelsForAuth = modelDiscoveryStore
+                ? yield* modelDiscoveryStore.get(boundInstanceId)
+                : [];
+              const authMethod = resolveServedModelAuthMethod(
+                qwenSettings,
+                serveQwenModels(qwenSettings, discoveredModelsForAuth),
+                input.modelSelection.model,
+              );
+              encodedModel = formatQwenModelId(input.modelSelection.model, authMethod);
+            }
             // ru-code: the exact value sent to ACP — `${slug}(${authMethod})`.
             yield* Effect.logDebug("[cli-acp] → setModel", {
               threadId: input.threadId,

@@ -349,6 +349,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
     cliJs: qwenCli.cliJs,
     cliConfigDir: qwenCli.cliConfigDir,
     cliDetected: qwenCli.cliDetected,
+    cliCompatibility: qwenCli.cliCompatibility,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],

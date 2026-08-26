@@ -5,6 +5,13 @@ export type PlatformKey = "darwin" | "linux" | "win32";
 /** How `cli.js` was resolved: found at a per-platform config path, or not installed. */
 export type CliSource = "config-path" | "none";
 
+/**
+ * CLI generation the resolver detected. `"v2"` ⇔ the CLI-SHIPPED node runtime exists at its fixed
+ * per-platform path (NODE_BIN_PATHS) — the ng CLI marker. `"v1"` = legacy CLI (no shipped node):
+ * every dispatch behavior stays exactly as before.
+ */
+export type CliCompatibility = "v1" | "v2";
+
 export type ProbeResult =
   | { readonly ok: true; readonly version: string }
   | { readonly ok: false; readonly reason: "missing" | "broken" | "timeout" };
@@ -32,6 +39,10 @@ export interface CliResolution {
   readonly cliJs: string;
   readonly cliDetected: boolean;
   readonly source: CliSource;
+  /** The CLI-shipped node runtime (NODE_BIN_PATHS probe); `""` when not present. */
+  readonly nodeBin: string;
+  /** `"v2"` ⇔ `nodeBin` was found (ng CLI); `"v1"` = legacy behavior everywhere. */
+  readonly compatibility: CliCompatibility;
   /** Linux only: orphaned {home}/.<app> to delete after a user-profile relocation. */
   readonly legacyRoot?: string;
 }

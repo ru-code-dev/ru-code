@@ -380,7 +380,9 @@ render_commands() {
 
 render_direct_run() {
   printf '\n  %sЕсли команда «%s» не найдена  запустите напрямую:%s\n' "$DIM" "$APP_BIN" "$NC"
-  printf '    %snode %s "%s/%s"%s\n' "$CYAN" "$NODE_FLAGS" "$BIN_DIR" "$ENTRY_JS" "$NC"
+  # ru-code: name the ACTUAL resolved node ($NODE_PATH — shipped runtime when detected, else the
+  # OS node), so the printed command matches what the wrapper/launcher really execute.
+  printf '    %s"%s" %s "%s/%s"%s\n' "$CYAN" "${NODE_PATH:-node}" "$NODE_FLAGS" "$BIN_DIR" "$ENTRY_JS" "$NC"
   printf '\n  %sКаталог приложения: %s%s\n' "$DIM" "$APP_ROOT" "$NC"
 }
 

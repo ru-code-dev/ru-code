@@ -62,6 +62,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     cliJs: expect.any(String),
     cliConfigDir: expect.any(String),
     cliDetected: expect.any(Boolean),
+    // ru-code: generation verdict from the shipped-node probe — machine-dependent, like the rest.
+    cliCompatibility: expect.stringMatching(/^v[12]$/),
   };
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {

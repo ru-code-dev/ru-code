@@ -1,0 +1,29 @@
+{
+  "agentId": "fork-fbb4c264",
+  "agentType": "fork",
+  "description": "Create analysis scripts",
+  "parentSessionId": "5eeb4968-c7ed-4708-9aa4-cf9e1549eee5",
+  "parentAgentId": null,
+  "createdAt": "2026-08-28T13:51:21.980Z",
+  "status": "completed",
+  "isBackgrounded": true,
+  "lastUpdatedAt": "2026-08-28T13:52:18.224Z",
+  "resolvedApprovalMode": "default",
+  "persistedCliFlags": {
+    "approvalMode": "default",
+    "bare": false,
+    "safeMode": false,
+    "sandbox": null,
+    "screenReader": false,
+    "model": "qwen/qwen3.6-35b-a3b",
+    "authType": "openai",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "maxSessionTurns": -1,
+    "maxToolCalls": -1,
+    "maxSubagentDepth": 5
+  },
+  "subagentName": "fork",
+  "resumeCount": 0,
+  "depth": 0,
+  "model": "qwen/qwen3.6-35b-a3b"
+}

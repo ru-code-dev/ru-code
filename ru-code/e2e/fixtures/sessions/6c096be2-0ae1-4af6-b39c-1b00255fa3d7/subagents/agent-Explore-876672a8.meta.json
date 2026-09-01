@@ -1,0 +1,29 @@
+{
+  "agentId": "Explore-876672a8",
+  "agentType": "Explore",
+  "description": "Discover project structure",
+  "parentSessionId": "6c096be2-0ae1-4af6-b39c-1b00255fa3d7",
+  "parentAgentId": null,
+  "createdAt": "2026-08-27T21:45:24.263Z",
+  "status": "completed",
+  "isBackgrounded": true,
+  "lastUpdatedAt": "2026-08-27T21:48:32.841Z",
+  "resolvedApprovalMode": "auto-edit",
+  "persistedCliFlags": {
+    "approvalMode": "auto-edit",
+    "bare": false,
+    "safeMode": false,
+    "sandbox": null,
+    "screenReader": false,
+    "model": "qwen/qwen3.6-35b-a3b",
+    "authType": "openai",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "maxSessionTurns": -1,
+    "maxToolCalls": -1,
+    "maxSubagentDepth": 5
+  },
+  "subagentName": "Explore",
+  "resumeCount": 0,
+  "depth": 0,
+  "model": "qwen/qwen3.6-35b-a3b"
+}

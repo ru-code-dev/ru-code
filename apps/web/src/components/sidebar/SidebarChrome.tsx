@@ -7,7 +7,7 @@ import {
 // ru-code: the fork's single footer seam (auto-update pill + feature rows).
 import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
 // ru-code: global-panel triggers (skills/agents/commands/mcp) live in the footer icon row.
-import { OVERLAY_PANELS } from "../../ru-code/skills-agents/rightGlobalPanel/registry";
+import { NAV_PANELS } from "../../ru-code/skills-agents/rightGlobalPanel/registry";
 import {
   useRightGlobalPanelStore,
   type GlobalPanelId,
@@ -246,8 +246,10 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
             </SidebarMenuItem>
             {/* ru-code: global-panel triggers (all five, Pixso included) — same item shape as
                 Settings/Analytics above; selected (isActive) while their panel is open. The row
-                flex-wraps onto a second line when the sidebar is too narrow. */}
-            {OVERLAY_PANELS.map((panel) => {
+                flex-wraps onto a second line when the sidebar is too narrow. `NAV_PANELS` is
+                the registry minus the `navHidden` entries (the extended view's detail panel
+                opens from the thread, never from an icon). */}
+            {NAV_PANELS.map((panel) => {
               const Icon = panel.icon;
               return (
                 <SidebarMenuItem className="shrink-0" key={panel.id}>

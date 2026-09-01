@@ -1,0 +1,29 @@
+{
+  "agentId": "general-purpose-dee95829",
+  "agentType": "general-purpose",
+  "description": "Create demo project files",
+  "parentSessionId": "6c096be2-0ae1-4af6-b39c-1b00255fa3d7",
+  "parentAgentId": null,
+  "createdAt": "2026-08-27T21:45:25.904Z",
+  "status": "running",
+  "isBackgrounded": true,
+  "lastUpdatedAt": "2026-08-27T21:45:25.904Z",
+  "resolvedApprovalMode": "auto-edit",
+  "persistedCliFlags": {
+    "approvalMode": "auto-edit",
+    "bare": false,
+    "safeMode": false,
+    "sandbox": null,
+    "screenReader": false,
+    "model": "qwen/qwen3.6-35b-a3b",
+    "authType": "openai",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "maxSessionTurns": -1,
+    "maxToolCalls": -1,
+    "maxSubagentDepth": 5
+  },
+  "subagentName": "general-purpose",
+  "resumeCount": 0,
+  "depth": 0,
+  "model": "qwen/qwen3.6-35b-a3b"
+}

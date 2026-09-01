@@ -1,0 +1,29 @@
+{
+  "agentId": "general-purpose-8936de30",
+  "agentType": "general-purpose",
+  "description": "Create PROJECT_HEALTH.md",
+  "parentSessionId": "93888941-6933-456b-8636-4234f1afdf17",
+  "parentAgentId": null,
+  "createdAt": "2026-08-27T22:08:17.576Z",
+  "status": "running",
+  "isBackgrounded": true,
+  "lastUpdatedAt": "2026-08-27T22:08:17.576Z",
+  "resolvedApprovalMode": "auto-edit",
+  "persistedCliFlags": {
+    "approvalMode": "auto-edit",
+    "bare": false,
+    "safeMode": false,
+    "sandbox": null,
+    "screenReader": false,
+    "model": "qwen/qwen3.6-35b-a3b",
+    "authType": "openai",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "maxSessionTurns": -1,
+    "maxToolCalls": -1,
+    "maxSubagentDepth": 5
+  },
+  "subagentName": "general-purpose",
+  "resumeCount": 0,
+  "depth": 0,
+  "model": "qwen/qwen3.6-35b-a3b"
+}

@@ -25,6 +25,7 @@ import {
   readHarnessState,
   sendPrompt,
   test,
+  waitForShellCacheToLearnThread,
   writeFakeControl,
 } from "./fixtures.ts";
 
@@ -80,6 +81,8 @@ test("mid-turn delivery marks: clock while queued, cleared on drain, and correct
   //    pins that delivery does not RESURRECT a stale clock from the read model,
   //    which is a real regression this would catch; leg 2 below is what proves
   //    a value actually round-trips through the projection.
+  // ru-code (extended-view redesign): the F5 must not race the shell cache (see fixtures).
+  await waitForShellCacheToLearnThread(page);
   await page.reload();
   await expect(page.getByText(MID_TURN, { exact: false }).first()).toBeVisible({ timeout: 30_000 });
   await expect(deliveryMarks(page)).toHaveCount(0, { timeout: 15_000 });
@@ -128,6 +131,8 @@ test("mid-turn delivery marks: a Stop leaves NOT-DELIVERED, and it survives a re
   // THE RELOAD PROOF. The client has no memory after this; the mark can only
   // come back out of the persisted projection row (fork migration 004's
   // delivery_state column, read via listByThreadId).
+  // ru-code (extended-view redesign): the F5 must not race the shell cache (see fixtures).
+  await waitForShellCacheToLearnThread(page);
   await page.reload();
   await expect(page.getByText(MID_TURN, { exact: false }).first()).toBeVisible({ timeout: 30_000 });
   const reloadedMark = deliveryMarks(page).first();

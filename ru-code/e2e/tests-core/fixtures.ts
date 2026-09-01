@@ -14,10 +14,53 @@ export function readHarnessState(): HarnessState {
   return JSON.parse(NodeFS.readFileSync(STATE_FILE, "utf8")) as HarnessState;
 }
 
+// ru-code (extended-view redesign, H2): REPLAY a real qwen session into the fake-bound
+// thread's transcript. The fake appends the JSONL's records to ITS transcript file (the one
+// the extended view tails), copies the agent tree under its own session id (sidecar
+// `parentSessionId` patched so the on-demand flow attaches) and mirrors every background
+// launch / completion notification into its task registry (`qwen/status/session/tasks`),
+// exactly where the `backgroundAgents`/`subAgent` knobs already put theirs. The turn stays
+// OPEN while records land, so the extended view is genuinely LIVE for the paced variants.
+export interface FakeReplayControl {
+  /** Absolute path of the session JSONL. */
+  readonly file: string;
+  /** Absolute path of its `subagents/<session>/` tree (optional). */
+  readonly subagentsDir?: string;
+  readonly pacing:
+    | { readonly kind: "instant" }
+    | { readonly kind: "records"; readonly intervalMs: number }
+    | { readonly kind: "time-scaled"; readonly scale: number; readonly maxGapMs?: number };
+  /** Write only the first N records (the rest never land) — a deterministic mid-flight state. */
+  readonly limit?: number;
+  /** Keep the turn open this long after the last written record, then settle it. */
+  readonly holdMs?: number;
+  /** Default true: launches → registry rows (running), notifications flip their status. */
+  readonly mirrorRegistry?: boolean;
+  /** Default true: shift every timestamp so the replay's first record is "now" (elapsed
+   *  timers read seconds, not days) — main file, agent files and sidecars alike. */
+  readonly rebaseTimestamps?: boolean;
+}
+
+// ru-code (extended-view redesign, H3): PARK an approval in the browser harness. The fake
+// writes a RUNNING call (no result) into the JSONL — a `run_shell_command`/`write_file` for
+// `via: "tool"`, an `agent` launch for `via: "agent"` (the request then belongs to the
+// subagent's inner tool) — puts the same call on the ACP wire, and sends
+// `session/request_permission` (fakeAcpCore.ts `requestPermission`), which blocks the
+// prompt until the composer answers. Approving/declining settles the call and the turn.
+export interface FakeApprovalControl {
+  readonly kind: "command" | "file-change";
+  readonly via: "tool" | "agent";
+  readonly command?: string;
+  readonly filePath?: string;
+  readonly content?: string;
+}
+
 /** Rewrite the fake ACP's per-spawn behaviour knobs (read at every prompt). */
 export function writeFakeControl(
   state: HarnessState,
   control: {
+    readonly replay?: FakeReplayControl;
+    readonly approval?: FakeApprovalControl;
     readonly delayMs?: number;
     readonly responseText?: string;
     // ru-code (mid-turn wave, P3d): hold the turn open, then drain once — the
@@ -198,6 +241,47 @@ export async function fetchServerHealthz(
 ): Promise<{ ok: boolean; version: string; pid: number }> {
   const response = await fetch(`${state.serverUrl}/healthz`);
   return (await response.json()) as { ok: boolean; version: string; pid: number };
+}
+
+/**
+ * CACHE-WARM PREDICATE before an F5 in a just-promoted thread (messageFlow case 5's
+ * proven gate, shared): the thread route's not-found guard trusts the RESTORED IndexedDB
+ * shell cache, so a reload fired before the cache learned the promoted thread bounces to
+ * the root wizard — a fresh-thread race, not the scenario a reload spec means. With the
+ * extended-view redesign the core suite carries 12 more threads (real 150-record sessions),
+ * the cache snapshot got heavier, and `midTurnDelivery`'s unguarded reload started landing on
+ * the wizard (logs/impl-a/25c: snapshot = «Что будем создавать…»). State-based, never a sleep.
+ */
+export async function waitForShellCacheToLearnThread(page: Page): Promise<void> {
+  const threadId = new URL(page.url()).pathname.split("/").at(-1)!;
+  await playwrightExpect
+    .poll(
+      () =>
+        page.evaluate(async (id) => {
+          const openRequest = indexedDB.open("ruCode:connection-runtime");
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            openRequest.addEventListener("success", () => resolve(openRequest.result), {
+              once: true,
+            });
+            openRequest.addEventListener("error", () => reject(openRequest.error), { once: true });
+          });
+          try {
+            const values = await new Promise<unknown[]>((resolve, reject) => {
+              const getAll = database
+                .transaction("shell", "readonly")
+                .objectStore("shell")
+                .getAll();
+              getAll.addEventListener("success", () => resolve(getAll.result), { once: true });
+              getAll.addEventListener("error", () => reject(getAll.error), { once: true });
+            });
+            return JSON.stringify(values).includes(id);
+          } finally {
+            database.close();
+          }
+        }, threadId),
+      { timeout: 15_000, message: "the cached shell snapshot must learn the thread before F5" },
+    )
+    .toBe(true);
 }
 
 export interface ScrollSample {

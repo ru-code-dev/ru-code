@@ -7,6 +7,8 @@
 // gates on the store), so the two never fight over the right slot — the ru-code overlay
 // coordinator, ported to port's layout.
 
+import { useExtendedViewPanelBinding } from "~/ru-code/extended-chat/extendedViewPanelBinding";
+
 import { RightPanelResizeHandle } from "~/components/preview/RightPanelResizeHandle";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
@@ -32,6 +34,10 @@ export function RightGlobalPanelHost() {
   const open = useRightGlobalPanelStore((state) => state.open);
   const close = useRightGlobalPanelStore((state) => state.close);
   const isSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  // ru-code (sync wave R3): the extended view's per-thread detail target ⇄ this store. It
+  // lives here because this host is mounted ONCE, above the routes, and outlives every thread
+  // — the binding must keep running while the panel is closed (that is when it opens it).
+  useExtendedViewPanelBinding();
   // ru-code: hooks run unconditionally (before the null-panel early return) to keep hook order
   // stable across renders regardless of which panel (if any) is open.
   const { width, handlers } = useResizableWidth({

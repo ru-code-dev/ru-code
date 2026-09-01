@@ -10,7 +10,7 @@
 import { create } from "zustand";
 
 /** The global overlay panels. Extend this union + the registry to add another. */
-export type GlobalPanelId = "skills" | "agents" | "commands" | "mcp" | "pixso";
+export type GlobalPanelId = "skills" | "agents" | "commands" | "mcp" | "pixso" | "extended-view";
 
 interface RightGlobalPanelState {
   /** The open global panel, or null when the thread panel owns the right slot. */

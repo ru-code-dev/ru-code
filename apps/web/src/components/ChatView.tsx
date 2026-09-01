@@ -6597,6 +6597,7 @@ function ChatViewContent(props: ChatViewProps) {
                   isWorking={isWorking}
                   workStartedAt={activeWorkStartedAt}
                   timestampFormat={timestampFormat}
+                  agentPanelModel={agentPanelModel}
                   pendingApproval={
                     activePendingApproval?.requestKind !== undefined
                       ? {

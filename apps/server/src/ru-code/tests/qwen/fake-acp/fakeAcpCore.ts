@@ -525,6 +525,14 @@ export interface PromptSteps {
    */
   requestPermission(payload: AcpSchema.RequestPermissionRequest): PromptSteps;
   /**
+   * ru-code (extended-view redesign, H2): run a SYNCHRONOUS side effect at this point of
+   * the chain. The stdio FLOW scenario's transcript-replay knob appends each replayed JSONL
+   * record and mutates the background registry through it, so a record, its registry row
+   * and its wire launch frame ride ONE ordered chain (the frame can never race the record).
+   * Errors propagate: a throwing tap fails the prompt, never silently skips a record.
+   */
+  tap(run: () => void): PromptSteps;
+  /**
    * ru-code: send an arbitrary agent→client ACP extension NOTIFICATION (no id).
    * Drives the adapter's `handleUnknownExtNotification` slash-command path (the
    * `_qwencode/slash_command` /compress feed). Chainable; fire-and-forget.
@@ -873,6 +881,7 @@ type FakeStep =
     }
   | { readonly kind: "requestPermission"; readonly payload: AcpSchema.RequestPermissionRequest }
   | { readonly kind: "sleep"; readonly ms: number }
+  | { readonly kind: "tap"; readonly run: () => void }
   | { readonly kind: "awaitGate"; readonly gate: Deferred.Deferred<void> }
   | { readonly kind: "extNotification"; readonly method: string; readonly params: unknown }
   | { readonly kind: "drainMidTurn"; readonly callSite: QwenDrainCallSite }
@@ -1065,6 +1074,10 @@ class PromptStepsRecorder implements PromptSteps {
   }
   requestPermission(payload: AcpSchema.RequestPermissionRequest): PromptSteps {
     this.steps.push({ kind: "requestPermission", payload });
+    return this;
+  }
+  tap(run: () => void): PromptSteps {
+    this.steps.push({ kind: "tap", run });
     return this;
   }
   emitExtNotification(method: string, params: unknown): PromptSteps {
@@ -1422,6 +1435,10 @@ export const runFakeAcpAgent = (
             case "sleep":
               // ru-code(e2e): wall-clock pause (browser-harness realism only).
               yield* Effect.sleep(step.ms);
+              break;
+            case "tap":
+              // ru-code (extended-view redesign, H2): ordered side effect (see the DSL doc).
+              yield* Effect.sync(step.run);
               break;
             case "awaitGate":
               // ru-code (agentic-flow wave, P1): the deterministic interleave.

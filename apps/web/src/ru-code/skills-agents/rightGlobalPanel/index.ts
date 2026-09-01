@@ -1,7 +1,7 @@
 // ru-code: global right-panel (skills/agents) public surface.
 export { RightGlobalPanelHost } from "./RightGlobalPanelHost";
 export { GlobalPanelNav } from "./GlobalPanelNav";
-export { OVERLAY_PANELS } from "./registry";
+export { NAV_PANELS, OVERLAY_PANELS } from "./registry";
 export {
   closeGlobalPanelIfOpen,
   isGlobalPanelOpen,

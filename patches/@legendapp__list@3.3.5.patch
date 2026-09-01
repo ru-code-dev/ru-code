@@ -929,7 +929,7 @@ diff --git a/react.d.ts b/react.d.ts
 index b6c7481603f4119495551b3e4c1c071984c144af..738f91c7a33698f16e00808192e54a92f1dcdfdc 100644
 --- a/react.d.ts
 +++ b/react.d.ts
-@@ -206,6 +206,12 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
+@@ -206,6 +206,19 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
       * @default undefined
       */
      estimatedItemSize?: number;
@@ -939,6 +939,13 @@ index b6c7481603f4119495551b3e4c1c071984c144af..738f91c7a33698f16e00808192e54a92
 +     * @default undefined
 +     */
 +    estimatedItemSizesByType?: Record<string, number>;
++    /**
++     * ru-code[HEAVY]: single-writer gate for MVCP data adjusts. The host answers `true` while
++     * something other than the library owns the viewport (an armed send anchor, or a reader who
++     * gestured); `requestAdjust` then returns without writing. Reaches the list as a top-level
++     * prop so it applies with no `anchoredEndSpace` — i.e. to every anchorless reader.
++     */
++    suppressDataAdjust?: () => boolean;
      /**
       * Estimated size of the ScrollView in pixels, a hint for the first render to improve performance
       * @default undefined
@@ -982,7 +989,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..4e3c6d76873d514be19fd3387f8c3001
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -1499,6 +1506,14 @@ function doMaintainScrollAtEnd(ctx) {
+@@ -1499,6 +1506,20 @@ function doMaintainScrollAtEnd(ctx) {
  // src/utils/requestAdjust.ts
  function requestAdjust(ctx, positionDiff, dataChanged) {
    const state = ctx.state;
@@ -990,7 +997,13 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..4e3c6d76873d514be19fd3387f8c3001
 +  // (anchoredEndSpace.suppressDataAdjust() true), MVCP data-change compensations are spurious
 +  // second writers (the +-21px response-arrival jerk); the anchor + reserved end space fully
 +  // determine the viewport there.
-+  const ruCodeSuppress = state.props.anchoredEndSpace && state.props.anchoredEndSpace.suppressDataAdjust;
++  // FLAKE-3: the gate also reaches the list as a TOP-LEVEL prop, because `anchoredEndSpace`
++  // exists only while a send anchor is armed -- so an anchorless reader (a settled session)
++  // was receiving ungated data adjusts, and the pushing panel's column reflow used one to move
++  // a reader parked at scrollTop 0.
++  const ruCodeSuppress =
++    (state.props.anchoredEndSpace && state.props.anchoredEndSpace.suppressDataAdjust) ||
++    state.props.suppressDataAdjust;
 +  if (typeof ruCodeSuppress === "function" && peek$(ctx, "readyToRender") && ruCodeSuppress()) {
 +    return;
 +  }
@@ -1094,7 +1107,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..09a2da8b7af1875d74a0c7163512f83b
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -1478,6 +1485,14 @@ function doMaintainScrollAtEnd(ctx) {
+@@ -1478,6 +1485,20 @@ function doMaintainScrollAtEnd(ctx) {
  // src/utils/requestAdjust.ts
  function requestAdjust(ctx, positionDiff, dataChanged) {
    const state = ctx.state;
@@ -1102,7 +1115,13 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..09a2da8b7af1875d74a0c7163512f83b
 +  // (anchoredEndSpace.suppressDataAdjust() true), MVCP data-change compensations are spurious
 +  // second writers (the +-21px response-arrival jerk); the anchor + reserved end space fully
 +  // determine the viewport there.
-+  const ruCodeSuppress = state.props.anchoredEndSpace && state.props.anchoredEndSpace.suppressDataAdjust;
++  // FLAKE-3: the gate also reaches the list as a TOP-LEVEL prop, because `anchoredEndSpace`
++  // exists only while a send anchor is armed -- so an anchorless reader (a settled session)
++  // was receiving ungated data adjusts, and the pushing panel's column reflow used one to move
++  // a reader parked at scrollTop 0.
++  const ruCodeSuppress =
++    (state.props.anchoredEndSpace && state.props.anchoredEndSpace.suppressDataAdjust) ||
++    state.props.suppressDataAdjust;
 +  if (typeof ruCodeSuppress === "function" && peek$(ctx, "readyToRender") && ruCodeSuppress()) {
 +    return;
 +  }

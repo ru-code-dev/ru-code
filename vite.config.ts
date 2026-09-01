@@ -39,6 +39,8 @@ export default defineConfig({
       "apps/web/public/mockServiceWorker.js",
       "apps/web/src/lib/vendor/qrcodegen.ts",
       "*.icon/**",
+      // ru-code: byte-verbatim copies of real qwen sessions (e2e fixtures) — never reformatted.
+      "ru-code/e2e/fixtures/**",
     ],
     sortPackageJson: {},
     overrides: [],

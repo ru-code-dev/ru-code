@@ -3,7 +3,7 @@
 
 import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "~/components/ui/sidebar";
 
-import { OVERLAY_PANELS } from "./registry";
+import { NAV_PANELS } from "./registry";
 import { useRightGlobalPanelStore } from "./store";
 
 export function GlobalPanelNav() {
@@ -15,7 +15,7 @@ export function GlobalPanelNav() {
     <>
       {/* ru-code: only Pixso lives in the text menu — skills/agents/commands/mcp moved to the
           footer icon row (SidebarChromeFooter). */}
-      {OVERLAY_PANELS.filter((panel) => panel.id === "pixso").map((panel) => {
+      {NAV_PANELS.filter((panel) => panel.id === "pixso").map((panel) => {
         const Icon = panel.icon;
         const active = open === panel.id;
         return (

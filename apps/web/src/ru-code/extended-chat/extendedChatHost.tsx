@@ -22,6 +22,7 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentSubscriptionAtomFamily,
 } from "@t3tools/client-runtime/state/runtime";
+import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
 import { TRANSCRIPT_WS_METHODS, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -34,7 +35,7 @@ import ChatMarkdown from "~/components/ChatMarkdown";
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
-import { EXTENDED_CHAT_TASKS_PIN_MODE } from "./extendedChatConfig";
+import { deriveLiveAgentFacts } from "./liveAgentFacts";
 
 // The package resolves its own bilingual strings — point it at the app locale.
 configureExtendedChatLocale(getLocale);
@@ -43,6 +44,17 @@ configureExtendedChatLocale(getLocale);
 // single import site for ChatView/ChatComposer. The mode itself is app state:
 // server-settings default + per-thread composer-draft override (chatViewMode.ts).
 export { ComposerViewSwitcher } from "@smart-tools/qwen-cli-extended-chat/web";
+
+// (sync wave R1/R3/R7) The detail PANEL and the two halves of its binding. The panel is a
+// member of the app's global right-panel family, mounted above the routes by that host —
+// nowhere near this timeline — so the package publishes what it renders and exposes the
+// target the binding watches plus the write that clears it. This file stays the one import
+// site for the package: the panel host and the binding both come through here.
+export {
+  clearExtendedViewPanelTarget,
+  ExtendedViewPanel,
+  useExtendedViewPanelTarget,
+} from "@smart-tools/qwen-cli-extended-chat/web";
 
 const transcriptSubscription = createEnvironmentSubscriptionAtomFamily(connectionAtomRuntime, {
   label: "ru-code:extended-chat:transcript",
@@ -105,6 +117,7 @@ export function ExtendedChatTimelineHost({
   workStartedAt = null,
   timestampFormat = "locale",
   pendingApproval = null,
+  agentPanelModel = null,
   sendAnchorId = null,
   pendingSend = null,
   hideEmptyPlaceholder = false,
@@ -123,6 +136,10 @@ export function ExtendedChatTimelineHost({
    *  «ожидает подтверждения» chip AND the held request's payload (command /
    *  proposed diff) on the awaiting row. */
   pendingApproval?: PendingApprovalPayload | null;
+  /** ChatView's live agent registry (the same `agentPanelModel` the main chat's
+   *  timeline gets) — adapted to the package's `LiveAgentFacts`, so a live thread's
+   *  agent cards and context bar read the registry's status/progress first (W1/A2). */
+  agentPanelModel?: AgentPanelModel | null;
   /** The app's per-send optimistic MessageId (ChatView timelineAnchor) — a fresh
    *  value arms the send anchor: the new user row scrolls to the viewport top and
    *  the response streams into reserved end space (main-chat parity). */
@@ -136,6 +153,7 @@ export function ExtendedChatTimelineHost({
   hideEmptyPlaceholder?: boolean;
 }) {
   const subscription = useAtomValue(transcriptStateAtom({ environmentId, threadId }));
+  const liveAgents = useMemo(() => deriveLiveAgentFacts(agentPanelModel), [agentPanelModel]);
   const ports = useMemo<ExtendedChatWebPorts>(
     () => ({
       fetchRecordBody: async (uuid) => {
@@ -158,7 +176,13 @@ export function ExtendedChatTimelineHost({
         }
         return result.value;
       },
-      renderMarkdown: (text, cwd) => <ChatMarkdown text={text} cwd={cwd} />,
+      // `className` is the user bubble's `text-message-foreground` (R14) — the same override
+      // the main chat passes for its own bubble (MessagesTimeline.tsx:1713).
+      // Spread, not `className={className}`: under `exactOptionalPropertyTypes` an explicit
+      // `undefined` is not the same as an absent prop, and ChatMarkdown's own is optional.
+      renderMarkdown: (text, cwd, className) => (
+        <ChatMarkdown text={text} cwd={cwd} {...(className === undefined ? {} : { className })} />
+      ),
     }),
     [environmentId, threadId],
   );
@@ -175,10 +199,10 @@ export function ExtendedChatTimelineHost({
         workStartedAt={workStartedAt}
         timestampFormat={timestampFormat}
         pendingApproval={pendingApproval}
+        liveAgents={liveAgents}
         sendAnchorId={sendAnchorId}
         pendingSend={pendingSend}
         hideEmptyPlaceholder={hideEmptyPlaceholder}
-        tasksPinMode={EXTENDED_CHAT_TASKS_PIN_MODE}
       />
     </ExtendedChatProvider>
   );

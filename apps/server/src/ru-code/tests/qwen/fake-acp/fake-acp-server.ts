@@ -29,7 +29,12 @@ import * as NodePath from "node:path";
 
 // ru-code(e2e): the REAL path formula (win32 lowercasing included) — the fake
 // used to re-implement the sanitize regex and would have silently diverged.
-import { resolveTranscriptFilePath } from "@smart-tools/qwen-cli-transcript-core";
+import {
+  resolveAgentMetaFileName,
+  resolveProjectDir,
+  resolveSubagentSessionDir,
+  resolveTranscriptFilePath,
+} from "@smart-tools/qwen-cli-transcript-core";
 
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -40,6 +45,7 @@ import * as Stream from "effect/Stream";
 
 import { type FakeAcpScript, type PromptSteps, runFakeAcpAgent } from "./fakeAcpCore.ts";
 import { qwenBackgroundAgentId, type QwenAgentTaskEntry } from "./qwen021BackgroundAgents.ts";
+import type { QwenAgentTaskLifecycleStatus } from "../../../qwen/background/backgroundTaskContract.ts";
 
 // CRITICAL: stdout is the ACP wire (ndJSON-RPC) — ANYTHING non-protocol on it
 // corrupts the stream and the client fails to parse the handshake. Effect's
@@ -138,6 +144,38 @@ interface FlowControl {
     readonly holdGapMs?: number;
   };
   readonly midTurn?: { readonly holdMs: number };
+  // ru-code (extended-view redesign, H2): REPLAY a real qwen session into THIS thread's
+  // transcript. Phase 1 proved the FLOW turn writes only user+assistant records, so live
+  // agents/tools never reached the extended view; this knob appends a real JSONL record
+  // by record with configurable pacing, copies its agent tree under the fake session id
+  // (sidecar `parentSessionId` patched — the readMeta identity check), and mirrors every
+  // background launch / completion notification into the live registry served over
+  // `qwen/status/session/tasks` — exactly where `backgroundAgents`/`subAgent` put theirs.
+  // The prompt stays open while records land (+ `holdMs`), so the view is genuinely LIVE.
+  readonly replay?: {
+    readonly file: string;
+    readonly subagentsDir?: string;
+    readonly pacing:
+      | { readonly kind: "instant" }
+      | { readonly kind: "records"; readonly intervalMs: number }
+      | { readonly kind: "time-scaled"; readonly scale: number; readonly maxGapMs?: number };
+    readonly limit?: number;
+    readonly holdMs?: number;
+    readonly mirrorRegistry?: boolean;
+    readonly rebaseTimestamps?: boolean;
+  };
+  // ru-code (extended-view redesign, H3): PARK an approval. A RUNNING call lands in the
+  // JSONL (no result) and on the wire, then the fake sends `session/request_permission`
+  // (fakeAcpCore.ts `requestPermission`) — the prompt blocks until the composer answers.
+  // `via: "tool"` = the call itself needs approval (run_shell_command / write_file);
+  // `via: "agent"` = an `agent` launch whose INNER tool asks (concept §9 A1).
+  readonly approval?: {
+    readonly kind: "command" | "file-change";
+    readonly via: "tool" | "agent";
+    readonly command?: string;
+    readonly filePath?: string;
+    readonly content?: string;
+  };
   readonly subAgent?: {
     readonly title: string;
     readonly role: string;
@@ -295,9 +333,336 @@ function makeFlowScenario(): FakeAcpScript {
   // ru-code (timer-bug): tool-call ids for the rich repro turn — unique per call
   // for the same reason `agentCallSeq` is (a reused id merges two rows into one).
   let richSeq = 0;
+  let approvalSeq = 0;
+  // ru-code (H3): the composer's decision for the LAST parked request — read by the tap
+  // that writes the call's result record after `requestPermission` resumes the chain.
+  let lastPermissionOutcome: string | null = null;
+
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+
+  /**
+   * ru-code (H2): the replay chain. Records are appended in file order; a background
+   * launch result (`task_id: X` in an `agent` functionResponse) pushes a RUNNING registry
+   * row and puts the real launch frame on the wire; a `notification` record flips that
+   * row to its terminal status. Timestamps are rebased so the first record is "now"
+   * (elapsed timers read seconds) — main file, agent files and sidecars alike.
+   */
+  const scriptReplay = (opened: PromptSteps, replay: NonNullable<FlowControl["replay"]>): void => {
+    const filePath = transcriptPath();
+    const configDir = process.env["RU_CODE_FAKE_CLI_CONFIG_DIR"];
+    if (filePath === null || configDir === undefined) {
+      opened.respondError(-32000, "replay needs RU_CODE_FAKE_CLI_CONFIG_DIR");
+      return;
+    }
+    const lines = NodeFS.readFileSync(replay.file, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0);
+    const records = lines
+      .slice(0, replay.limit ?? lines.length)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const firstMs = Date.parse(String(records[0]?.["timestamp"] ?? ""));
+    const startMs = Date.now();
+    const scale = replay.pacing.kind === "time-scaled" ? replay.pacing.scale : 1;
+    const rebase = replay.rebaseTimestamps ?? true;
+    const shiftIso = (value: unknown): unknown => {
+      if (!rebase || typeof value !== "string") return value;
+      const ms = Date.parse(value);
+      if (!Number.isFinite(ms) || !Number.isFinite(firstMs)) return value;
+      return new Date(startMs + (ms - firstMs) * scale).toISOString();
+    };
+    const shiftRecord = (record: Record<string, unknown>): Record<string, unknown> => ({
+      ...record,
+      timestamp: shiftIso(record["timestamp"]),
+    });
+
+    // The agent tree, under the FAKE session id (readMeta: parentSessionId === sessionId,
+    // file name === resolveAgentMetaFileName(agentId)).
+    if (replay.subagentsDir !== undefined && NodeFS.existsSync(replay.subagentsDir)) {
+      const projectDir = resolveProjectDir({
+        cliConfigDir: configDir,
+        cwd,
+        // oxlint-disable-next-line t3code/no-global-process-runtime -- ru-code: standalone stdio Node entry (see transcriptPath)
+        platform: process.platform,
+      });
+      const sessionDir = resolveSubagentSessionDir(projectDir, sessionId);
+      NodeFS.mkdirSync(sessionDir, { recursive: true });
+      for (const name of NodeFS.readdirSync(replay.subagentsDir)) {
+        const source = NodePath.join(replay.subagentsDir, name);
+        if (name.endsWith(".meta.json")) {
+          const meta = JSON.parse(NodeFS.readFileSync(source, "utf8")) as Record<string, unknown>;
+          const agentId = String(meta["agentId"] ?? "");
+          if (resolveAgentMetaFileName(agentId) !== name) continue;
+          NodeFS.writeFileSync(
+            NodePath.join(sessionDir, name),
+            JSON.stringify(
+              {
+                ...meta,
+                parentSessionId: sessionId,
+                createdAt: shiftIso(meta["createdAt"]),
+                lastUpdatedAt: shiftIso(meta["lastUpdatedAt"]),
+              },
+              null,
+              2,
+            ),
+          );
+        } else if (name.endsWith(".jsonl")) {
+          const shifted = NodeFS.readFileSync(source, "utf8")
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map((line) => JSON.stringify(shiftRecord(JSON.parse(line) as Record<string, unknown>)))
+            .join("\n");
+          NodeFS.writeFileSync(NodePath.join(sessionDir, name), `${shifted}\n`);
+        }
+      }
+    }
+
+    NodeFS.mkdirSync(NodePath.dirname(filePath), { recursive: true });
+    const mirror = replay.mirrorRegistry ?? true;
+    // functionCall id → the launch's args (description / subagent_type) for the registry row.
+    const launchArgs = new Map<
+      string,
+      { description: string; subagentType: string; prompt: string }
+    >();
+    const readLaunch = (
+      record: Record<string, unknown>,
+    ): { taskId: string; callId: string } | undefined => {
+      if (record["type"] !== "tool_result" || !isRecord(record["message"])) return undefined;
+      const parts = record["message"]["parts"];
+      if (!Array.isArray(parts)) return undefined;
+      for (const part of parts) {
+        if (!isRecord(part) || !isRecord(part["functionResponse"])) continue;
+        const response = part["functionResponse"];
+        if (response["name"] !== "agent" || !isRecord(response["response"])) continue;
+        const output = String(response["response"]["output"] ?? "");
+        const match = /task_id:\s*(\S+)/.exec(output);
+        if (match?.[1] !== undefined)
+          return { taskId: match[1], callId: String(response["id"] ?? "") };
+      }
+      return undefined;
+    };
+    const collectLaunchArgs = (record: Record<string, unknown>): void => {
+      if (record["type"] !== "assistant" || !isRecord(record["message"])) return;
+      const parts = record["message"]["parts"];
+      if (!Array.isArray(parts)) return;
+      for (const part of parts) {
+        if (!isRecord(part) || !isRecord(part["functionCall"])) continue;
+        const call = part["functionCall"];
+        if (call["name"] !== "agent" || !isRecord(call["args"])) continue;
+        launchArgs.set(String(call["id"] ?? ""), {
+          description: String(call["args"]["description"] ?? ""),
+          subagentType: String(call["args"]["subagent_type"] ?? "general-purpose"),
+          prompt: String(call["args"]["prompt"] ?? "do the work"),
+        });
+      }
+    };
+    const readNotification = (
+      record: Record<string, unknown>,
+    ): { taskId: string; status: QwenAgentTaskLifecycleStatus } | undefined => {
+      if (record["type"] !== "user" || record["subtype"] !== "notification") return undefined;
+      const payload = record["systemPayload"];
+      if (!isRecord(payload) || !isRecord(payload["backgroundTask"])) return undefined;
+      const task = payload["backgroundTask"];
+      const status = task["status"];
+      if (typeof task["taskId"] !== "string" || typeof status !== "string") return undefined;
+      return { taskId: task["taskId"], status: status as QwenAgentTaskLifecycleStatus };
+    };
+    const applyRecord = (record: Record<string, unknown>): void => {
+      NodeFS.appendFileSync(filePath, `${JSON.stringify(shiftRecord(record))}\n`);
+      if (!mirror) return;
+      collectLaunchArgs(record);
+      const launch = readLaunch(record);
+      if (launch !== undefined) {
+        const args = launchArgs.get(launch.callId);
+        bgEntries.push({
+          id: launch.taskId,
+          description: args?.description ?? launch.taskId,
+          subagentType: args?.subagentType ?? "general-purpose",
+          status: "running",
+          startTime: Date.now(),
+          isBackgrounded: true,
+          toolUseId: launch.callId,
+          prompt: args?.prompt ?? "do the work",
+        });
+        fakeLog(`replay: registry += ${launch.taskId} (running)`);
+      }
+      const notification = readNotification(record);
+      if (notification !== undefined) {
+        const index = bgEntries.findIndex((entry) => entry.id === notification.taskId);
+        if (index >= 0) {
+          const entry = bgEntries[index]!;
+          bgEntries[index] = {
+            ...entry,
+            status: notification.status,
+            endTime: Date.now(),
+            notified: true,
+          };
+          fakeLog(`replay: registry ${notification.taskId} → ${notification.status}`);
+        }
+      }
+    };
+    const wireLaunch = (chain: PromptSteps, record: Record<string, unknown>): PromptSteps => {
+      const launch = mirror ? readLaunch(record) : undefined;
+      if (launch === undefined) return chain;
+      const args = launchArgs.get(launch.callId);
+      return chain.emitBackgroundLaunch({
+        toolCallId: launch.callId,
+        agentId: launch.taskId,
+        subagentName: args?.subagentType ?? "general-purpose",
+        taskDescription: args?.description ?? launch.taskId,
+        taskPrompt: args?.prompt ?? "do the work",
+      });
+    };
+
+    let chain = opened;
+    fakeLog(
+      `replay: ${String(records.length)} records from ${replay.file} (${replay.pacing.kind})`,
+    );
+    if (replay.pacing.kind === "instant") {
+      chain = chain.tap(() => {
+        for (const record of records) applyRecord(record);
+      });
+      for (const record of records) chain = wireLaunch(chain, record);
+    } else {
+      let previousMs = firstMs;
+      for (const record of records) {
+        const recordMs = Date.parse(String(record["timestamp"] ?? ""));
+        const gapMs =
+          replay.pacing.kind === "records"
+            ? replay.pacing.intervalMs
+            : Math.min(
+                Math.max(0, (Number.isFinite(recordMs) ? recordMs - previousMs : 0) * scale),
+                replay.pacing.maxGapMs ?? 5_000,
+              );
+        if (Number.isFinite(recordMs)) previousMs = recordMs;
+        chain = wireLaunch(
+          chain.sleep(gapMs).tap(() => applyRecord(record)),
+          record,
+        );
+      }
+    }
+    chain.sleep(replay.holdMs ?? 0).respondOk("end_turn");
+  };
+
+  /**
+   * ru-code (H3): the parked approval. JSONL: user record + an assistant record whose
+   * functionCall never gets a result while parked (a RUNNING step — the extended view's
+   * only awaiting candidate); wire: the same call as a pending `tool_call`, then
+   * `session/request_permission`. When the composer answers, the result record lands and
+   * the turn ends normally.
+   */
+  const scriptApproval = (
+    opened: PromptSteps,
+    approval: NonNullable<FlowControl["approval"]>,
+    promptText: string,
+    responseText: string,
+  ): void => {
+    approvalSeq += 1;
+    const callId = `e2e-approval-${String(process.pid)}-${String(approvalSeq)}`;
+    const viaAgent = approval.via === "agent";
+    const command = approval.command ?? "sudo ls -la /var/root";
+    const filePath = approval.filePath ?? "/proj/permission-test.txt";
+    const content = approval.content ?? "hello from subagent\n";
+    const requestedTool = approval.kind === "command" ? "run_shell_command" : "write_file";
+    const toolName = viaAgent ? "agent" : requestedTool;
+    const description = "Review the diff";
+    const args: Record<string, unknown> = viaAgent
+      ? { description, prompt: "p", subagent_type: "code-reviewer", run_in_background: false }
+      : approval.kind === "command"
+        ? { command, description: "Inspect the root directory" }
+        : { file_path: filePath, content };
+    const requestedInput =
+      approval.kind === "command" ? { command } : { file_path: filePath, content };
+    const permission = {
+      sessionId,
+      toolCall: {
+        toolCallId: viaAgent ? `${callId}-inner` : callId,
+        title:
+          approval.kind === "command" ? `Shell: ${command}` : `WriteFile: Writing to ${filePath}`,
+        kind: approval.kind === "command" ? "execute" : "edit",
+        status: "pending",
+        rawInput: requestedInput,
+        ...(approval.kind === "file-change"
+          ? {
+              content: [{ type: "content", content: { type: "text", text: content } }],
+              locations: [{ path: filePath }],
+            }
+          : {}),
+      },
+      options: [
+        { optionId: "proceed_once", name: "Yes, allow once", kind: "allow_once" },
+        { optionId: "proceed_always", name: "Yes, allow always", kind: "allow_always" },
+        { optionId: "cancel", name: "No (esc)", kind: "reject_once" },
+      ],
+    } as unknown as Parameters<PromptSteps["requestPermission"]>[0];
+    opened
+      .tap(() => {
+        appendRecord({
+          ...baseRecord("user"),
+          message: { role: "user", parts: [{ text: promptText }] },
+        });
+        appendRecord({
+          ...baseRecord("assistant"),
+          model: "fake/model",
+          message: {
+            role: "model",
+            parts: [
+              { text: viaAgent ? "Let me delegate this to a reviewer agent." : "Let me do that." },
+              { functionCall: { id: callId, name: toolName, args } },
+            ],
+          },
+        });
+      })
+      .emitToolCall({
+        toolCallId: callId,
+        toolName,
+        title: viaAgent
+          ? `Agent: ${description}`
+          : `${toolName}: ${approval.kind === "command" ? command : filePath}`,
+        status: "pending",
+        kind: viaAgent ? "other" : approval.kind === "command" ? "execute" : "edit",
+        rawInput: args,
+      })
+      .requestPermission(permission)
+      .tap(() => {
+        const cancelled = lastPermissionOutcome === "cancelled";
+        appendRecord({
+          ...baseRecord("tool_result"),
+          message: {
+            role: "user",
+            parts: [
+              {
+                functionResponse: {
+                  id: callId,
+                  name: toolName,
+                  response: { output: cancelled ? "Tool call was cancelled by the user." : "done" },
+                },
+              },
+            ],
+          },
+          toolCallResult: {
+            callId,
+            status: cancelled ? "cancelled" : "success",
+            ...(cancelled ? { error: { message: "cancelled by the user" } } : {}),
+          },
+        });
+        appendRecord({
+          ...baseRecord("assistant"),
+          model: "fake/model",
+          message: { role: "model", parts: [{ text: responseText }] },
+        });
+      })
+      .emitToolCallUpdate({ toolCallId: callId, toolName, status: "completed", text: "done" })
+      .emitText(responseText)
+      .respondOk("end_turn");
+  };
 
   return {
     sessionId,
+    onPermissionOutcome: (outcome) => {
+      lastPermissionOutcome = outcome.outcome;
+      fakeLog(`permission outcome: ${outcome.outcome}`);
+    },
     // ru-code (live-issues T1): serve `qwen/status/session/tasks` from the live
     // registry above. Inert until a prompt actually launches something.
     backgroundTasks: { entries: bgEntries },
@@ -323,6 +688,16 @@ function makeFlowScenario(): FakeAcpScript {
         control.responseText ??
         "Понял вас! Вот развёрнутый ответ на ваш вопрос — несколько строк текста,\nчтобы пузырь имел реальную высоту, как настоящий ответ модели.";
       const promptText = lastPromptText;
+      // ru-code (extended-view redesign): the replay / approval knobs write their OWN
+      // records (the file's, or a running call) — the plain user+assistant pair must not.
+      if (control.replay) {
+        scriptReplay(steps.sleep(delayMs), control.replay);
+        return;
+      }
+      if (control.approval) {
+        scriptApproval(steps.sleep(delayMs), control.approval, promptText, responseText);
+        return;
+      }
       // Real qwen writes the user record only after boot/binding — the delay
       // reproduces the fresh-spawn window the empty-screen bug lived in.
       setTimeout(() => {

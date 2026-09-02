@@ -8,13 +8,14 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 
 /**
- * Live-clock poll (callers run under TestClock.withLive). A timeout is a
+ * Live-clock poll on a condition that must be READ effectfully — a file on
+ * disk, a service call (callers run under TestClock.withLive). A timeout is a
  * broken test EXPECTATION, so it DIES (an outer Effect.exit must never absorb
  * it into a green "typed failure" assertion).
  */
-export const pollUntil = (predicate: () => boolean, label: string) =>
+export const pollUntilEffect = (predicate: Effect.Effect<boolean>, label: string) =>
   Effect.gen(function* () {
-    while (!predicate()) {
+    while (!(yield* predicate)) {
       yield* Effect.sleep("10 millis");
     }
   }).pipe(
@@ -23,6 +24,48 @@ export const pollUntil = (predicate: () => boolean, label: string) =>
       orElse: () => Effect.die(new Error(`pollUntil(${label}) timed out`)),
     }),
   );
+
+/**
+ * The sync special case of `pollUntilEffect` — the SAME bounded wait and the
+ * same die-on-timeout semantics, for a condition an observer already recorded
+ * in a local variable. (One poll idiom for the whole suite: a condition that
+ * must be READ effectfully — a file on disk, a service call — uses
+ * `pollUntilEffect` rather than a fourth wait shape.)
+ */
+export const pollUntil = (predicate: () => boolean, label: string) =>
+  pollUntilEffect(Effect.sync(predicate), label);
+
+/**
+ * ru-code (chained warm refill): the pool no longer spawns inline, so a spawn
+ * count is reached asynchronously (`poolOptions.refillDelayMs` after each proof
+ * of health). Bounded wait on the OBSERVED count — never a bare sleep as the
+ * only synchronization; a timeout DIES like every other broken expectation.
+ *
+ * SETTLE-AND-ASSERT-EXACT: a `>=` wait alone is a LOWER bound, and a lower
+ * bound cannot see the failure this suite exists to catch — a chain that fans
+ * out and spawns several processes where the policy allows one. So after the
+ * count is reached the helper stays quiet for `quietMs` (default 2× the chain
+ * gaps this suite uses) and then asserts the count is EXACTLY `expected`:
+ * anything the chain still had queued would have landed inside that window.
+ */
+export const pollForSpawns = (
+  observed: () => number,
+  expected: number,
+  label: string,
+  quietMs = 120,
+) =>
+  Effect.gen(function* () {
+    yield* pollUntil(() => observed() >= expected, `${label} — spawns >= ${expected}`);
+    yield* Effect.sleep(`${quietMs} millis`);
+    const settled = observed();
+    if (settled !== expected) {
+      return yield* Effect.die(
+        new Error(
+          `pollForSpawns(${label}): expected EXACTLY ${expected} spawns, observed ${settled} after a ${quietMs} ms quiet period`,
+        ),
+      );
+    }
+  });
 
 export interface AdapterEventCollector {
   /** Every runtime event delivered so far, in order. */

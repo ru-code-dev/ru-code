@@ -145,10 +145,52 @@ export const MCP_PREWARM_INSTANCES = 2;
 export const MCP_PREWARM_MAX_PROJECTS = 2;
 
 /**
+ * PREWARM_ON_EXPIRED — generic slots spawned EAGERLY (one at a time, chained)
+ * when the pool enters the EXPIRED state: at boot and after every idle reset,
+ * which are the same event kind. 0 ⇒ nothing spawns until a chat proves the
+ * recipe (the first successful bind); 1 ⇒ one process is warmed ahead of the
+ * first message. Capped by PREWARM_GENERIC_INSTANCES; anything beyond the
+ * first eager slot arrives through the health-gated chain.
+ */
+export const PREWARM_ON_EXPIRED = 0;
+
+/**
+ * PREWARM_DELAY_MS — the gap between one proof-of-health (a successful bind, or
+ * a spare's own warmup success) and the NEXT spawn in the chain. The pool never
+ * spawns two slots in parallel: a spare's `authenticate` opens an OAuth browser
+ * window whenever the cached Qwen credentials expired, so parallel refills meant
+ * several auth windows at once. Chained + health-gated ⇒ at most one, ever.
+ */
+export const PREWARM_DELAY_MS = 5_000;
+
+/**
+ * RESET_ACP_SESSIONS_AFTER_HOURS — idle window with NO ACP activity across all
+ * chats (session start, turn dispatch, turn completion, pool take) after which
+ * every pooled slot is killed and the pool returns to EXPIRED. The refill only
+ * resumes after the next user message (plus PREWARM_ON_EXPIRED). Fractional
+ * hours are allowed (0.05 ⇒ 3 min) for manual testing.
+ */
+export const RESET_ACP_SESSIONS_AFTER_HOURS = 4;
+
+/** RESET_ACP_SESSIONS_SWEEP_MS — how often the pool re-checks the idle window. */
+export const RESET_ACP_SESSIONS_SWEEP_MS = 60_000;
+
+/**
  * WARM_REFILL_BREAKER_FAILS — consecutive spawn/warmup failures on one pool
- * after which the pool STOPS refilling (a broken CLI/config must never loop
- * respawns). Cold starts still surface the classified error as always; the
- * breaker resets on the next successful bind or an instance-settings change.
+ * after which the pool STOPS refilling. Cold starts still surface the
+ * classified error as always; the counter resets on the next successful bind
+ * or an instance-settings change.
+ *
+ * NOTE (v2.1, the chained refill): the counter is no longer what prevents a
+ * respawn loop — the CHAIN is. A bucket only ever spawns one slot per
+ * proof-of-health (a successful bind, or a spare's own warmup success), and a
+ * failure ENDS that chain instead of continuing it, so a permanently broken
+ * CLI costs exactly one attempt per user action and never loops on its own.
+ * That also means a bucket cannot accumulate failures: every restart point
+ * resets the counter first, so it is back at 1 by the time the next attempt
+ * fails. The blocking branch is therefore only reachable at values ≤ 1 (the
+ * package tests drive it with `breakerFails: 0` / `1`); at the shipped 2 it is
+ * a defence-in-depth backstop, not the mechanism.
  */
 export const WARM_REFILL_BREAKER_FAILS = 2;
 

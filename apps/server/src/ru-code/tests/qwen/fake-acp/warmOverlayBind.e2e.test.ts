@@ -25,10 +25,19 @@ import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer, type FakeAcpSpawnerObservers } from "./fakeAcpSpawner.ts";
+import { pollForSpawns } from "./testKit.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const THREAD_ID = ThreadId.make("qwen-warm-overlay-thread");
 const PROJECT_ID = "mcp-project-alpha";
+// ru-code (chained refill): tiny chain gap; every count assertion is either
+// "unchanged right now" (take is spawn-free) or a bounded wait on the observed
+// recipe count.
+const REFILL_DELAY_MS = 50;
+// ru-code (I8 — SPACING): see warmReuse.e2e.test.ts. A chain of two or more
+// links is polled at its FIRST link with HALF a chain gap of quiet, so a bucket
+// filled to target in ONE firing dies here; the terminal count cannot see it.
+const SPACING_QUIET_MS = REFILL_DELAY_MS / 2;
 
 const testServices = ServerConfig.layerTest(process.cwd(), {
   prefix: "ru-code-warm-overlay-",
@@ -107,8 +116,19 @@ it.effect(
       const fs = yield* FileSystem.FileSystem;
       bindReader = (path) => fs.readFileString(path).pipe(Effect.orDie);
       const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
-      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
-      // Boot prewarm: 2 GENERIC spares (sentinel allowlist argv, slot overlay env).
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        poolOptions: {
+          eagerOnExpired: PREWARM_GENERIC_INSTANCES,
+          refillDelayMs: REFILL_DELAY_MS,
+        },
+      });
+      // Boot prewarm: 2 GENERIC spares (sentinel allowlist argv, slot overlay
+      // env) — now arriving ONE AT A TIME through the health-gated chain.
+      yield* pollForSpawns(
+        () => recipes.length,
+        PREWARM_GENERIC_INSTANCES,
+        "boot chain prewarmed the generic spares",
+      );
       assert.lengthOf(recipes, PREWARM_GENERIC_INSTANCES, "boot prewarmed the generic spares");
       for (const generic of recipes) {
         // ru-code: a generic spare wants NO MCP, which must be an allowlist nothing matches —
@@ -140,8 +160,21 @@ it.effect(
       });
       assert.lengthOf(
         recipes,
+        PREWARM_GENERIC_INSTANCES + 1,
+        "the cold spawn alone — the project spares are only SCHEDULED by the bind",
+      );
+      // ONE spare per firing: the project chain's FIRST link lands alone …
+      yield* pollForSpawns(
+        () => recipes.length,
+        PREWARM_GENERIC_INSTANCES + 2,
+        "the project chain's FIRST link spawned exactly one spare",
+        SPACING_QUIET_MS,
+      );
+      // … and only then does it reach the project target.
+      yield* pollForSpawns(
+        () => recipes.length,
         PREWARM_GENERIC_INSTANCES + 1 + MCP_PREWARM_INSTANCES,
-        "cold spawn + the project spares allocated after the bind",
+        "the project chain allocated its spares after the bind",
       );
       // Index derivation: the boot spares come first, the cold spawn follows.
       const cold = recipes[PREWARM_GENERIC_INSTANCES]!;
@@ -190,11 +223,12 @@ it.effect(
         })
         .pipe(Effect.timeout("10 seconds"));
       slotOverlayPathForBind = undefined;
-      assert.lengthOf(
-        recipes,
+      yield* pollForSpawns(
+        () => recipes.length,
         PREWARM_GENERIC_INSTANCES + 2 + MCP_PREWARM_INSTANCES,
         "warm take is spawn-free; +1 is the project top-up",
       );
+      assert.lengthOf(recipes, PREWARM_GENERIC_INSTANCES + 2 + MCP_PREWARM_INSTANCES);
       assert.lengthOf(observedAtBind, 1, "session setup observed the slot overlay file");
       assert.strictEqual(
         observedAtBind[0]!.contents,
@@ -217,12 +251,20 @@ it.effect(
           allowedMcpServers: ["gamma"],
         })
         .pipe(Effect.timeout("10 seconds"));
-      // +1 cold with the new argv, +2 fresh spares for the new layout.
-      assert.lengthOf(
-        recipes,
+      // +1 cold with the new argv, +2 fresh spares for the new layout (chained,
+      // one per firing — so the first fresh spare must land alone).
+      yield* pollForSpawns(
+        () => recipes.length,
+        PREWARM_GENERIC_INSTANCES + 4 + MCP_PREWARM_INSTANCES,
+        "layout change: the new chain's FIRST link spawned exactly one spare",
+        SPACING_QUIET_MS,
+      );
+      yield* pollForSpawns(
+        () => recipes.length,
         PREWARM_GENERIC_INSTANCES + 3 + MCP_PREWARM_INSTANCES * 2,
         "layout change: cold once, then fresh spares",
       );
+      assert.lengthOf(recipes, PREWARM_GENERIC_INSTANCES + 3 + MCP_PREWARM_INSTANCES * 2);
       const newCold = recipes[PREWARM_GENERIC_INSTANCES + 2 + MCP_PREWARM_INSTANCES]!;
       assert.strictEqual(allowlistOf(newCold), "gamma");
       assertRow(

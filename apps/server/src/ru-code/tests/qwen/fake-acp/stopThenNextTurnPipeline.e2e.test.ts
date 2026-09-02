@@ -78,7 +78,14 @@ const registryOverride =
       Effect.gen(function* () {
         const qwenSettings = yield* decodeQwenSettings({});
         // Short grace keeps the teardown-latch window realistic but test-fast.
-        const qwenAdapter = yield* makeQwenAdapter(qwenSettings, { cancelGraceMs: 200 });
+        const qwenAdapter = yield* makeQwenAdapter(qwenSettings, {
+          cancelGraceMs: 200,
+          // ru-code (chained refill, v2.1): the pool no longer spawns inline —
+          // this seam keeps THIS suite's subject (the stop → warm-restart
+          // pipeline) intact by using the full eager budget and a tiny chain
+          // gap; the counts below are reached through bounded waits.
+          poolOptions: { eagerOnExpired: 2, refillDelayMs: 50 },
+        });
         yield* Stream.runForEach(qwenAdapter.streamEvents, (event) =>
           Effect.sync(() => {
             if (event.type === "content.delta") {
@@ -189,9 +196,14 @@ it.live("stop → instant restart via the warm slot → history preserved, proje
           (thread) => thread.latestTurn?.state === "running",
           20_000,
         );
+        // ru-code (warm engine v2.1): 2 boot spares + one CHAINED refill after
+        // turn 1's successful bind — the very first send already rides a
+        // prewarmed process, and the refill arrives `refillDelayMs` later.
+        yield* waitForAdapter(
+          "turn 1: 2 boot spares + 1 chained refill",
+          () => runState.spawnCounter.count >= 3,
+        );
         const spawnsBeforeStop = runState.spawnCounter.count;
-        // ru-code (warm engine v2): 2 boot spares + take/refill on turn 1 — the
-        // very first send already rides a prewarmed process.
         assert.strictEqual(spawnsBeforeStop, 3, "turn 1: 2 boot spares + 1 refill (warm take)");
 
         yield* harness.engine.dispatch({
@@ -244,8 +256,12 @@ it.live("stop → instant restart via the warm slot → history preserved, proje
           (candidate) => candidate.latestTurn?.state === "completed",
           20_000,
         );
-        // Restart proof: the take was spawn-free (only the post-bind refill
-        // was added) — the 5-20s cold boot is gone from the user path.
+        // Restart proof: the take was spawn-free (only the post-bind chained
+        // refill was added) — the 5-20s cold boot is gone from the user path.
+        yield* waitForAdapter(
+          "turn 2: the restart's chained refill",
+          () => runState.spawnCounter.count >= 4,
+        );
         assert.strictEqual(
           runState.spawnCounter.count,
           4,

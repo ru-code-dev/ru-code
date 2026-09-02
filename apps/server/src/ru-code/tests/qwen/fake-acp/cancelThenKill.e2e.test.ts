@@ -254,20 +254,30 @@ it.effect(
         loadedSessionIds.push(sessionId);
       },
     };
+    const spawnCount = () => order.filter((entry) => entry === "spawn").length;
     return Effect.gen(function* () {
-      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), { cancelGraceMs: 100 });
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        cancelGraceMs: 100,
+        // ru-code (warm engine v2.1): the boot spares and every refill now
+        // arrive ONE at a time, `refillDelayMs` after each proof of health —
+        // so each stage is settled with a bounded wait before the next act,
+        // which is what makes the kill/spawn ORDER below deterministic.
+        poolOptions: { eagerOnExpired: 2, refillDelayMs: 50 },
+      });
       const streaming = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
         event.type === "content.delta" && event.payload.delta.includes("working")
           ? Deferred.succeed(streaming, undefined).pipe(Effect.asVoid)
           : Effect.void,
       ).pipe(Effect.forkChild);
+      yield* awaitCondition(() => spawnCount() >= 2, "the boot chain filled the generic pool");
 
       const firstSession = yield* adapter.startSession({
         threadId: THREAD_ID,
         cwd: process.cwd(),
         runtimeMode: "approval-required",
       });
+      yield* awaitCondition(() => spawnCount() >= 3, "the first start's chained refill landed");
       const turnFiber = yield* Effect.forkChild(
         adapter.sendTurn({ threadId: THREAD_ID, input: "do work" }),
       );
@@ -287,12 +297,13 @@ it.effect(
         })
         .pipe(Effect.timeout("10 seconds"));
 
+      yield* awaitCondition(() => spawnCount() >= 4, "the re-send's chained refill landed");
       yield* Fiber.interrupt(eventsFiber);
       // Latch ordering: the old child died BEFORE the re-send proceeded. With
-      // the v2 pool: 2 boot spares, the first start takes+refills (+1), the
-      // stop's background teardown kills the old child (the latch), and the
-      // re-send takes a spare + refills once more — the kill sits strictly
-      // before the last spawn.
+      // the v2.1 pool: 2 chained boot spares, the first start takes one and its
+      // bind chains a refill (+1), the stop's background teardown kills the old
+      // child (the latch), and the re-send takes a spare and chains one more —
+      // the kill sits strictly before the last spawn.
       assert.deepStrictEqual(order, ["spawn", "spawn", "spawn", "kill", "spawn"]);
       assert.deepStrictEqual(
         loadedSessionIds,

@@ -11,14 +11,15 @@
 //      session file (config.ts:998-1002): pooled resume fails typed+bounded,
 //      a fresh start right after succeeds.
 //   W2 boot-crash CLI (FatalConfigError exit 52 before the ACP loop,
-//      settings.ts:726-733): warmups fail, the refill breaker opens, cold
-//      starts surface the typed error, and spawning STOPS — no respawn loop.
+//      settings.ts:726-733): the eager warmup fails, the CHAIN stops dead
+//      (v2.1: a failure is never a proof of health), cold starts surface the
+//      typed error, and spawning STOPS — no respawn loop.
 //   W3 boot-wedge CLI (initialize never answered — e.g. a network-stalled
 //      boot auth refresh, gemini.tsx:407): a taken wedged spare trips the
-//      bounded start timeout; the pool self-heals to a healthy spare.
+//      bounded start timeout; the pool self-heals on the next start.
 //   W4 stdout prelude garbage (console redirect starts only at
-//      acpAgent.ts:81-83): poisoned prewarms are discarded, the cold start
-//      succeeds, the breaker re-arms after success and the pool refills.
+//      acpAgent.ts:81-83): the poisoned prewarm is discarded, the cold start
+//      succeeds, the breaker re-arms after success and the chain refills.
 //   W5 idle death of a parked spare (uncaughtException → exit 1,
 //      index.ts:60-71): discarded silently, the next start rides a live spare.
 //   W6 cancel-as-error race (non-429 rethrow at Session.ts:330-339): a LATE
@@ -55,7 +56,7 @@ import {
   type FakeAcpTransportControls,
 } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
-import { collectAdapterEvents, pollUntil } from "./testKit.ts";
+import { collectAdapterEvents, pollForSpawns, pollUntil } from "./testKit.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const THREAD_ID = ThreadId.make("qwen-warm-failure-thread");
@@ -82,6 +83,10 @@ const expectTypedFailure = <A, E>(exit: Exit.Exit<A, E>, label: string, detailIn
 };
 
 const PREWARM = PREWARM_GENERIC_INSTANCES;
+// ru-code (chained refill): tiny chain gap for the suites that want a filled
+// pool; W2–W4 deliberately use a single EAGER slot, because a failing recipe
+// must never produce a second one.
+const REFILL_DELAY_MS = 50;
 // The classifier (the error system's single authority) routes ALL of these
 // through its C4 recognizer — `ProviderAdapterProcessError` and transport
 // death both classify as connection-lost (recognizers.ts C4_TRANSPORT). The
@@ -109,8 +114,9 @@ it.effect(
       // start cannot stretch the test (the classified failure itself is instant).
       const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
         sessionStartTimeoutMs: 1_000,
+        poolOptions: { eagerOnExpired: PREWARM, refillDelayMs: REFILL_DELAY_MS },
       });
-      assert.strictEqual(spawnCount, PREWARM, "boot prewarm");
+      yield* pollForSpawns(() => spawnCount, PREWARM, "boot chain prewarmed the generic target");
 
       // Healthy first life: warm take + session/new + a streamed turn.
       const firstSession = yield* adapter.startSession({
@@ -182,14 +188,17 @@ it.effect(
     let disposeCount = 0;
     const script: FakeAcpScript = { onPrompt: (steps) => steps.respondOk() };
     return Effect.gen(function* () {
-      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
-      assert.strictEqual(spawnCount, PREWARM, "boot prewarm attempted");
-      // Both prewarmed children die at initialize (exit 52) → their warmups
-      // fail, the slots are discarded, the breaker opens.
-      yield* pollUntil(() => disposeCount >= PREWARM, "both crashed prewarms discarded");
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        poolOptions: { eagerOnExpired: PREWARM, refillDelayMs: REFILL_DELAY_MS },
+      });
+      // ru-code (v2.1): the eager chain starts with ONE process. Its warmup
+      // fails (exit 52) ⇒ no proof of health ⇒ the chain never produces a
+      // second one, even with an eager budget of PREWARM.
+      assert.strictEqual(spawnCount, 1, "the eager chain attempted exactly ONE boot process");
+      yield* pollUntil(() => disposeCount >= 1, "the crashed prewarm was discarded");
 
-      // Cold start #1: pool empty, breaker open (no refill), the cold child
-      // crashes the same way → a classified typed failure.
+      // Cold start #1: pool empty, the chain stopped, the cold child crashes
+      // the same way → a classified typed failure.
       const firstExit = yield* Effect.exit(
         adapter
           .startSession({
@@ -202,8 +211,8 @@ it.effect(
       expectTypedFailure(firstExit, "W2 first start", CONNECTION_LOST_FRAGMENT);
       assert.strictEqual(
         spawnCount,
-        PREWARM + 1,
-        "breaker open: take refilled NOTHING; only the cold spawn",
+        1 + 1,
+        "take refilled NOTHING (take is spawn-free); only the cold spawn",
       );
 
       // Cold start #2: same — exactly one more spawn.
@@ -217,13 +226,13 @@ it.effect(
           .pipe(Effect.timeout("10 seconds")),
       );
       expectTypedFailure(secondExit, "W2 second start", CONNECTION_LOST_FRAGMENT);
-      assert.strictEqual(spawnCount, PREWARM + 2, "still one spawn per user action");
+      assert.strictEqual(spawnCount, 1 + 2, "still one spawn per user action");
 
       // The no-loop proof: with no user action, NOTHING respawns. (A
       // real-clock window — the one honest way to assert an absence; it can
       // only false-pass on a respawn slower than the window, never flake red.)
       yield* Effect.sleep("300 millis");
-      assert.strictEqual(spawnCount, PREWARM + 2, "a broken CLI is never respawn-looped");
+      assert.strictEqual(spawnCount, 1 + 2, "a broken CLI is never respawn-looped");
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -249,7 +258,7 @@ it.effect(
 // ── W3 — boot-wedge CLI: bounded timeout, pool self-heals ────────────────────
 
 it.effect(
-  "warm failure W3: wedged-at-boot prewarms cost one bounded timeout each, then a healthy spare serves",
+  "warm failure W3: a wedged-at-boot prewarm costs one bounded timeout, then the pool self-heals",
   () => {
     let spawnCount = 0;
     const script: FakeAcpScript = { onPrompt: (steps) => steps.emitText("ok").respondOk() };
@@ -263,12 +272,15 @@ it.effect(
         // from the pool timer (whose interrupt would be an unclassified,
         // cancel-looking death).
         sessionStartTimeoutMs: 500,
+        // A wedged spare never proves health, so the chain stops at one — the
+        // v2.1 shape of "a broken recipe never fans out".
+        poolOptions: { eagerOnExpired: PREWARM, refillDelayMs: REFILL_DELAY_MS },
       });
-      assert.strictEqual(spawnCount, PREWARM, "boot prewarm (both wedged at initialize)");
+      assert.strictEqual(spawnCount, 1, "the eager chain attempted ONE boot process (wedged)");
 
-      // Start #1 takes wedged spare #1: the bind awaits the never-finishing
-      // warmup and the start timeout converts it into a typed failure. The
-      // take already topped up a HEALTHY spare (#3) behind it.
+      // Start #1 takes the wedged spare: the bind awaits the never-finishing
+      // warmup and the start timeout converts it into a typed failure. The take
+      // spawns nothing, and the FAILED start is no proof of health either.
       const firstExit = yield* Effect.exit(
         adapter.startSession({
           threadId: THREAD_ID,
@@ -277,20 +289,10 @@ it.effect(
         }),
       );
       expectTypedFailure(firstExit, "W3 first start (wedged spare)", CONNECTION_LOST_FRAGMENT);
-      assert.strictEqual(spawnCount, PREWARM + 1, "take topped up one healthy spare");
+      assert.strictEqual(spawnCount, 1, "take is spawn-free; a failed start refills nothing");
 
-      // Start #2 takes wedged spare #2 — same bounded failure, tops up #4.
-      const secondExit = yield* Effect.exit(
-        adapter.startSession({
-          threadId: THREAD_ID,
-          cwd: process.cwd(),
-          runtimeMode: "approval-required",
-        }),
-      );
-      expectTypedFailure(secondExit, "W3 second start (wedged spare)", CONNECTION_LOST_FRAGMENT);
-      assert.strictEqual(spawnCount, PREWARM + 2);
-
-      // Start #3 reaches the healthy spare — the pool has self-healed.
+      // Start #2 finds an EMPTY pool and goes cold on a healthy child — the
+      // pool self-heals through the user's next action, never through a loop.
       yield* adapter
         .startSession({
           threadId: THREAD_ID,
@@ -298,9 +300,37 @@ it.effect(
           runtimeMode: "approval-required",
         })
         .pipe(Effect.timeout("10 seconds"));
+      assert.strictEqual(spawnCount, 2, "one cold spawn — the refill is only SCHEDULED");
       assert.strictEqual(yield* adapter.hasSession(THREAD_ID), true);
       yield* adapter
         .sendTurn({ threadId: THREAD_ID, input: "привет" })
+        .pipe(Effect.timeout("10 seconds"));
+
+      // …and the OTHER half of "self-heals": that successful bind was the
+      // proof of health, so the chain refills the generic pool back to target
+      // with HEALTHY children, one at a time. The next start then rides a WARM
+      // spare again — the pool is fully recovered, not merely usable cold.
+      yield* pollForSpawns(
+        () => spawnCount,
+        2 + PREWARM,
+        "the healed chain refilled the generic pool to target",
+      );
+      yield* adapter.stopSession(THREAD_ID).pipe(Effect.timeout("10 seconds"));
+      const beforeHealed = spawnCount;
+      yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          cwd: process.cwd(),
+          runtimeMode: "approval-required",
+        })
+        .pipe(Effect.timeout("10 seconds"));
+      assert.strictEqual(
+        spawnCount,
+        beforeHealed,
+        "start #3 rode a HEALTHY warm spare — spawn-free, the pool self-healed",
+      );
+      yield* adapter
+        .sendTurn({ threadId: THREAD_ID, input: "снова" })
         .pipe(Effect.timeout("10 seconds"));
     }).pipe(
       Effect.scoped,
@@ -310,9 +340,9 @@ it.effect(
             onSpawn: () => {
               spawnCount += 1;
             },
-            // Only the two boot-prewarmed children wedge; later spawns are healthy.
+            // Only the boot-prewarmed child wedges; later spawns are healthy.
             perSpawnScript: (spawnIndex) =>
-              spawnIndex <= PREWARM ? { initializeBehavior: "hang" } : undefined,
+              spawnIndex <= 1 ? { initializeBehavior: "hang" } : undefined,
           }),
           testServices,
         ),
@@ -334,15 +364,19 @@ it.effect(
       // The poisoned transport dies but the CHILD does not exit, so only the
       // pool's warmup ceiling can evict it — tiny here so the test is fast.
       const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
-        poolOptions: { warmupTimeoutMs: 300 },
+        poolOptions: {
+          warmupTimeoutMs: 300,
+          eagerOnExpired: PREWARM,
+          refillDelayMs: REFILL_DELAY_MS,
+        },
       });
-      assert.strictEqual(spawnCount, PREWARM, "boot prewarm (both parser-poisoned)");
-      // Both warmups choke on the non-ndjson prelude → the warmup timeout
-      // discards the wedged-but-alive slots and opens the breaker.
-      yield* pollUntil(() => disposeCount >= PREWARM, "both poisoned prewarms discarded");
+      assert.strictEqual(spawnCount, 1, "the eager chain attempted ONE boot process (poisoned)");
+      // The warmup chokes on the non-ndjson prelude → the warmup timeout
+      // discards the wedged-but-alive slot, counts the breaker, chain stops.
+      yield* pollUntil(() => disposeCount >= 1, "the poisoned prewarm was discarded");
 
-      // The user's start: pool empty + breaker open ⇒ ONE cold spawn (healthy
-      // — the garbage was a boot-window artifact) and the session works.
+      // The user's start: pool empty + the chain stopped ⇒ ONE cold spawn
+      // (healthy — the garbage was a boot-window artifact) and the session works.
       yield* adapter
         .startSession({
           threadId: THREAD_ID,
@@ -351,11 +385,12 @@ it.effect(
         })
         .pipe(Effect.timeout("10 seconds"));
       assert.strictEqual(yield* adapter.hasSession(THREAD_ID), true);
-      // Success re-arms the breaker and refills the pool inline: cold + target.
-      assert.strictEqual(
-        spawnCount,
-        PREWARM + 1 + PREWARM,
-        "breaker re-armed after success — pool refilled",
+      // Success re-arms the breaker and the CHAIN refills to target, one at a
+      // time: the poisoned prewarm + the cold spawn + PREWARM chained spares.
+      yield* pollForSpawns(
+        () => spawnCount,
+        1 + 1 + PREWARM,
+        "breaker re-armed after success — the chain refilled the pool",
       );
       yield* adapter
         .sendTurn({ threadId: THREAD_ID, input: "привет" })
@@ -371,9 +406,9 @@ it.effect(
             onDispose: () => {
               disposeCount += 1;
             },
-            // Boot-window stdout pollution on the two prewarms only.
+            // Boot-window stdout pollution on the prewarm only.
             perSpawnScript: (spawnIndex) =>
-              spawnIndex <= PREWARM
+              spawnIndex <= 1
                 ? { preludeStdout: "qwen-cli: deprecation warning\nnot-json{{{\n" }
                 : undefined,
           }),
@@ -401,8 +436,10 @@ it.effect(
       },
     };
     return Effect.gen(function* () {
-      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
-      assert.strictEqual(spawnCount, PREWARM, "boot prewarm");
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        poolOptions: { eagerOnExpired: PREWARM, refillDelayMs: REFILL_DELAY_MS },
+      });
+      yield* pollForSpawns(() => spawnCount, PREWARM, "boot chain prewarmed the generic target");
       // "Silently": a parked spare has no thread — its death must emit
       // NOTHING on the adapter's event stream.
       const collector = yield* collectAdapterEvents(adapter);
@@ -430,8 +467,12 @@ it.effect(
       assert.strictEqual(yield* adapter.hasSession(THREAD_ID), true);
       assert.strictEqual(createSessionCount, 1, "one session/new on the live spare");
       // The dead spare was already gone, so the take popped the pool empty and
-      // refilled to the FULL target.
-      assert.strictEqual(spawnCount, PREWARM + PREWARM, "take refilled the pool back to target");
+      // the bind's CHAIN refilled it to the FULL target, one process at a time.
+      yield* pollForSpawns(
+        () => spawnCount,
+        PREWARM + PREWARM,
+        "the chain refilled the pool back to target",
+      );
       yield* adapter
         .sendTurn({ threadId: THREAD_ID, input: "привет" })
         .pipe(Effect.timeout("10 seconds"));

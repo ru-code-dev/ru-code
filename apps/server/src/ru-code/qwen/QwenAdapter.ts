@@ -72,7 +72,11 @@ import {
   STOP_BUTTON_METHOD,
   MCP_PREWARM_INSTANCES,
   MCP_PREWARM_MAX_PROJECTS,
+  PREWARM_DELAY_MS,
   PREWARM_GENERIC_INSTANCES,
+  PREWARM_ON_EXPIRED,
+  RESET_ACP_SESSIONS_AFTER_HOURS,
+  RESET_ACP_SESSIONS_SWEEP_MS,
   WARM_REFILL_BREAKER_FAILS,
   WARM_SLOT_MAX_AGE_ENABLED,
   WARM_SLOT_MAX_AGE_MS,
@@ -334,6 +338,14 @@ export interface QwenAdapterLiveOptions {
     readonly maxAgeEnabled?: boolean;
     readonly maxAgeMs?: number;
     readonly warmupTimeoutMs?: number;
+    /** Chain gap (PREWARM_DELAY_MS). Tests pass 20–50 ms. */
+    readonly refillDelayMs?: number;
+    /** Eager generic slots on EXPIRED (PREWARM_ON_EXPIRED). */
+    readonly eagerOnExpired?: number;
+    /** Idle window in MS (RESET_ACP_SESSIONS_AFTER_HOURS × 3_600_000). */
+    readonly idleResetMs?: number;
+    /** Idle sweep cadence (RESET_ACP_SESSIONS_SWEEP_MS). */
+    readonly idleSweepMs?: number;
   };
 }
 
@@ -978,6 +990,16 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             maxAgeEnabled: options?.poolOptions?.maxAgeEnabled ?? WARM_SLOT_MAX_AGE_ENABLED,
             maxAgeMs: options?.poolOptions?.maxAgeMs ?? WARM_SLOT_MAX_AGE_MS,
             warmupTimeoutMs: options?.poolOptions?.warmupTimeoutMs ?? WARM_SLOT_WARMUP_TIMEOUT_MS,
+            // ru-code (chained refill): one spawn per proof-of-health, this far
+            // apart — never two `authenticate` handshakes (⇒ never two OAuth
+            // browser windows) in flight for one bucket.
+            refillDelayMs: options?.poolOptions?.refillDelayMs ?? PREWARM_DELAY_MS,
+            eagerOnExpired: options?.poolOptions?.eagerOnExpired ?? PREWARM_ON_EXPIRED,
+            // Hours → ms; the pool kills every spare after this much idleness.
+            idleResetMs:
+              options?.poolOptions?.idleResetMs ??
+              Math.round(RESET_ACP_SESSIONS_AFTER_HOURS * 3_600_000),
+            idleSweepMs: options?.poolOptions?.idleSweepMs ?? RESET_ACP_SESSIONS_SWEEP_MS,
             nextSlotId: cryptoUuid,
             makeRuntime: (request) =>
               Effect.gen(function* () {
@@ -4024,8 +4046,11 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           }
 
           // ru-code (warm engine): refill only after a successful bind (I-8) —
-          // idle slot deaths are never auto-respawned, so no crash-loops. The
-          // spawn is inline (deterministic counts); the warmup RPCs fork.
+          // idle slot deaths are never auto-respawned, so no crash-loops.
+          // v2.1: this call is THE proof of health and it only SCHEDULES the
+          // next chain link (one spawn, PREWARM_DELAY_MS later, gated on the
+          // previous slot warming up) — nothing spawns inline any more, so a
+          // long-idle refill can never open several Qwen auth windows at once.
           if (warmPool !== undefined) {
             yield* warmPool.ensureAfterSuccess(warmRequest);
           }
@@ -4496,6 +4521,15 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
               }
             }
             yield* Deferred.succeed(turnFinalized, undefined);
+            // ru-code (idle expiry): the other turn boundary — a completion is
+            // ACP activity too, so a long turn can never expire the pool under
+            // itself. LAST in the finalizer on purpose: every existing ordering
+            // contract above (single turn.completed, claim release, delivery
+            // marks, the abortSession barrier) settles before this cheap
+            // Clock read, so the touch cannot widen any of those windows.
+            if (warmPool !== undefined) {
+              yield* warmPool.touch;
+            }
           });
 
         // Cancel (user Stop / mode-change set userCancelRequested before the
@@ -4568,6 +4602,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 );
               });
 
+        // ru-code (idle expiry): ACP activity, the coarse kind the pool's idle
+        // window measures — a turn is being dispatched. Deliberately here and
+        // NOT on content deltas / background polls: a background poll must not
+        // keep 4 hours of warm processes alive.
+        if (warmPool !== undefined) {
+          yield* warmPool.touch;
+        }
         yield* offerRuntimeEvent({
           type: "turn.started",
           ...(yield* makeEventStamp()),

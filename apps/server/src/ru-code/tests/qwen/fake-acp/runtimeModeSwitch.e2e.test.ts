@@ -27,6 +27,7 @@ import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
+import { pollForSpawns } from "./testKit.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const THREAD_ID = ThreadId.make("qwen-runtime-mode-thread");
@@ -77,7 +78,11 @@ it.effect(
   "qwen runtime-mode switch: per-turn setMode applies full-access live (auto-approve, no respawn)",
   () =>
     Effect.gen(function* () {
-      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        // ru-code (chained refill): the boot spares now arrive one at a time,
+        // so this suite pins the same counts through a bounded wait.
+        poolOptions: { eagerOnExpired: PREWARM_GENERIC_INSTANCES, refillDelayMs: 50 },
+      });
       const events: ProviderRuntimeEvent[] = [];
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
         Effect.sync(() => {
@@ -150,6 +155,11 @@ it.effect(
       // and refills one — so 3 spawns total, ONE session child. The
       // no-`session.exited`-between-turns assertion below still proves the
       // session itself was never respawned.
+      yield* pollForSpawns(
+        () => spawnCount,
+        PREWARM_GENERIC_INSTANCES + 1,
+        "boot spares + the single chained refill",
+      );
       assert.strictEqual(
         spawnCount,
         PREWARM_GENERIC_INSTANCES + 1,

@@ -26,7 +26,7 @@ import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
-import { pollUntil } from "./testKit.ts";
+import { pollForSpawns, pollUntil, pollUntilEffect } from "./testKit.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const ACTIVE_THREAD = ThreadId.make("qwen-shutdown-active-thread");
@@ -37,6 +37,8 @@ const testServices = ServerConfig.layerTest(process.cwd(), {
 }).pipe(Layer.provideMerge(NodeServices.layer));
 
 const PREWARM = PREWARM_GENERIC_INSTANCES;
+// ru-code (chained refill): tiny chain gap so the pool reaches its target fast.
+const REFILL_DELAY_MS = 50;
 
 // A LOCAL reader schema — pins the journal's on-disk shape independently of
 // the implementation's encoder.
@@ -59,7 +61,10 @@ it.effect("stopAll: idle+slot killed instantly, active turn cancelled, journal d
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
-    const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), { cancelGraceMs: 100 });
+    const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+      cancelGraceMs: 100,
+      poolOptions: { eagerOnExpired: PREWARM, refillDelayMs: REFILL_DELAY_MS },
+    });
     const events: ProviderRuntimeEvent[] = [];
     const streaming = yield* Deferred.make<void>();
     const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
@@ -74,7 +79,9 @@ it.effect("stopAll: idle+slot killed instantly, active turn cancelled, journal d
       ),
     ).pipe(Effect.forkChild);
 
-    // Active session (cold spawn + refill slot) …
+    // The boot chain fills the generic pool one process at a time.
+    yield* pollForSpawns(() => spawnCount, PREWARM, "boot chain reached the generic target");
+    // Active session (takes a boot spare, schedules one refill) …
     yield* adapter.startSession({
       threadId: ACTIVE_THREAD,
       cwd: process.cwd(),
@@ -86,8 +93,9 @@ it.effect("stopAll: idle+slot killed instantly, active turn cancelled, journal d
       cwd: process.cwd(),
       runtimeMode: "approval-required",
     });
-    // ru-code (warm engine v2): boot spares; each start takes one + refills
-    // one — leaving 2 session children + PREWARM parked spares.
+    // ru-code (warm engine v2.1): boot spares; each start takes one and the
+    // CHAIN refills one — leaving 2 session children + PREWARM parked spares.
+    yield* pollForSpawns(() => spawnCount, PREWARM + 2, "boot spares + one refill per start (x2)");
     assert.strictEqual(spawnCount, PREWARM + 2, "boot spares + refill per start (x2)");
 
     // … and a turn in flight on the active session.
@@ -98,7 +106,20 @@ it.effect("stopAll: idle+slot killed instantly, active turn cancelled, journal d
 
     // The journal (per-instance file) currently tracks every child.
     const journalPath = `${serverConfig.stateDir}/qwen-pids.qwen.json`;
-    const before = readJournalFile(yield* fs.readFileString(journalPath));
+    const readJournal = fs
+      .readFileString(journalPath)
+      .pipe(Effect.map(readJournalFile), Effect.orDie);
+    // ru-code: a warm child's journal entry is written INSIDE the pool's
+    // `makeRuntime`, i.e. STRICTLY AFTER the spawn observer `pollForSpawns`
+    // watches — "every spawn observed" does not imply "every entry written".
+    // That gap is this test's own synchronization point, so it is waited on
+    // explicitly (bounded, dies on timeout) instead of riding the spawn
+    // helper's quiet window.
+    yield* pollUntilEffect(
+      Effect.map(readJournal, (entries) => entries.length >= PREWARM + 2),
+      "the pid journal recorded every spawned child",
+    );
+    const before = yield* readJournal;
     assert.lengthOf(before, PREWARM + 2, "journal tracks 2 sessions + the warm spares");
     assert.lengthOf(
       before.filter((entry) => entry.kind === "warm"),
@@ -228,3 +249,57 @@ it.effect("stopAll racing a concurrent single stop settles the session EXACTLY o
     TestClock.withLive,
   );
 });
+
+// ── T18 — stopAll while a chain refill is still PENDING ──────────────────────
+
+it.effect(
+  "T18 stopAll with a refill still pending: journal drains and nothing spawns after",
+  () => {
+    let spawnCount = 0;
+    const script: FakeAcpScript = { onPrompt: (steps) => steps.respondOk() };
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
+      // A chain gap far longer than the test: after the start's successful bind
+      // the refill is ARMED and is still pending when stopAll lands.
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        cancelGraceMs: 100,
+        poolOptions: { eagerOnExpired: 0, refillDelayMs: 30_000 },
+      });
+      assert.strictEqual(spawnCount, 0, "eager=0: no boot spares");
+
+      yield* adapter.startSession({
+        threadId: IDLE_THREAD,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      assert.strictEqual(spawnCount, 1, "one cold spawn; the refill is only SCHEDULED");
+
+      yield* adapter.stopAll().pipe(Effect.timeout("10 seconds"));
+      assert.strictEqual(yield* adapter.hasSession(IDLE_THREAD), false);
+      const journalPath = `${serverConfig.stateDir}/qwen-pids.qwen.json`;
+      assert.deepStrictEqual(
+        readJournalFile(yield* fs.readFileString(journalPath)),
+        [],
+        "journal empty after stopAll",
+      );
+      // The drain cancelled the pending chain link: a real window (the honest way
+      // to assert an absence) shows nothing respawning behind the shutdown.
+      yield* Effect.sleep("300 millis");
+      assert.strictEqual(spawnCount, 1, "a drained pool never spawns behind the shutdown");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.provideMerge(
+          fakeAcpSpawnerLayer(script, {
+            onSpawn: () => {
+              spawnCount += 1;
+            },
+          }),
+          testServices,
+        ),
+      ),
+      TestClock.withLive,
+    );
+  },
+);

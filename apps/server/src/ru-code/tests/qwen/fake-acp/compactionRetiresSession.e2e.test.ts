@@ -22,10 +22,15 @@ import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
+import { pollForSpawns } from "./testKit.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const COMPRESS_METHOD = "_qwencode/slash_command";
 const REPLY_TEXT = "Привет! 👋";
+// ru-code (warm engine v2.1): the pool no longer spawns inline — this suite
+// keeps its original counts by asking for the full eager boot budget and a tiny
+// chain gap, and reaching each count through a bounded wait.
+const POOL_OPTIONS = { eagerOnExpired: 2, refillDelayMs: 50 } as const;
 
 const testServices = (prefix: string) =>
   ServerConfig.layerTest(process.cwd(), { prefix }).pipe(Layer.provideMerge(NodeServices.layer));
@@ -78,7 +83,9 @@ it.effect("a CONFIRMED compression retires the session; the next start resumes i
       },
     };
     yield* Effect.gen(function* () {
-      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
+      const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+        poolOptions: POOL_OPTIONS,
+      });
       const eventsFiber = yield* Effect.forkChild(
         Stream.runForEach(adapter.streamEvents, (event) =>
           Effect.sync(() => {
@@ -134,10 +141,11 @@ it.effect("a CONFIRMED compression retires the session; the next start resumes i
         [FAKE_SESSION_ID],
         "the restart must take session/load with the same sessionId",
       );
-      // ru-code (warm engine v2): was 2 pre-pool — now 2 boot spares + a
-      // take/refill per start (first start and the post-retire resume): 4
-      // total, zero cold boots. The session/load assertion above still
-      // proves the compressed resume path.
+      // ru-code (warm engine v2.1): was 2 pre-pool — now 2 boot spares + one
+      // CHAINED refill per successful bind (first start and the post-retire
+      // resume): 4 total, zero cold boots. The session/load assertion above
+      // still proves the compressed resume path.
+      yield* pollForSpawns(() => spawns, 4, "2 boot spares + one chained refill per start");
       assert.strictEqual(spawns, 4, "2 boot spares + refill per start (x2)");
 
       const secondTurn = yield* adapter
@@ -198,7 +206,9 @@ for (const shape of [
         },
       };
       yield* Effect.gen(function* () {
-        const adapter = yield* makeQwenAdapter(decodeQwenSettings({}));
+        const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
+          poolOptions: POOL_OPTIONS,
+        });
         const eventsFiber = yield* Effect.forkChild(
           Stream.runForEach(adapter.streamEvents, (event) =>
             Effect.sync(() => {
@@ -228,9 +238,10 @@ for (const shape of [
           .sendTurn({ threadId, input: "привет", runtimeMode: "approval-required" })
           .pipe(Effect.timeout("10 seconds"));
         yield* awaitReplyDelta(collected, turn.turnId);
-        // ru-code (warm engine v2): was 1 pre-pool — 2 boot spares + one
-        // refill after the take; the follow-up turn still rides the SAME
-        // session child (no session.exited above proves it).
+        // ru-code (warm engine v2.1): was 1 pre-pool — 2 boot spares + one
+        // CHAINED refill after the bind; the follow-up turn still rides the
+        // SAME session child (no session.exited above proves it).
+        yield* pollForSpawns(() => spawns, 3, "2 boot spares + the chained refill");
         assert.strictEqual(spawns, 3, "2 boot spares + 1 refill; one session child");
         yield* Fiber.interrupt(eventsFiber);
       }).pipe(

@@ -19,10 +19,10 @@
  * EXCEPTION — catalog custom commands: qwen ALSO runs the user's own commands
  * deployed under `<cwd>/.qwen/commands/`. Those are dynamic (the Commands panel
  * adds/removes/connects them per project), so the guard cannot list them here.
- * The caller passes the LIVE effective set (from the catalog snapshot atom, via
- * `useCatalogCommandSlugs`) into the guard as `catalogCommandSlugs`; because the
- * set is recomputed from the atom, the allowlist recalculates whenever the
- * command list changes.
+ * The caller passes the LIVE effective set into the guard as `catalogCommandSlugs`;
+ * since A25 it comes from the catalogs PLUGIN's `command` composer provider, via
+ * `usePluginCommandSlugs`, so the allowlist recalculates whenever the command list
+ * changes — and is empty (every `/command` unknown) when no such plugin is installed.
  *
  * @module ru-code/slash-commands/qwenSlashCommands
  */

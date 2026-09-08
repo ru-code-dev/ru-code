@@ -53,6 +53,7 @@
     "test:e2e:core": "pnpm --filter @ru-code/e2e test:core",
     "test:e2e:performance": "pnpm --filter @ru-code/e2e test:performance",
     "test:e2e:pixso": "pnpm --filter @ru-code/e2e test:pixso",
+    "test:e2e:plugins": "pnpm --filter @ru-code/e2e test:plugins",
     "test:e2e:all": "pnpm --filter @ru-code/e2e test:core && pnpm --filter @ru-code/e2e test:contracts && pnpm --filter @ru-code/e2e test:warm && node ru-code/e2e/features/auto-update/browserRun.ts && node ru-code/e2e/features/auto-update/liveCycle.ts && pnpm --filter @ru-code/e2e test:outdated"
   },
   "devDependencies": {

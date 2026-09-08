@@ -79,7 +79,7 @@ describe("resolveQwenSubmitPrompt", () => {
 });
 
 // ru-code: the catalog custom-command allowlist is DYNAMIC — commands are added/removed/connected in
-// the Commands panel, so the guard consults the live set the caller passes (useCatalogCommandSlugs).
+// the Commands panel, so the guard consults the live set the caller passes (usePluginCommandSlugs).
 describe("resolveQwenSubmitPrompt — dynamic catalog command allowlist", () => {
   const slugs: ReadonlySet<string> = new Set(["mycommand", "fs:ls"]);
 

@@ -66,21 +66,6 @@ import { RpcServer } from "effect/unstable/rpc";
 // in the serialized text before any byte leaves the socket. See ru-code/localization/wireEgress.ts.
 import { layerLocalizedJsonRpcSerialization } from "./ru-code/localization/wireEgress.ts";
 
-// ru-code: Skills + Agents catalog (Skills/Agents Manager) — the catalog services, their
-// host-wired layers, and the extracted RPC handlers + scopes. Both catalog errors are the same
-// core `CatalogError`; `SkillCatalogError` aliases it and encodes an authorization failure into
-// the catalog RPC's declared error channel. Handlers/scopes live in ru-code/skills-agents so this
-// upstream file keeps only the seam (yield services, spread handlers/scopes, provide layers).
-import { SkillCatalog } from "@smart-tools/qwen-cli-skill-manager/server";
-import { AgentCatalog } from "@smart-tools/qwen-cli-agents-manager/server";
-import { CommandCatalog } from "@smart-tools/qwen-cli-commands-manager/server";
-import { SkillCatalogError as CatalogError } from "@smart-tools/qwen-cli-skill-manager/contracts";
-import {
-  SkillCatalogHostLayer,
-  AgentCatalogHostLayer,
-  CommandCatalogHostLayer,
-} from "./ru-code/skills-agents/catalogLayers.ts";
-import { buildCatalogRpcHandlers } from "./ru-code/skills-agents/catalogRpcHandlers.ts";
 // ru-code: MCP manager services + handlers (extracted to ru-code/mcp).
 import {
   McpProjectionQuery,
@@ -99,6 +84,16 @@ import {
   type ObservePixsoAssistantRpc,
   type ObservePixsoAssistantRpcStream,
 } from "./ru-code/pixso-assistant/rpcHandlers.ts";
+// ru-code: plugin system — the ONE generic RPC seam (D3). The host is the same
+// module-level layer the boot phase and the asset route provide; scopes live in
+// auth/RpcAuthorization.ts alongside every other feature's.
+import { PluginRpcError } from "@smart-tools/plugin-sdk/contracts";
+import { PluginHost, PluginHostLayer } from "./ru-code/plugins/PluginHost.ts";
+import {
+  buildPluginRpcHandlers,
+  tracePluginRpc,
+  type ObservePluginRpc,
+} from "./ru-code/plugins/rpcHandlers.ts";
 // ru-code: auto-update RPC handlers (logic in ru-code/auto-update; scopes live in
 // auth/RpcAuthorization.ts).
 import { buildAutoUpdateRpcHandlers } from "./ru-code/auto-update/rpcHandlers.ts";
@@ -125,15 +120,6 @@ import {
 import { signalFirstClientConnected } from "./ru-code/startup/firstClientConnected.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
-// ru-code: analytics scanner + handlers (extracted to ru-code/analytics).
-import { AnalyticsScanner } from "@smart-tools/qwen-cli-analytics/server";
-import { AnalyticsError } from "@smart-tools/qwen-cli-analytics/contracts";
-import { AnalyticsHostLayer } from "./ru-code/analytics/analyticsPorts.ts";
-import {
-  buildAnalyticsRpcHandlers,
-  traceAnalyticsRpc,
-  type ObserveAnalyticsRpc,
-} from "./ru-code/analytics/analyticsRpcHandlers.ts"; // ru-code: ANALYTICS_RPC_SCOPES moved to auth/RpcAuthorization.ts (C-app-003)
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -493,10 +479,6 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
-      // ru-code: the Skills + Agents catalog services (filesystem-truth catalog engine).
-      const skillCatalog = yield* SkillCatalog;
-      const agentCatalog = yield* AgentCatalog;
-      const commandCatalog = yield* CommandCatalog;
       // ru-code: the MCP manager services (event-sourced catalog + live supervisor).
       const mcpProjectionQuery = yield* McpProjectionQuery;
       const mcpRuntime = yield* McpRuntime;
@@ -505,10 +487,12 @@ const makeWsRpcLayer = (
       const qwenTranscript = yield* QwenTranscriptService;
       // ru-code: the auto-update engine (same memoized instance the runtime graph provides).
       const updateEngine = yield* UpdateEngine;
-      // ru-code: the analytics scanner (incremental reader of qwen's transcript tree).
-      const analyticsScanner = yield* AnalyticsScanner;
       // ru-code: the Pixso MCP assistant service (content-addressed scan store + MCP client).
       const pixsoAssistant = yield* PixsoAssistant;
+      // ru-code: the plugin host — a memo HIT onto the instance the runtime graph and
+      // the asset route already built (module-level layer). A second instance would
+      // have an empty status/handler table and every invoke would be unknown-plugin.
+      const pluginHost = yield* PluginHost;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -562,25 +546,6 @@ const makeWsRpcLayer = (
           authorizeEffect(requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
-      // ru-code: the catalog RPCs declare ONLY `CatalogError` (they come from the shared core
-      // factory, which is host-agnostic). Authorization still applies, but an auth failure is
-      // encoded into `CatalogError` so the handler's error type stays assignable to the RPC's
-      // declared error channel (the generic `observeRpcEffect` would widen it with
-      // `EnvironmentAuthorizationError`).
-      const observeCatalogRpc = <A, R>(
-        method: string,
-        aggregate: string,
-        effect: Effect.Effect<A, CatalogError, R>,
-      ): Effect.Effect<A, CatalogError, R> =>
-        instrumentRpcEffect(
-          method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
-            Effect.catchTag("EnvironmentAuthorizationError", (error) =>
-              Effect.fail(new CatalogError({ detail: error.message, cause: error })),
-            ),
-          ),
-          { "rpc.aggregate": aggregate },
-        );
       // ru-code: same encoding for the MCP RPCs — they declare ONLY `McpError`, so an auth
       // failure is folded into it (unary + stream variants; stream construction lives in the
       // package services, this seam stays a thin delegation).
@@ -590,8 +555,7 @@ const makeWsRpcLayer = (
       // unresolved type parameter — it widens the handler's argument to
       // `{ readonly _tag: unknown } & E` and the fold stops type-checking. Concrete error
       // types here are what make the narrowing exact, so the twenty duplicated lines buy
-      // real static safety. `observeCatalogRpc` above is a THIRD shape (per-call aggregate),
-      // not a fourth copy of this one.
+      // real static safety.
       const observeMcpRpc: ObserveMcpRpc = (method, effect) =>
         instrumentRpcEffect(
           method,
@@ -612,36 +576,28 @@ const makeWsRpcLayer = (
           ),
           { "rpc.aggregate": "mcp" },
         );
-      // ru-code: same encoding for the analytics RPCs — they declare ONLY `AnalyticsError`.
+      // ru-code: same encoding for the plugin RPCs — they declare ONLY `PluginRpcError`,
+      // whose `reason` set already contains `unauthorized`, so a scope rejection reaches
+      // the caller as a plugin error rather than a transport-shaped one. `detail` carries
+      // the scope message; no `cause` — `PluginRpcError` deliberately has no such field
+      // (it crosses to plugin authors), and `detail` IS the message, so nothing is lost.
       //
-      // `traceAnalyticsRpc` wraps the AUTHORIZED effect, i.e. it sits OUTSIDE
-      // `authorizeEffect`. That helper short-circuits with `Effect.fail` without running what
-      // it is given, so a trace nested inside it would go silent for exactly the
-      // scope-rejected requests where "did the request even arrive?" is the open question.
-      // `instrumentRpcEffect` emits a span + counter but no log line, so this is additive.
-      //
-      // Aggregate is "qwen-usage", not "analytics": upstream already owns an unrelated
-      // telemetry `AnalyticsService`, and this attribute is permanent once it reaches a
-      // dashboard.
-      const observeAnalyticsRpc: ObserveAnalyticsRpc = (method, effect) =>
+      // `tracePluginRpc` wraps the AUTHORIZED effect, OUTSIDE `authorizeEffect`: that
+      // helper short-circuits without running what it wraps, so a trace nested inside
+      // would go silent for exactly the rejected calls. `instrumentRpcEffect` emits a
+      // span + counter but no log line, so this is additive, not duplicate.
+      const observePluginRpc: ObservePluginRpc = (method, effect) =>
         instrumentRpcEffect(
           method,
-          traceAnalyticsRpc(
+          tracePluginRpc(
             method,
             authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
-              // ru-code: rename followed the helper's move (C-app-004)
               Effect.catchTag("EnvironmentAuthorizationError", (error) =>
-                Effect.fail(
-                  new AnalyticsError({
-                    reason: "unauthorized",
-                    detail: error.message,
-                    cause: error,
-                  }),
-                ),
+                Effect.fail(new PluginRpcError({ reason: "unauthorized", detail: error.message })),
               ),
             ),
           ),
-          { "rpc.aggregate": "qwen-usage" },
+          { "rpc.aggregate": "plugins" },
         );
       // ru-code: same encoding for the Pixso assistant RPCs — they declare ONLY
       // `PixsoAssistantError`, so an auth failure is folded into it (unary + stream).
@@ -1675,13 +1631,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
           }),
-        // ru-code: Skills + Agents catalog RPC handlers (extracted to ru-code/skills-agents).
-        ...buildCatalogRpcHandlers({
-          skillCatalog,
-          agentCatalog,
-          commandCatalog,
-          observeCatalogRpc,
-        }),
         // ru-code: MCP manager RPC handlers (extracted to ru-code/mcp).
         ...buildMcpRpcHandlers({
           mcpProjectionQuery,
@@ -1708,10 +1657,10 @@ const makeWsRpcLayer = (
           observeRpcEffect,
           observeRpcStreamEffect,
         }),
-        // ru-code: analytics RPC handlers (extracted to ru-code/analytics).
-        ...buildAnalyticsRpcHandlers({
-          analyticsScanner,
-          observeAnalyticsRpc,
+        // ru-code: the 2 plugin RPCs — list + generic invoke (ru-code/plugins/rpcHandlers).
+        ...buildPluginRpcHandlers({
+          pluginHost,
+          observePluginRpc,
         }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
@@ -2598,17 +2547,17 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(layerLocalizedJsonRpcSerialization), // ru-code: egress localization
-              // ru-code: the Skills + Agents catalog services. Their host ports are wired in
-              // catalogLayers.ts; FileSystem + Path + ServerConfig are ambient here.
-              Layer.provide(SkillCatalogHostLayer),
-              Layer.provide(AgentCatalogHostLayer),
-              Layer.provide(CommandCatalogHostLayer),
               // ru-code: the MCP manager services (same memoized module-level layer the
               // runtime graph provides, so ws sees the SAME supervisor instance).
               Layer.provide(McpManagerHostLayer),
               // ru-code: the Pixso MCP assistant service (host port wired in
               // ru-code/pixso-assistant/ports.ts; FileSystem + Path + ServerConfig ambient).
               Layer.provide(PixsoAssistantHostLayer),
+              // ru-code: the plugin host. Memo HIT onto the instance `server.ts` builds for
+              // the boot phase and the asset route — layer memoization keys on layer object
+              // identity and `PluginHostLayer` is a module-level const, so this is the SAME
+              // status/handler table `pluginHost.start` filled, not a second empty one.
+              Layer.provide(PluginHostLayer),
               // ru-code: the auto-update engine (same memoized module-level layer).
               Layer.provide(AutoUpdateHostLayer),
               // ru-code: transcript reader. The session directory is a stateless
@@ -2624,13 +2573,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                   Layer.provide(ProviderSessionRuntime.layer),
                 ),
               ),
-              // ru-code: the analytics scanner. This is a memo HIT onto the instance the
-              // long-lived runtime graph builds (server.ts), NOT a second scanner — layer
-              // memoization keys on layer object identity and AnalyticsHostLayer is a
-              // module-level const. Keep BOTH sites: this one supplies the RPC handlers,
-              // the graph one owns the scope the scan is forked into. Building it only
-              // here would close that scope before any RPC is served.
-              Layer.provide(AnalyticsHostLayer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS

@@ -12,17 +12,16 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
-import { CATALOG_RPC_SCOPES } from "../ru-code/skills-agents/catalogRpcHandlers.ts";
 // ru-code: MCP manager per-method scopes (extracted to ru-code/mcp).
 import { MCP_RPC_SCOPES } from "../ru-code/mcp/mcpRpcHandlers.ts";
 // ru-code: extended-chat transcript per-method scopes (ru-code/qwen/transcript).
 import { TRANSCRIPT_RPC_SCOPES } from "../ru-code/qwen/transcript/transcriptHost.ts";
 // ru-code: auto-update per-method scopes (ru-code/auto-update).
 import { AUTO_UPDATE_RPC_SCOPES } from "../ru-code/auto-update/rpcHandlers.ts";
-// ru-code: analytics per-method scopes (ru-code/analytics).
-import { ANALYTICS_RPC_SCOPES } from "../ru-code/analytics/analyticsRpcHandlers.ts";
 // ru-code: Pixso MCP assistant per-method scopes (ru-code/pixso-assistant).
 import { PIXSO_ASSISTANT_RPC_SCOPES } from "../ru-code/pixso-assistant/rpcHandlers.ts";
+// ru-code: plugin-system per-method scopes (ru-code/plugins).
+import { PLUGIN_RPC_SCOPES } from "../ru-code/plugins/rpcHandlers.ts";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
@@ -135,18 +134,16 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
-  // ru-code: Skills + Agents catalog per-method scopes (extracted to ru-code/skills-agents).
-  ...CATALOG_RPC_SCOPES,
   // ru-code: MCP manager per-method scopes (extracted to ru-code/mcp).
   ...MCP_RPC_SCOPES,
   // ru-code: extended-chat transcript per-method scopes.
   ...TRANSCRIPT_RPC_SCOPES,
   // ru-code: auto-update per-method scopes (ru-code/auto-update).
   ...AUTO_UPDATE_RPC_SCOPES,
-  // ru-code: analytics per-method scopes (ru-code/analytics).
-  ...ANALYTICS_RPC_SCOPES,
   // ru-code: Pixso MCP assistant per-method scopes (ru-code/pixso-assistant).
   ...PIXSO_ASSISTANT_RPC_SCOPES,
+  // ru-code: plugin-system per-method scopes (list = read, invoke = operate).
+  ...PLUGIN_RPC_SCOPES,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

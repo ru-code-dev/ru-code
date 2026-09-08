@@ -36,9 +36,10 @@ import { L, Lp } from "@ru-code/localization"; // ru-code: bilingual plural/stru
 // ru-code: single-source default provider/model constants.
 import { DEFAULT_PROVIDER_INSTANCE_ID, QWEN_KIND } from "@ru-code/branding";
 import { resolveQwenSubmitPrompt } from "../ru-code/slash-commands/qwenSlashCommands"; // ru-code
-// ru-code: live catalog custom-command slugs (dynamic allowlist) for the qwen submit guard.
-import { useCatalogCommandSlugs } from "../ru-code/skills-agents/composer/useCatalogCommandSlugs"; // ru-code
-import { providerCommandSource } from "@ru-code/provider-capabilities"; // ru-code
+// ru-code (A22, SDK 0.3.0; A25): the live custom-command allowlist for the qwen submit guard,
+// contributed by a PLUGIN's `command` composer providers — the only source since A25 removed the
+// compiled-in catalog half.
+import { usePluginCommandSlugs } from "../ru-code/plugins/composerProviders"; // ru-code
 import { shouldBlockComposerSend } from "../ru-code/composer/sendGate"; // ru-code
 import { deriveIsCompactingContext } from "../ru-code/workLog/contextCompaction"; // ru-code
 import {
@@ -2280,12 +2281,16 @@ function ChatViewContent(props: ChatViewProps) {
       ProviderDriverKind.make(DEFAULT_PROVIDER_INSTANCE_ID),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
-  // ru-code: live set of catalog custom-command slugs deployed for the active project — passed to the
-  // qwen submit guard so `/mycommand` is recognized. Atom-backed, so it recalculates when the Commands
-  // panel adds/removes/connects a command (no stale allowlist).
-  const catalogCommandSlugs = useCatalogCommandSlugs(
-    providerCommandSource(selectedProvider) === "catalog",
-  );
+  // ru-code (A22, O1-B; A25): the live set of custom-command slugs the qwen submit guard needs so
+  // `/mycommand` is recognized rather than aborted as an unknown slash command. A plugin that owns
+  // the custom commands publishes it through the composer PROVIDER port
+  // (`composer.registerProvider({ trigger: "command" })`) at the empty query, so it recalculates
+  // whenever that plugin's panel adds/removes/connects a command (no stale allowlist).
+  //
+  // Provider-independent on purpose, exactly like the plugin `/` rows in the menu: a plugin's
+  // commands are the plugin's, not the provider's. With no such plugin installed the set is empty
+  // and the guard behaves exactly as it does for an unknown command — the A24 kill-switch case.
+  const catalogCommandSlugs = usePluginCommandSlugs();
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   // ru-code: block send/"Compact context" while a hidden compaction runs.
@@ -5168,7 +5173,7 @@ function ChatViewContent(props: ChatViewProps) {
         composerElementContexts.length > 0 ||
         composerPreviewAnnotations.length > 0 ||
         composerReviewComments.length > 0,
-      // ru-code: the live catalog command allowlist so a `/mycommand` isn't aborted as "unknown".
+      // ru-code: the live plugin command allowlist so a `/mycommand` isn't aborted as "unknown".
       catalogCommandSlugs,
     });
     if (qwenSubmitDecision.action === "abort") return;

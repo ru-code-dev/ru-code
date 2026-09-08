@@ -46,6 +46,8 @@ import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 // ru-code: closes qwen work that died with the previous process (see module doc).
 import { runQwenBootSweep } from "./ru-code/startup/qwenBootSweep.ts";
+// ru-code: plugin folders dropped into `<baseDir>/plugins` (see module doc).
+import { PluginHost } from "./ru-code/plugins/PluginHost.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -341,6 +343,9 @@ export const make = (options?: StartupOptions) =>
     const mcpSupervisor = yield* McpSupervisor;
     const mcpReactor = yield* McpReactor;
     const mcpOverlay = yield* McpOverlay;
+    // ru-code: plugin system host (scan + activate at boot; routes and ws read the
+    // same memoized instance).
+    const pluginHost = yield* PluginHost;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -401,6 +406,15 @@ export const make = (options?: StartupOptions) =>
           // and keeps the supervisor reconciled to authored catalog/bindings.
           yield* mcpSupervisor.start().pipe(Scope.provide(reactorScope));
           yield* mcpReactor.start().pipe(Scope.provide(reactorScope));
+          // ru-code: plugins — scan `<baseDir>/plugins/`, activate every server plugin.
+          // Discovery must happen at boot (today every catalog scan is triggered by a
+          // `rescan` RPC, so a dropped-in folder would be invisible until the UI asked).
+          // Missing directory ⇒ no-op; a plugin that throws anywhere in import →
+          // migrate → activate is recorded as `failed` and skipped, so the host never
+          // dies because of a plugin. NOT scoped to `reactorScope`: the host's own
+          // layer scope owns the plugin database handles for the whole process life
+          // (see ./ru-code/plugins/PluginHost.ts).
+          yield* pluginHost.start;
         }),
       );
 

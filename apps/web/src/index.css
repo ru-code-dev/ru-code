@@ -1,11 +1,9 @@
 @import "tailwindcss";
-/* ru-code: feature-package styles (catalog panels, MCP, analytics). */
-@import "@smart-tools/qwen-cli-skill-manager/styles.css";
-@import "@smart-tools/qwen-cli-agents-manager/styles.css";
-@import "@smart-tools/qwen-cli-commands-manager/styles.css";
+/* ru-code: feature-package styles (MCP). The three catalog panels left with A25 — their
+   utilities now come from `@smart-tools/plugin-catalogs`' own stylesheet. The MCP import below
+   still pulls the shared ui-kit `@theme`, so nothing else lost its tokens. */
 @import "@smart-tools/qwen-cli-mcp-manager/styles.css";
 @import "@smart-tools/qwen-cli-extended-chat/styles.css";
-@import "@smart-tools/qwen-cli-analytics/styles.css";
 @import "./ru-code/extended-chat/transcript.css"; /* ru-code: extended-chat transcript scrollbars */
 @import "@smart-tools/t3-code-pixso-mcp-assistant/styles.css";
 

@@ -4,8 +4,8 @@ import {
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
-import { BotIcon } from "lucide-react";
-import { memo, useLayoutEffect, useMemo, useRef } from "react";
+import { BotIcon, PuzzleIcon } from "lucide-react";
+import { memo, useLayoutEffect, useMemo, useRef, type ComponentType } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { formatProviderSkillInstallSource } from "~/providerSkillPresentation";
@@ -19,10 +19,8 @@ import {
   CommandSeparator,
 } from "../ui/command";
 import { PierreEntryIcon } from "./PierreEntryIcon";
-// ru-code: catalog `$skill`/`#agent` row icon — logic/markup lives in ru-code.
-import { CatalogMenuItemIcon } from "~/ru-code/skills-agents/composer/catalogMenuRender";
-// ru-code: 3-section (Проект / Глобальные / Встроенные) grouping for catalog-sourced picker rows.
-import { groupCatalogComposerItems } from "~/ru-code/skills-agents/composer/groupCatalogComposerItems";
+// ru-code: one section per plugin (labelled with the plugin's display name) for `plugin-item` rows.
+import { groupPluginComposerItems } from "~/ru-code/plugins/composerMenuGroups";
 
 export type ComposerCommandItem =
   | {
@@ -58,35 +56,41 @@ export type ComposerCommandItem =
       label: string;
       description: string;
     }
-  // ru-code: catalog-sourced skill/agent picker rows (qwen). Distinct from the native `skill` row so
-  // the port's own $skill path is never disturbed. Inserted as delimited `skill:⟦name⟧`/`agent:⟦name⟧`.
+  // ru-code: a row contributed by a dropped-in plugin (mvp-plan D7). It rides one of the three
+  // EXISTING triggers — `command` → `/`, `skill` → `$`, `agent` → `#` — and inserts a prompt,
+  // so no new trigger and no new Lexical node exist. `prompt` may be async: the insert is
+  // guarded by `expectedText`, which makes a stale resolution a no-op (mvp-plan §6 risk 2).
   | {
       id: string;
-      type: "catalog-skill";
+      type: "plugin-item";
+      trigger: "command" | "skill" | "agent";
+      pluginId: string;
       name: string;
       label: string;
       description: string;
-      // ru-code: which section this row groups under (Проект / Глобальные / Встроенные).
-      scope: "project" | "global" | "builtin";
-    }
-  | {
-      id: string;
-      type: "catalog-agent";
-      name: string;
-      label: string;
-      description: string;
-      // ru-code: which section this row groups under (Проект / Глобальные / Встроенные).
-      scope: "project" | "global" | "builtin";
-    }
-  // ru-code: catalog-sourced custom slash-command rows (qwen). Inserted as plain `/name ` — qwen runs
-  // it as a slash command (identity = filename), unlike the delimited $skill/#agent tokens.
-  | {
-      id: string;
-      type: "catalog-command";
-      name: string;
-      label: string;
-      description: string;
-      scope: "project" | "global" | "builtin";
+      prompt: string | (() => Promise<string>);
+      // ru-code (A22, SDK 0.3.0): a row from `composer.registerProvider` may name its own SECTION
+      // and its own glyph. Both are optional and absent on every `registerItem` row, so the
+      // existing grouping (one section per plugin, labelled with the plugin's display name) and
+      // the existing puzzle glyph are unchanged for every plugin that predates the provider port.
+      //
+      // WHY THE THREE `catalog-*` VARIANTS COLLAPSED INTO THIS ONE (A25). They differed from
+      // `plugin-item` in exactly these two fields — a `scope` that chose a section label and a
+      // hard-coded glyph per kind — and in nothing else: their insert text was the row's own, and
+      // `plugin-item`'s insert branch already pastes arbitrary text through the same
+      // `expectedText` guard. The plugin that owns those catalogs therefore needed no new row type,
+      // no new trigger and no new Lexical node (PHASE3 plan §2.5.3).
+      group?: string;
+      icon?: ComponentType<{ className?: string; size?: number | string; strokeWidth?: number }>;
+      // ru-code (A22): who owns the trailing space.
+      //
+      // A `registerItem` row's `prompt` is a PROMPT — the SDK has always documented that the host
+      // pastes `` `${prompt} ` ``, and every plugin shipped so far relies on it. A PROVIDER row's
+      // `insert` is "the exact text pasted", because a catalog token (`skill:⟦name⟧ `) and a
+      // command (`/name `) space themselves differently and only the plugin knows which. So the
+      // rule travels WITH the row instead of being guessed from the trigger: `true` ⇒ paste
+      // `insert` byte for byte, absent ⇒ the historical `prompt + " "`.
+      insertVerbatim?: boolean;
     };
 
 type ComposerCommandGroup = {
@@ -119,16 +123,24 @@ function groupCommandItems(
   triggerKind: ComposerTriggerKind | null,
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroup[] {
-  // ru-code: skill/agent pickers. When the rows are catalog-sourced (qwen), group them into the
-  // Проект / Глобальные / Встроенные sections; the logic lives in ru-code so this stays a delegate.
-  // Native (non-catalog) providers carry no `scope`, so groupCatalogComposerItems returns [] and we
-  // fall back to the single flat group.
+  // ru-code: skill/agent pickers. A plugin's rows carry their own section label (a catalog
+  // provider names Проект / Глобальные / Встроенные), so the sectioning is one delegate; the app's
+  // own native provider rows have no `group` and fall back to the single flat group below.
   if (triggerKind === "skill" || triggerKind === "subagent") {
-    const catalogGroups = groupCatalogComposerItems(items);
-    if (catalogGroups.length > 0) return catalogGroups;
-    return items.length > 0
-      ? [{ id: triggerKind, label: triggerKind === "skill" ? "Skills" : "Agents", items }]
-      : [];
+    // ru-code: plugin rows get their own section per plugin, after the app's own sections.
+    const pluginGroups = groupPluginComposerItems(items);
+    const ownItems = items.filter((item) => item.type !== "plugin-item");
+    const ownGroups =
+      ownItems.length > 0
+        ? [
+            {
+              id: triggerKind,
+              label: triggerKind === "skill" ? "Skills" : "Agents",
+              items: ownItems,
+            },
+          ]
+        : [];
+    return [...ownGroups, ...pluginGroups];
   }
   if (triggerKind !== "slash-command" || !groupSlashCommandSections) {
     return [{ id: "default", label: null, items }];
@@ -138,9 +150,10 @@ function groupCommandItems(
   const providerItems = items.filter((item) => item.type === "provider-slash-command");
 
   const groups: ComposerCommandGroup[] = [];
-  // ru-code: our catalog-sourced custom commands first, grouped by scope (Проект / Глобальные).
-  for (const catalogGroup of groupCatalogComposerItems(items)) {
-    groups.push(catalogGroup);
+  // ru-code: a dropped-in plugin's `/` rows lead the menu, one section per plugin — which since
+  // A25 is where the catalog's custom commands (Проект / Глобальные) arrive too.
+  for (const pluginGroup of groupPluginComposerItems(items)) {
+    groups.push(pluginGroup);
   }
   if (builtInItems.length > 0) {
     groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
@@ -300,14 +313,12 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           <SkillGlyph className="size-3.5" />
         </span>
       ) : null}
-      {/* ru-code: catalog skill/agent row icon delegated to ru-code. */}
-      {props.item.type === "catalog-skill" || props.item.type === "catalog-agent" ? (
-        <CatalogMenuItemIcon kind={props.item.type === "catalog-agent" ? "agent" : "skill"} />
-      ) : null}
-      {/* ru-code: catalog custom-command row — a slash command, so the slash-command icon. */}
-      {props.item.type === "catalog-command" ? (
-        <BotIcon className="size-4 shrink-0 text-muted-foreground/80" />
-      ) : null}
+      {/* ru-code: a plugin's row. A22: a provider row may carry its OWN glyph (`icon`); the
+          puzzle glyph the plugin family uses everywhere is the fallback, so every `registerItem`
+          row and every provider row that did not ask for one look exactly as they did before.
+          The component is already wrapped in the plugin's icon boundary by `hostApi.ts`, so a
+          throwing glyph degrades to the failure triangle rather than to the menu. */}
+      {props.item.type === "plugin-item" ? <PluginRowIcon icon={props.item.icon} /> : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0">{props.item.label}</span>
         <span className="min-w-0 flex-1 truncate text-secondary-label text-xs">
@@ -320,3 +331,19 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     </CommandItem>
   );
 });
+
+/** ru-code (A22): a plugin composer row's glyph — its own, or the plugin family's puzzle. */
+function PluginRowIcon({
+  icon: Icon,
+}: {
+  readonly icon:
+    | ComponentType<{ className?: string; size?: number | string; strokeWidth?: number }>
+    | undefined;
+}) {
+  if (Icon === undefined) return <PuzzleIcon className="size-4 shrink-0 text-icon-muted" />;
+  return (
+    <span className="inline-flex size-4 shrink-0 items-center justify-center text-icon-muted">
+      <Icon className="size-3.5" />
+    </span>
+  );
+}

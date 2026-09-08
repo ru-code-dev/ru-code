@@ -1,19 +1,14 @@
-import {
-  ArrowLeftIcon,
-  ChartNoAxesColumnIcon, // ru-code: analytics footer button (owner decision row 4)
-  GitPullRequestIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, GitPullRequestIcon, SettingsIcon } from "lucide-react";
 // ru-code: the fork's single footer seam (auto-update pill + feature rows).
 import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
 // ru-code: global-panel triggers (skills/agents/commands/mcp) live in the footer icon row.
-import { NAV_PANELS } from "../../ru-code/skills-agents/rightGlobalPanel/registry";
+import { useNavPanels } from "../../ru-code/skills-agents/rightGlobalPanel/registry";
 import {
   useRightGlobalPanelStore,
   type GlobalPanelId,
 } from "../../ru-code/skills-agents/rightGlobalPanel/store";
 
-// ru-code: which whole-area page the bar is on (analytics added — owner decision row 4).
+// ru-code: which whole-area page the bar is on (/usage, /pull-requests).
 import { resolveSidebarFooterPage } from "../../ru-code/sidebar/footerPage";
 import { APP_NAME, PR_STATUS_LOOKUP_ENABLED } from "@ru-code/branding"; // ru-code
 
@@ -124,7 +119,7 @@ export function isPullRequestsFooterTriggerVisible(pullRequestsSupported: boolea
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  // ru-code: which whole-area page the bar is on, via the shared helper (analytics added).
+  // ru-code: which whole-area page the bar is on, via the shared helper.
   const currentFooterPage = useLocation({
     select: (location) => resolveSidebarFooterPage(location.pathname),
   });
@@ -153,12 +148,6 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
-  // ru-code: analytics — the parked Usage slot, re-pointed (owner decision row 4).
-  const handleAnalyticsClick = useCallback(() => {
-    closeMobileSidebar();
-    void navigate({ to: "/analytics" });
-  }, [closeMobileSidebar, navigate]);
-
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/" });
@@ -168,6 +157,8 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   // the open panel's icon stays selected via isActive until the panel closes.
   const openGlobalPanel = useRightGlobalPanelStore((state) => state.open);
   const toggleGlobalPanel = useRightGlobalPanelStore((state) => state.toggle);
+  // ru-code: reactive registry read — see the comment on the icon row below.
+  const navPanelEntries = useNavPanels();
   const handleGlobalPanelClick = useCallback(
     (id: GlobalPanelId) => {
       closeMobileSidebar();
@@ -226,30 +217,15 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 </Tooltip>
               </SidebarMenuItem>
             ) : null}
-            {/* ru-code: the parked Usage slot, now the analytics entry (owner decision row 4).
-                The /usage route and its Back state are untouched. */}
-            <SidebarMenuItem className="shrink-0">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <SidebarMenuButton
-                      aria-label="Analytics"
-                      onClick={handleAnalyticsClick}
-                      size="icon"
-                    >
-                      <ChartNoAxesColumnIcon />
-                    </SidebarMenuButton>
-                  }
-                />
-                <TooltipPopup side="top">Analytics</TooltipPopup>
-              </Tooltip>
-            </SidebarMenuItem>
             {/* ru-code: global-panel triggers (all five, Pixso included) — same item shape as
-                Settings/Analytics above; selected (isActive) while their panel is open. The row
-                flex-wraps onto a second line when the sidebar is too narrow. `NAV_PANELS` is
-                the registry minus the `navHidden` entries (the extended view's detail panel
-                opens from the thread, never from an icon). */}
-            {NAV_PANELS.map((panel) => {
+                Settings above; selected (isActive) while their panel is open. The row
+                flex-wraps onto a second line when the sidebar is too narrow. `navPanels()` is
+                the registry (seed + whatever a dropped-in plugin registered) minus the
+                `navHidden` entries (the extended view's detail panel opens from the thread,
+                never from an icon). It is READ REACTIVELY (`useNavPanels`): plugins load
+                after the first render (A4 H2/M2), so a plugin's icon appears when the plugin
+                registers it, not only if it beat `createRoot`. */}
+            {navPanelEntries.map((panel) => {
               const Icon = panel.icon;
               return (
                 <SidebarMenuItem className="shrink-0" key={panel.id}>

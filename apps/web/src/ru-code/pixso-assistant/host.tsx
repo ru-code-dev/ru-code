@@ -5,7 +5,6 @@
 // bridge (the SAME mechanism file-navigator comments use), the route-following
 // composer target, and the app locale. The panel registry imports ONLY this file.
 
-import { useParams } from "@tanstack/react-router";
 import { getLocale, L } from "@ru-code/localization";
 import type { DiffPanelMode } from "@smart-tools/qwen-cli-ui-kit";
 import { PIXSO_ASSISTANT_METHODS } from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
@@ -40,9 +39,11 @@ import {
   useComposerDraftStore,
   type ComposerThreadTarget as HostComposerTarget,
 } from "~/composerDraftStore";
+// ru-code: the route-following active composer target now lives in ru-code/composer so the
+// plugin host can share it (A6); this file keeps only the re-branding on the way back.
+import { useActiveComposerTarget } from "../composer/activeComposerTarget";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
-import { resolveThreadRouteTarget } from "~/threadRoutes";
 
 import { toastError, useResolvedTheme } from "../skills-agents/catalog/hostPorts";
 
@@ -130,19 +131,6 @@ const client: PixsoAssistantClient = {
   remoteScanProbe: (target) => runRpc(M.pixsoAssistantRemoteScanProbe, { target }),
   remoteFullProbe: (target) => runRpc(M.pixsoAssistantRemoteFullProbe, { target }),
 };
-
-/** The active composer target following the route — the ComposerTargetSync source. */
-function useActiveComposerTarget(): ComposerThreadTarget | null {
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
-  // Structural narrowing (no tag-string comparison — the L() compare-guard stays quiet).
-  if (routeTarget === null || routeTarget === undefined) return null;
-  if ("threadRef" in routeTarget) return routeTarget.threadRef;
-  if ("draftId" in routeTarget) return routeTarget.draftId;
-  return null;
-}
 
 /** Package targets originate from `useActiveComposerTarget` (host values, widened) —
  *  re-brand them through the validating constructors on the way back. */

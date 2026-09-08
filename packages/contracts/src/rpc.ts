@@ -192,23 +192,6 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
-// ru-code: the Skills/Agents catalog RPC surfaces are minted by the shared core factory in
-// their own packages. The host spreads the def arrays into `WsRpcGroup` (below) so the ws
-// transport serves them, and re-exports the literal method-name maps for the server + client.
-import {
-  skillCatalogRpcs,
-  SKILL_CATALOG_METHODS,
-} from "@smart-tools/qwen-cli-skill-manager/contracts";
-import {
-  agentCatalogRpcs,
-  AGENT_CATALOG_METHODS,
-} from "@smart-tools/qwen-cli-agents-manager/contracts";
-import {
-  commandCatalogRpcs,
-  COMMAND_CATALOG_METHODS,
-} from "@smart-tools/qwen-cli-commands-manager/contracts";
-
-export { SKILL_CATALOG_METHODS, AGENT_CATALOG_METHODS, COMMAND_CATALOG_METHODS };
 // ru-code: the MCP manager RPC surface (reads + subscriptions; mutations reuse
 // orchestration.dispatchCommand) — minted in its package, spread into WsRpcGroup below.
 import { mcpManagerRpcs, MCP_MANAGER_METHODS } from "@smart-tools/qwen-cli-mcp-manager/contracts";
@@ -227,11 +210,19 @@ export { TRANSCRIPT_WS_METHODS };
 import { autoUpdateRpcs, AUTO_UPDATE_METHODS } from "./ru-code/auto-update/index.ts";
 
 export { AUTO_UPDATE_METHODS };
-// ru-code: the analytics RPC surface (2 unary reads) — minted in its package,
-// spread into WsRpcGroup below.
-import { analyticsRpcs, ANALYTICS_METHODS } from "@smart-tools/qwen-cli-analytics/contracts";
+// ru-code: the plugin-system RPC surface (list + generic invoke — D3) — minted in
+// this package's ru-code zone, spread into WsRpcGroup below. The SCHEMAS it is
+// built from (PluginId, PluginStatus, PluginRpcError) are NOT mirrored here: they
+// live in @smart-tools/plugin-sdk/contracts, the one contract the app and a plugin
+// author share. `PLUGIN_METHODS` is re-exported the way `AUTO_UPDATE_METHODS` is, so the
+// package barrel carries it through `export * from "./rpc.ts"`.
+import { pluginRpcs, PLUGIN_METHODS } from "./ru-code/plugins/index.ts";
 
-export { ANALYTICS_METHODS };
+// `pluginRpcs` is exported too (the sibling packages export theirs from their own
+// entry; this zone lives inside contracts, so the barrel is the equivalent door).
+// The server's handler tests build a two-RPC group from it to round-trip the
+// payload/success/error schemas through the real Rpc machinery.
+export { PLUGIN_METHODS, pluginRpcs };
 // ru-code: the Pixso MCP assistant RPC surface — minted in its package, spread into
 // WsRpcGroup below.
 import {
@@ -1132,16 +1123,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   // ru-code: the 2 extended-chat transcript RPCs (subscription + on-demand full body).
   ...transcriptRpcs,
-  // ru-code: the 13 Skills + 13 Agents + 13 Commands catalog RPCs (minted by the shared core factory).
-  ...skillCatalogRpcs,
-  ...agentCatalogRpcs,
-  ...commandCatalogRpcs,
   // ru-code: the 5 MCP manager RPCs (snapshot / setActiveProject / recheck + 2 subscriptions).
   ...mcpManagerRpcs,
   // ru-code: the 18 auto-update RPCs (channels/check/apply/credentials/rollback + stream).
   ...autoUpdateRpcs,
-  // ru-code: the 2 analytics RPCs (getSnapshot / refresh).
-  ...analyticsRpcs,
   // ru-code: the Pixso MCP assistant RPCs (panel snapshot; scan/card/catalog tiers follow).
   ...pixsoAssistantRpcs,
+  // ru-code: the 2 plugin RPCs (list / generic invoke — D3, edited once).
+  ...pluginRpcs,
 );

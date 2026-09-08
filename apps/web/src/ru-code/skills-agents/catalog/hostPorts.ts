@@ -1,8 +1,8 @@
-// ru-code: the host side of the skills/agents catalog web ports. The catalog packages
-// (@smart-tools/qwen-cli-*-manager) are host-agnostic — they take an ItemManagerWebPorts
-// object and call these hooks/callbacks to reach the app's theme, project list, toasts and
-// active project. This module adapts port's own primitives to that contract; the per-manager
-// host component supplies the RPC `client` (see useCatalogClient) on top of these.
+// ru-code: the app-side adapters a host-agnostic feature package needs — the app's theme, project
+// list, toasts and active project, behind the `ItemManagerWebPorts`-shaped hooks/callbacks those
+// packages call. A25 moved the three catalog panels into `@smart-tools/plugin-catalogs` (which gets
+// the same values from the plugin host); the remaining consumers are the MCP manager panel and the
+// Pixso assistant, and they leave with their own ports when those are ported.
 
 import { useMemo } from "react";
 

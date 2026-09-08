@@ -1,12 +1,28 @@
 // ru-code: global right-panel (skills/agents) public surface.
 export { RightGlobalPanelHost } from "./RightGlobalPanelHost";
 export { GlobalPanelNav } from "./GlobalPanelNav";
-export { NAV_PANELS, OVERLAY_PANELS } from "./registry";
+export {
+  navPanels,
+  useNavPanels,
+  useOverlayPanels,
+  overlayPanelById,
+  overlayPanels,
+  registerOverlayPanel,
+  resetRegisteredOverlayPanels,
+  OVERLAY_PANELS,
+  type OverlayPanel,
+  type OverlayPanelIcon,
+} from "./registry";
 export {
   closeGlobalPanelIfOpen,
   isGlobalPanelOpen,
+  makeGlobalPanelId,
+  pluginPanelId,
   useRightGlobalPanelStore,
+  GLOBAL_PANEL_ID_PATTERN,
   type GlobalPanelId,
+  type KnownGlobalPanelId,
+  type PluginGlobalPanelId,
 } from "./store";
 export { installRightSlotExclusion, useRightSlotExclusion } from "./rightSlotExclusion";
 export {

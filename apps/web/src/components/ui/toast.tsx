@@ -529,6 +529,20 @@ function ThreadToastVisibleAutoDismiss({
 }
 
 function ToastProvider({ children, position = "top-right", ...props }: ToastProviderProps) {
+  // ru-code (A13, A10 finding P1): the plugin queue's ready signal.
+  //
+  // base-ui's manager emits to a `Set` of listeners with NO buffering, and `<Toast.Provider>`
+  // joins that set from its own `useEffect` — so a `toastManager.add()` before that effect is
+  // silently dropped. React runs CHILD effects before parent effects, and `Toast.Provider` is a
+  // child of this component, so this effect is the first moment at which an `add()` is guaranteed
+  // to reach a subscriber. Anything the plugin loader reported before now is queued in
+  // `problems.ts` and drains here. Idempotent.
+  useEffect(() => {
+    void import("~/ru-code/plugins/problems").then(({ markPluginToastViewportReady }) => {
+      markPluginToastViewportReady();
+    });
+  }, []);
+
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
       {children}
@@ -559,7 +573,15 @@ function Toasts({ position }: { position: ToastPosition }) {
     <Toast.Portal data-slot="toast-portal">
       <Toast.Viewport
         className={cn(
-          "fixed z-100 mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-90 [--toast-header-offset:52px] [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
+          // ru-code (A13, A10 finding P2): the viewport is a FIXED box that spans the toast column
+          // for the full height of the stack, and it sat over the right-docked global panel even
+          // when it held nothing clickable — Playwright's actionability log caught it intercepting
+          // a click on the panel's own button. `pointer-events: none` here, `auto` on each
+          // `Toast.Root` below: the visible cards still take their own clicks (swipe, close,
+          // actions), everything around them falls through to the app. The precedent is already in
+          // this file — `Toast.Content` and the expandable body both re-enable pointer events the
+          // same way.
+          "pointer-events-none fixed z-100 mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-90 [--toast-header-offset:52px] [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
           // Vertical positioning
           "data-[position*=top]:top-[calc(var(--toast-inset)+var(--toast-header-offset))]",
           "data-[position*=bottom]:bottom-(--toast-inset)",
@@ -587,7 +609,8 @@ function Toasts({ position }: { position: ToastPosition }) {
           return (
             <Toast.Root
               className={cn(
-                "dropdown-glass absolute z-[calc(9999-var(--toast-index))] w-full overflow-visible select-none rounded-lg text-popover-foreground shadow-xl shadow-black/25 [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s]",
+                // `pointer-events-auto` re-enables what the viewport turned off (A10 P2).
+                "dropdown-glass pointer-events-auto absolute z-[calc(9999-var(--toast-index))] w-full overflow-visible select-none rounded-lg text-popover-foreground shadow-xl shadow-black/25 [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s]",
                 // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",

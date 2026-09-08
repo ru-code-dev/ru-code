@@ -2,7 +2,7 @@
 // right-panel family.
 //   R1 — it is in the family's enum and its registry, so the slot invariant and the N-way
 //        mutual exclusion apply to it for free;
-//   R2 — it has NO nav entry: `NAV_PANELS` is what every nav renders;
+//   R2 — it has NO nav entry: `navPanels()` is what every nav renders;
 //   R3 — the binding between the thread's target and the global store, all four cases.
 import { describe, expect, it } from "vite-plus/test";
 
@@ -11,7 +11,7 @@ import {
   EXTENDED_VIEW_PANEL_ID,
 } from "../../../extended-chat/extendedViewPanelBinding";
 import {
-  NAV_PANELS,
+  navPanels,
   OVERLAY_PANELS,
   overlayPanelById,
 } from "../../../skills-agents/rightGlobalPanel/registry";
@@ -28,24 +28,18 @@ describe("R1 — the panel is a full member of the family", () => {
     useRightGlobalPanelStore.getState().toggle(EXTENDED_VIEW_PANEL_ID);
     expect(useRightGlobalPanelStore.getState().open).toBe(EXTENDED_VIEW_PANEL_ID);
     // …and another panel takes it straight back.
-    useRightGlobalPanelStore.getState().toggle("skills");
-    expect(useRightGlobalPanelStore.getState().open).toBe("skills");
+    useRightGlobalPanelStore.getState().toggle("pixso");
+    expect(useRightGlobalPanelStore.getState().open).toBe("pixso");
     useRightGlobalPanelStore.getState().close();
   });
 });
 
 describe("R2 — no rail icon", () => {
-  it("NAV_PANELS is the registry minus the navHidden entries, and ours is the hidden one", () => {
+  it("navPanels() is the registry minus the navHidden entries, and ours is the hidden one", () => {
     expect(OVERLAY_PANELS.map((panel) => panel.id)).toContain(EXTENDED_VIEW_PANEL_ID);
-    expect(NAV_PANELS.map((panel) => panel.id)).not.toContain(EXTENDED_VIEW_PANEL_ID);
+    expect(navPanels().map((panel) => panel.id)).not.toContain(EXTENDED_VIEW_PANEL_ID);
     // Every OTHER panel still has its nav entry — this must not quietly hide anything else.
-    expect(NAV_PANELS.map((panel) => panel.id)).toEqual([
-      "skills",
-      "agents",
-      "commands",
-      "mcp",
-      "pixso",
-    ]);
+    expect(navPanels().map((panel) => panel.id)).toEqual(["mcp", "pixso"]);
     expect(overlayPanelById(EXTENDED_VIEW_PANEL_ID)?.navHidden).toBe(true);
   });
 });

@@ -7,6 +7,8 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
 import { brandingAssetsPlugin } from "@ru-code/theme/vite";
 import { serviceWorkerPlugin } from "./src/ru-code/sw/swBuildPlugin";
+// ru-code: host-provided modules → the built index.html import map (mvp-plan D13).
+import { hostModulesPlugin } from "./src/ru-code/plugins/hostModulesVitePlugin";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
@@ -175,6 +177,9 @@ export default defineConfig(() => {
       brandingAssetsPlugin(),
       // ru-code: emits the unhashed root-scoped /sw.js the PWA registers (see sw/swBuildPlugin.ts).
       serviceWorkerPlugin(),
+      // ru-code: one extra build entry per host-provided module + the <script type="importmap">
+      // that lets a dropped-in plugin `import { useState } from "react"` (D13). Build only (D9).
+      hostModulesPlugin(),
     ],
     optimizeDeps: {
       include: [

@@ -3,38 +3,43 @@
 
 import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "~/components/ui/sidebar";
 
-import { NAV_PANELS } from "./registry";
+import { useNavPanels } from "./registry";
 import { useRightGlobalPanelStore } from "./store";
 
 export function GlobalPanelNav() {
   const open = useRightGlobalPanelStore((state) => state.open);
   const toggle = useRightGlobalPanelStore((state) => state.toggle);
   const { isMobile, setOpenMobile } = useSidebar();
+  // ru-code: reactive — plugins load AFTER the first render now (A4 H2/M2), so a plugin's
+  // nav entry has to appear when it registers, not only if it beat `createRoot`.
+  const panels = useNavPanels();
 
   return (
     <>
       {/* ru-code: only Pixso lives in the text menu — skills/agents/commands/mcp moved to the
           footer icon row (SidebarChromeFooter). */}
-      {NAV_PANELS.filter((panel) => panel.id === "pixso").map((panel) => {
-        const Icon = panel.icon;
-        const active = open === panel.id;
-        return (
-          <SidebarMenuItem key={panel.id}>
-            <SidebarMenuButton
-              isActive={active}
-              onClick={() => {
-                if (isMobile) {
-                  setOpenMobile(false);
-                }
-                toggle(panel.id);
-              }}
-            >
-              <Icon />
-              <span>{panel.label}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        );
-      })}
+      {panels
+        .filter((panel) => panel.id === "pixso")
+        .map((panel) => {
+          const Icon = panel.icon;
+          const active = open === panel.id;
+          return (
+            <SidebarMenuItem key={panel.id}>
+              <SidebarMenuButton
+                isActive={active}
+                onClick={() => {
+                  if (isMobile) {
+                    setOpenMobile(false);
+                  }
+                  toggle(panel.id);
+                }}
+              >
+                <Icon />
+                <span>{panel.label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
     </>
   );
 }

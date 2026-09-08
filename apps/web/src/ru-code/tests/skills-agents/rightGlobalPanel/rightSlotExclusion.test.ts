@@ -43,43 +43,43 @@ for (const [label, ref] of [
       useRightPanelStore.getState().open(ref, "diff");
       expect(threadOpen(ref)).toBe(true);
 
-      useRightGlobalPanelStore.getState().toggle("skills");
-      expect(globalOpen()).toBe("skills");
+      useRightGlobalPanelStore.getState().toggle("mcp");
+      expect(globalOpen()).toBe("mcp");
       expect(threadOpen(ref)).toBe(false); // hidden by the invariant
       expect(bothVisible(ref)).toBe(false);
     });
 
-    it("opening the thread panel while SKILLS is open closes skills", () => {
-      useRightGlobalPanelStore.getState().toggle("skills");
+    it("opening the thread panel while a GLOBAL panel is open closes it", () => {
+      useRightGlobalPanelStore.getState().toggle("mcp");
       useRightPanelStore.getState().open(ref, "diff");
       expect(threadOpen(ref)).toBe(true);
-      expect(globalOpen()).toBeNull(); // skills closed
+      expect(globalOpen()).toBeNull(); // the global panel closed
       expect(bothVisible(ref)).toBe(false);
     });
 
-    it("the NO-OP re-open (re-activating an already-active hidden surface) still closes skills", () => {
+    it("the NO-OP re-open (re-activating an already-active hidden surface) still closes it", () => {
       useRightPanelStore.getState().open(ref, "diff"); // thread shows diff
-      useRightGlobalPanelStore.getState().toggle("skills"); // → thread hidden (isOpen=false)
+      useRightGlobalPanelStore.getState().toggle("mcp"); // → thread hidden (isOpen=false)
       expect(threadOpen(ref)).toBe(false);
 
       // Re-open the SAME diff. Because the thread was hidden (isOpen=false), this is a real
-      // false→true transition, so skills closes — no gap.
+      // false→true transition, so the global panel closes — no gap.
       useRightPanelStore.getState().open(ref, "diff");
       expect(globalOpen()).toBeNull();
       expect(threadOpen(ref)).toBe(true);
       expect(bothVisible(ref)).toBe(false);
     });
 
-    it("switching the global overlay (skills → agents) keeps the thread hidden", () => {
+    it("switching the global overlay (mcp → pixso) keeps the thread hidden", () => {
       useRightPanelStore.getState().open(ref, "diff");
-      useRightGlobalPanelStore.getState().toggle("skills");
-      useRightGlobalPanelStore.getState().toggle("agents"); // switch overlay
-      expect(globalOpen()).toBe("agents");
+      useRightGlobalPanelStore.getState().toggle("mcp");
+      useRightGlobalPanelStore.getState().toggle("pixso"); // switch overlay
+      expect(globalOpen()).toBe("pixso");
       expect(threadOpen(ref)).toBe(false);
       expect(bothVisible(ref)).toBe(false);
     });
 
-    it("EVERY surface opener closes skills (diff / files / file / terminal / browser)", () => {
+    it("EVERY surface opener closes the global panel (diff / files / file / terminal / browser)", () => {
       const openers: Array<() => void> = [
         () => useRightPanelStore.getState().open(ref, "diff"),
         () => useRightPanelStore.getState().open(ref, "files"),
@@ -88,10 +88,10 @@ for (const [label, ref] of [
         () => useRightPanelStore.getState().openBrowser(ref, "tab-1"),
       ];
       for (const openSurface of openers) {
-        useRightGlobalPanelStore.getState().toggle("skills"); // skills owns the slot
-        expect(globalOpen()).toBe("skills");
+        useRightGlobalPanelStore.getState().toggle("mcp"); // the global panel owns the slot
+        expect(globalOpen()).toBe("mcp");
         openSurface(); // any thread-panel opener
-        expect(globalOpen()).toBeNull(); // → skills released
+        expect(globalOpen()).toBeNull(); // → the global panel released
         expect(bothVisible(ref)).toBe(false);
       }
     });
@@ -99,16 +99,16 @@ for (const [label, ref] of [
     it("INVARIANT holds after every step of a long mixed sequence", () => {
       const steps: Array<() => void> = [
         () => useRightPanelStore.getState().open(ref, "diff"),
-        () => useRightGlobalPanelStore.getState().toggle("skills"),
+        () => useRightGlobalPanelStore.getState().toggle("mcp"),
         () => useRightPanelStore.getState().open(ref, "diff"), // no-op re-open
-        () => useRightGlobalPanelStore.getState().toggle("agents"),
-        () => useRightGlobalPanelStore.getState().toggle("agents"), // close via nav
+        () => useRightGlobalPanelStore.getState().toggle("pixso"),
+        () => useRightGlobalPanelStore.getState().toggle("pixso"), // close via nav
         () => useRightPanelStore.getState().openFile(ref, "a.ts"),
-        () => useRightGlobalPanelStore.getState().toggle("skills"),
+        () => useRightGlobalPanelStore.getState().toggle("mcp"),
         () => useRightPanelStore.getState().openTerminal(ref, "t1"),
-        () => useRightGlobalPanelStore.getState().toggle("skills"),
+        () => useRightGlobalPanelStore.getState().toggle("mcp"),
         () => useRightPanelStore.getState().toggleVisibility(ref), // hide thread via its own toggle
-        () => useRightGlobalPanelStore.getState().toggle("agents"),
+        () => useRightGlobalPanelStore.getState().toggle("pixso"),
       ];
       for (const step of steps) {
         step();
@@ -123,8 +123,8 @@ describe("right-slot exclusion — no active thread (ref === null)", () => {
     stop = installRightSlotExclusion(() => null);
   });
 
-  it("is a safe no-op: opening skills does not throw and leaves the global panel open", () => {
-    useRightGlobalPanelStore.getState().toggle("skills");
-    expect(globalOpen()).toBe("skills"); // nothing to coexist with; no thread panel renders
+  it("is a safe no-op: opening a global panel does not throw and leaves it open", () => {
+    useRightGlobalPanelStore.getState().toggle("mcp");
+    expect(globalOpen()).toBe("mcp"); // nothing to coexist with; no thread panel renders
   });
 });

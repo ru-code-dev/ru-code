@@ -1,74 +1,171 @@
-// ru-code: the session-respawn gate. qwen reads skills and subagents ONLY at spawn, so
-// when a thread's EFFECTIVE skill or agent set changes, the live `qwen --acp` session must
-// re-spawn on the next user message (with the prior resumeCursor, history preserved).
+// ru-code: the session-respawn gate. qwen reads skills, subagents and custom commands ONLY at
+// spawn, so when a thread's EFFECTIVE set changes, the live `qwen --acp` session must re-spawn on
+// the next user message (with the prior resumeCursor, history preserved).
 //
 // This service is the reactor's single seam for that decision: the reactor imports ONLY
-// `SessionRespawnGate` (never SkillCatalog / AgentCatalog directly). Per turn it asks
-// `changedForThread(threadId, projectId)` — true ⇒ OR it into the restart decision — and
-// on each (re)spawn calls `record(threadId, projectId)` to remember what that spawn loaded.
-// `forget(threadId)` drops a thread's record on session stop (see the tracker for why the
-// store's lifetime is the session's, not a TTL).
+// `SessionRespawnGate`. Per turn it asks `changedForThread(threadId, projectId)` — true ⇒ OR it
+// into the restart decision — and on each (re)spawn calls `record(threadId, projectId)` to
+// remember what that spawn loaded. `forget(threadId)` drops a thread's record on session stop
+// (see the tracker for why the store's lifetime is the session's, not a TTL).
 //
-// The gate owns one SessionFingerprintTracker instance (skills + agents), fingerprints the
-// effective sets best-effort (a catalog read failure ⇒ that source is skipped this turn, so
-// a transient failure never triggers a spurious respawn), and provides its own SkillCatalog
-// + AgentCatalog dependencies — the reactor only provides `SessionRespawnGateLive`.
+// The gate owns one SessionFingerprintTracker instance and is a pure AGGREGATOR over whatever
+// `registerSessionHook` hooks the loaded plugins registered (A22 owner decision O1-B; A25 removed
+// the compiled-in catalog half, now provided by `@smart-tools/plugin-catalogs`). It names no
+// plugin: a hook that fails, throws or overruns its budget is logged and treated as the safe
+// answer, so a transient failure never triggers a spurious respawn and never blocks a spawn.
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
-import { SkillCatalog } from "@smart-tools/qwen-cli-skill-manager/server";
-import { AgentCatalog } from "@smart-tools/qwen-cli-agents-manager/server";
-import { CommandCatalog } from "@smart-tools/qwen-cli-commands-manager/server";
-
-import {
-  SkillCatalogHostLayer,
-  AgentCatalogHostLayer,
-  CommandCatalogHostLayer,
-} from "./catalogLayers.ts";
 import {
   makeSessionFingerprintTracker,
   type CurrentFingerprints,
 } from "./SessionFingerprintTracker.ts";
+// ru-code (A22, SDK 0.3.0, owner decision O1-B): the gate is an AGGREGATOR over the loaded
+// plugins' session hooks, and it names no plugin. Since A25 removed the compiled-in catalog half
+// this is the ONLY source of fingerprints and worktree provisioning: with no hook registered the
+// gate never respawns and provisions nothing, which is the documented no-plugin behaviour.
+import { PluginHost, PluginHostLayer } from "../plugins/PluginHost.ts";
 
-// ru-code: leak backstop for the tracker (skills + agents). Not a TTL — entries live as long
+// ru-code: leak backstop for the tracker. Not a TTL — entries live as long
 // as the process / until this many distinct threads accumulate, whichever comes first; a
 // process restart resets it. Effectively unreachable for a single user, and eviction is safe
 // (an evicted entry ⇒ one harmless respawn next turn).
 const SESSION_FINGERPRINT_CAPACITY = 10_000;
 
 /**
- * `projectId` type matches what the catalogs' `fingerprintForProject` expects — `string |
- * null` (`null` ⇒ globals only). The reactor's `thread.projectId` (a branded ProjectId) is
- * assignable here.
+ * ru-code (A22, O1-B): the budget on ONE plugin session-hook call.
+ *
+ * Deliberately tighter than the plugin host's 15 s per-step budget: THAT one is paid once, at
+ * boot, where the user is already waiting for the app to start. THIS one is paid on every turn,
+ * inside the delay between the user pressing Enter and the assistant answering, and it is paid
+ * per hook. Five seconds is far more than a correct hook needs (the compiled-in equivalent
+ * fingerprints three catalogs off the filesystem in single-digit milliseconds) and short enough
+ * that a wedged plugin costs one visible pause rather than a hung session.
+ *
+ * A hook that overruns it is ABANDONED, not awaited: `Effect.timeoutOption` interrupts the fiber
+ * and the gate proceeds with the safe answer.
+ */
+const PLUGIN_SESSION_HOOK_TIMEOUT = Duration.seconds(5);
+const PLUGIN_SESSION_HOOK_TIMEOUT_LABEL = "5s";
+
+/** Whatever a plugin hook rejected or threw, in the error channel where it can be handled. */
+class PluginSessionHookError extends Data.TaggedError("PluginSessionHookError")<{
+  readonly cause: unknown;
+}> {}
+
+/**
+ * Run one plugin hook call under the budget, with the failure policy the SDK documents.
+ *
+ * `safe` is what the caller gets when the hook throws, rejects, or overruns — `null` for a
+ * fingerprint (counts as "nothing changed": a failing plugin must not respawn the user's session
+ * every turn) and `undefined` for a provision (counts as done: the session spawns with whatever
+ * the checkout already had). NEVER a failure: the whole point of O1-B's policy is that no plugin
+ * can stop a spawn.
+ */
+/**
+ * Run one plugin hook call under the budget, with the failure policy the SDK documents.
+ *
+ * `safe` is what the caller gets when the hook throws, rejects, or overruns — `null` for a
+ * fingerprint (counts as "nothing changed": a failing plugin must not respawn the user's session
+ * every turn) and `undefined` for a provision (counts as done: the session spawns with whatever
+ * the checkout already had). NEVER a failure: the whole point of O1-B's policy is that no plugin
+ * can stop a spawn.
+ *
+ * WHAT THE BUDGET DOES AND DOES NOT DO. It stops the GATE waiting; it cannot stop the plugin's
+ * promise, because the SDK boundary is promise-shaped (D6) and a promise has no cancellation. An
+ * overrunning hook is therefore ABANDONED — it may settle later, into nothing — and the turn goes
+ * on. That is the whole contract, and it is why the SDK tells authors to fingerprint inputs rather
+ * than read every file.
+ */
+const runHook = <A>(input: {
+  readonly pluginId: string;
+  readonly what: string;
+  readonly threadId: string;
+  readonly safe: A;
+  readonly call: () => Promise<A>;
+}): Effect.Effect<A> =>
+  Effect.tryPromise({
+    // Inside the async body so a SYNCHRONOUS throw in the hook becomes a rejected promise rather
+    // than escaping into the gate — the same shape `PluginHost` uses around `activate`.
+    try: async () => await input.call(),
+    // A TAGGED wrapper rather than the bare cause: the error channel is what the `Effect.catch`
+    // below reads, and an untyped `unknown` there is exactly the shape the house lint refuses —
+    // for the good reason that it makes "did we handle everything" unanswerable.
+    catch: (cause) => new PluginSessionHookError({ cause }),
+  }).pipe(
+    Effect.timeoutOption(PLUGIN_SESSION_HOOK_TIMEOUT),
+    // `Option.isNone`, NOT `getOrNull() === null`: `null` is a hook's own legitimate answer to
+    // `changedForThread` ("nothing to contribute / could not tell"), so a nullish test would
+    // report a timeout on every turn for a correct plugin. Only the OPTION tells "answered null"
+    // apart from "never answered".
+    Effect.flatMap((option) =>
+      Option.isNone(option)
+        ? Effect.logError(
+            `[ru-code-respawn] plugin session hook ${input.what} timed out after ${PLUGIN_SESSION_HOOK_TIMEOUT_LABEL} — treated as no-op`,
+            { pluginId: input.pluginId, threadId: input.threadId },
+          ).pipe(Effect.as(input.safe))
+        : Effect.succeed(option.value),
+    ),
+    Effect.catch((cause) =>
+      Effect.logError(
+        `[ru-code-respawn] plugin session hook ${input.what} failed — treated as no-op`,
+        { pluginId: input.pluginId, threadId: input.threadId, cause: cause.cause },
+      ).pipe(Effect.as(input.safe)),
+    ),
+    // A DEFECT (a hook that threw something exotic, an interrupt) lands here rather than in
+    // `Effect.catch`, and it must be just as harmless: a plugin cannot fail a spawn by any route.
+    Effect.catchCause((cause) =>
+      Effect.logError(`[ru-code-respawn] plugin session hook ${input.what} defect — ignored`, {
+        pluginId: input.pluginId,
+        threadId: input.threadId,
+        cause,
+      }).pipe(Effect.as(input.safe)),
+    ),
+  );
+
+/**
+ * The tracker source name for one plugin's fingerprint.
+ *
+ * Namespaced so two plugins can never collide, and so a fingerprint recorded by one plugin is
+ * never compared against another's (a plugin that is uninstalled simply stops contributing a
+ * source, which the tracker ignores rather than reading as a change).
+ */
+export const pluginFingerprintSource = (pluginId: string): string => `plugin:${pluginId}`;
+
+/**
+ * `projectId` is `string | null` (`null` ⇒ globals only) — the shape the session hooks receive.
+ * The reactor's `thread.projectId` (a branded ProjectId) is assignable here.
  */
 export type RespawnProjectId = string | null;
 
 export interface SessionRespawnGateShape {
   /**
-   * Fingerprint this thread's effective skill + agent sets and report whether either now
-   * differs from what the live session spawned with. Best-effort: a catalog read failure is
-   * logged and treated as "unchanged for that source" (no spurious respawn). Never fails.
+   * Ask every session hook to fingerprint this thread and report whether any source now differs
+   * from what the live session spawned with. Best-effort: a hook failure is logged and treated as
+   * "unchanged for that source" (no spurious respawn). Never fails.
    */
   readonly changedForThread: (
     threadId: string,
     projectId: RespawnProjectId,
   ) => Effect.Effect<boolean>;
   /**
-   * Record the effective skill + agent fingerprints this (re)spawn loaded, so the next
-   * turn's `changedForThread` compares against them. Best-effort per source; never fails.
+   * Record the fingerprints this (re)spawn loaded, so the next turn's `changedForThread`
+   * compares against them. Best-effort per source; never fails.
    */
   readonly record: (threadId: string, projectId: RespawnProjectId) => Effect.Effect<void>;
   /** Drop a thread's record on session stop / teardown. Idempotent; never fails. */
   readonly forget: (threadId: string) => Effect.Effect<void>;
   /**
-   * Mirror the project's skills/agents/commands into `cwd` when it is a git worktree.
-   * qwen reads project items from `<cwd>/.qwen/*` at spawn, but the catalogs only ever
-   * write the project's main workspaceRoot — so a worktree session would see a stale git
-   * snapshot (or nothing). Called right before every (re)spawn; the engines detect per
-   * item (write only missing/stale) and no-op when `cwd` IS the main workspaceRoot.
-   * Best-effort: a failure is logged and the session spawns with the checkout's snapshot.
-   * Never fails.
+   * Let every session hook mirror the project's items into `cwd` when it is a git worktree.
+   * qwen reads project items from `<cwd>/.qwen/*` at spawn, but a catalog only ever writes the
+   * project's main workspaceRoot — so a worktree session would see a stale git snapshot (or
+   * nothing). Called right before every (re)spawn; a hook is expected to detect per item (write
+   * only missing/stale) and no-op when `cwd` IS the main workspaceRoot. Best-effort: a failure is
+   * logged and the session spawns with the checkout's snapshot. Never fails.
    */
   readonly provisionWorktree: (
     threadId: string,
@@ -82,70 +179,65 @@ export class SessionRespawnGate extends Context.Service<
   SessionRespawnGateShape
 >()("t3/ru-code/skills-agents/SessionRespawnGate") {}
 
-const makeSessionRespawnGate = Effect.gen(function* () {
-  // ru-code: the Skills Manager catalog. qwen reads skills at spawn, so a skill
-  // add/remove/sync respawns the live session on the next turn.
-  const skillCatalog = yield* SkillCatalog;
-  // ru-code: the Agents Manager catalog — same role for subagents, also read at spawn.
-  const agentCatalog = yield* AgentCatalog;
-  // ru-code: the Commands Manager catalog — qwen reads custom slash commands at spawn too.
-  const commandCatalog = yield* CommandCatalog;
+/**
+ * ru-code (A22): exported so a test can compose the gate over a FAKE `PluginHost`.
+ *
+ * `SessionRespawnGateLive` self-provides `PluginHostLayer` (memo hit onto the app's one instance),
+ * and an inner `Layer.provide` cannot be overridden from outside — so the aggregation policy
+ * (a throwing hook, a hanging hook, no hooks at all) is only reachable by building the gate from
+ * this effect. Production still goes through the layer below.
+ */
+export const makeSessionRespawnGate = Effect.gen(function* () {
+  // ru-code (A22, O1-B): the whole aggregation. Read ONCE here; `sessionHooks` is a synchronous
+  // read off the host's own table, so an install with no hooks pays a Map iteration per turn and
+  // nothing else.
+  const pluginHost = yield* PluginHost;
 
   const tracker = makeSessionFingerprintTracker({ capacity: SESSION_FINGERPRINT_CAPACITY });
 
-  // ru-code: fingerprint the effective skill + agent sets for a thread's project. Each read
-  // is best-effort — a failure is logged and yields `undefined`, which the tracker ignores
-  // (no spurious respawn, no poisoning of the recorded set). Global scope ⇒ `projectId: null`.
+  // ru-code (A22, O1-B): fingerprint a thread's project through every plugin hook, in load order,
+  // under its own budget. A hook that answers `null` — its own "nothing to contribute / could not
+  // tell" — is recorded as `undefined`, which the tracker IGNORES: it never counts as a change and
+  // never poisons the recorded set. Global scope ⇒ `projectId: null`.
+  //
+  // Concurrency 1, deliberately. These run on the user's critical path and a plugin's hook is
+  // usually filesystem work; three plugins racing each other's disk reads buys nothing and makes
+  // the worst case harder to reason about than "at most one budget at a time".
   const fingerprintForThread = (
     threadId: string,
     projectId: RespawnProjectId,
   ): Effect.Effect<CurrentFingerprints> =>
     Effect.gen(function* () {
-      const skills = yield* skillCatalog
-        .fingerprintForProject({ projectId })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logError(
-              "[ru-code-skillCatalog] skill fingerprint failed — skipping respawn gate",
-              { threadId, cause },
-            ).pipe(Effect.as(undefined)),
-          ),
-        );
-      const agents = yield* agentCatalog
-        .fingerprintForProject({ projectId })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logError(
-              "[ru-code-agentCatalog] agent fingerprint failed — skipping respawn gate",
-              { threadId, cause },
-            ).pipe(Effect.as(undefined)),
-          ),
-        );
-      const commands = yield* commandCatalog
-        .fingerprintForProject({ projectId })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logError(
-              "[ru-code-commandCatalog] command fingerprint failed — skipping respawn gate",
-              { threadId, cause },
-            ).pipe(Effect.as(undefined)),
-          ),
-        );
-      return { skills, agents, commands };
+      const hooks = yield* pluginHost.sessionHooks;
+      const pluginFingerprints: Record<string, string | undefined> = {};
+      for (const { pluginId, hook } of hooks) {
+        const changed = hook.changedForThread;
+        if (changed === undefined) continue;
+        const value = yield* runHook<string | null>({
+          pluginId,
+          what: "changedForThread",
+          threadId,
+          safe: null,
+          call: () => changed({ threadId, projectId }),
+        });
+        pluginFingerprints[pluginFingerprintSource(pluginId)] =
+          typeof value === "string" ? value : undefined;
+      }
+      return pluginFingerprints;
     });
 
   const changedForThread: SessionRespawnGateShape["changedForThread"] = (threadId, projectId) =>
     Effect.gen(function* () {
       const current = yield* fingerprintForThread(threadId, projectId);
       const changed = tracker.changedSources(threadId, current);
-      // ru-code: surface WHY a respawn was triggered — which sources changed (skills / agents) and the
-      // spawned-with vs current fingerprints — so a catalog-driven respawn is visible in the logs
-      // (parity with the prior project's restart log). Debug level: it's a per-turn trace.
+      // ru-code: surface WHY a respawn was triggered — which sources changed and the spawned-with
+      // vs current fingerprints — so a hook-driven respawn is visible in the logs (parity with the
+      // prior project's restart log). Debug level: it's a per-turn trace.
       if (changed.length > 0) {
         yield* Effect.logDebug("[ru-code-respawn] catalog change → provider session respawn", {
           threadId,
           projectId, // null ⇒ globals only
-          changedSources: changed, // e.g. ["skills"] / ["agents"] / ["skills","agents"]
+          changedSources: changed, // e.g. ["plugin:catalogs"]
           spawnedWith: tracker.peek(threadId), // fingerprints the live session spawned with (undefined ⇒ none)
           current, // this turn's effective fingerprints
         });
@@ -165,10 +257,11 @@ const makeSessionRespawnGate = Effect.gen(function* () {
       tracker.forget(threadId);
     });
 
-  // ru-code: worktree provisioning. One catalog's failure must not block the others (or the
-  // spawn), so each call is caught + logged individually — same best-effort policy as the
-  // fingerprint reads above. The engines guard the main-cwd case themselves (skipped: true),
-  // so this is safe to call on EVERY spawn; the real work happens only for worktree cwds.
+  // ru-code: worktree provisioning, through every plugin hook in load order. One hook's failure
+  // must not block the others (or the spawn), so each call carries the same best-effort policy as
+  // the fingerprint reads above. A hook is expected to guard the main-cwd case itself, so this is
+  // safe to call on EVERY spawn; the real work happens only for worktree cwds. Sequential for the
+  // same reason the fingerprints are.
   const provisionWorktree: SessionRespawnGateShape["provisionWorktree"] = (
     threadId,
     projectId,
@@ -176,41 +269,18 @@ const makeSessionRespawnGate = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       if (projectId === null || cwd === null) return;
-      const provisionOne = <E>(
-        label: string,
-        run: Effect.Effect<
-          { readonly written: ReadonlyArray<string>; readonly removed: ReadonlyArray<string> },
-          E
-        >,
-      ) =>
-        run.pipe(
-          Effect.tap((result) =>
-            result.written.length > 0 || result.removed.length > 0
-              ? Effect.logDebug("[ru-code-respawn] worktree provisioned", {
-                  threadId,
-                  source: label,
-                  cwd,
-                  written: result.written.length,
-                  removed: result.removed.length,
-                })
-              : Effect.void,
-          ),
-          Effect.catch((cause) =>
-            Effect.logError(
-              `[ru-code-${label}Catalog] worktree provisioning failed — session spawns with the checkout's snapshot`,
-              { threadId, cwd, cause },
-            ),
-          ),
-          Effect.asVoid,
-        );
-      yield* Effect.all(
-        [
-          provisionOne("skill", skillCatalog.provisionInto({ projectId, targetCwd: cwd })),
-          provisionOne("agent", agentCatalog.provisionInto({ projectId, targetCwd: cwd })),
-          provisionOne("command", commandCatalog.provisionInto({ projectId, targetCwd: cwd })),
-        ],
-        { concurrency: 3 },
-      );
+      const hooks = yield* pluginHost.sessionHooks;
+      for (const { pluginId, hook } of hooks) {
+        const provision = hook.provisionWorktree;
+        if (provision === undefined) continue;
+        yield* runHook<void>({
+          pluginId,
+          what: "provisionWorktree",
+          threadId,
+          safe: undefined,
+          call: () => provision({ projectId, targetCwd: cwd }),
+        });
+      }
     });
 
   return {
@@ -222,18 +292,30 @@ const makeSessionRespawnGate = Effect.gen(function* () {
 });
 
 /**
- * The SessionRespawnGate service with its SkillCatalog + AgentCatalog dependencies provided.
- * The reactor provides ONLY this layer; the ambient FileSystem + Path + ServerConfig the
- * host catalog layers need are already present where the ws rpc layer is provided.
+ * The SessionRespawnGate service with its only dependency — the plugin host — provided.
+ * The reactor provides ONLY this layer.
  */
 export const SessionRespawnGateLive = Layer.effect(SessionRespawnGate, makeSessionRespawnGate).pipe(
-  Layer.provide(SkillCatalogHostLayer),
-  Layer.provide(AgentCatalogHostLayer),
-  Layer.provide(CommandCatalogHostLayer),
+  // ru-code (A22, O1-B): the plugin host, for `sessionHooks`. `PluginHostLayer` is a module-level
+  // const and layer memoization keys on layer identity, so this is a memo HIT onto the instance
+  // `server.ts` builds for the boot phase and `ws.ts` provides to the RPC table — the one whose
+  // `start` filled the status and hook tables. A second one would have neither.
+  Layer.provide(PluginHostLayer),
 );
 
 // ru-code: a no-op gate (never respawns, no catalog/fs/sql deps) for reactor unit-test harnesses that
 // exercise the OTHER restart triggers. Keeps those tests free of the catalog infrastructure.
+/**
+ * ru-code (A22): the aggregation, spelled out for the reader of `SessionRespawnGateShape`.
+ *
+ * `changedForThread` is TRUE when any plugin hook's fingerprint changed; `provisionWorktree` runs
+ * every hook. A hook that throws, rejects or overruns its 5 s budget is logged and treated as the
+ * safe answer ("unchanged" / "done"), so no plugin can fail or delay a spawn past that budget.
+ * With NO hooks registered the gate never respawns and provisions nothing, which is what
+ * `sessionRespawnGateAggregate.test.ts` pins.
+ */
+
+// ru-code: a no-op gate (never respawns, no catalog/fs/sql deps) for reactor unit-test harnesses that
 export const SessionRespawnGateNoop = Layer.succeed(SessionRespawnGate, {
   changedForThread: () => Effect.succeed(false),
   record: () => Effect.void,

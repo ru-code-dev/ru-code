@@ -37,6 +37,8 @@ import { localBootstrapRouteLayer } from "./ru-code/auth/localAutoAuth.ts"; // r
 import { autoUpdateTestTriggerRouteLayer } from "./ru-code/auto-update/apply/testTriggerRoute.ts"; // ru-code: default-off live-cycle test trigger
 import { AutoUpdateHostLayer } from "./ru-code/auto-update/autoUpdateWiring.ts"; // ru-code: auto-update engine
 import { PixsoAssistantHostLayer } from "./ru-code/pixso-assistant/ports.ts"; // ru-code: Pixso assistant
+import { pluginAssetRouteLayer } from "./ru-code/plugins/httpRoutes.ts"; // ru-code: plugin manifests + plugin web/asset files
+import { PluginHostLayer } from "./ru-code/plugins/PluginHost.ts"; // ru-code: plugin system host (one instance: boot + routes + ws)
 import { QwenModelDiscoveryStore } from "./ru-code/qwen/discovery/QwenModelDiscoveryStore.ts"; // ru-code
 import { QwenCompactionHistory } from "./ru-code/qwen/compaction/QwenCompactionHistory.ts"; // ru-code
 import { FirstClientConnectedLive } from "./ru-code/startup/firstClientConnected.ts"; // ru-code: boot-performance.md Fix W
@@ -69,9 +71,6 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { SessionRespawnGateLive } from "./ru-code/skills-agents/SessionRespawnGate.ts";
 // ru-code: MCP manager host wiring (ports + package runtime services).
 import { McpManagerHostLayer } from "./ru-code/mcp/mcpPorts.ts";
-// ru-code: analytics host wiring. Built in the long-lived runtime graph below — see the
-// comment there; the ws route's provide is a memo hit onto this same instance.
-import { AnalyticsHostLayer } from "./ru-code/analytics/analyticsPorts.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -507,6 +506,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     healthzRouteLayer, // ru-code: auto-update restart heartbeat (before the GET * catch-all)
     localBootstrapRouteLayer, // ru-code: loopback auto-auth credential endpoint (before the GET * catch-all)
     autoUpdateTestTriggerRouteLayer, // ru-code: default-off live-cycle test trigger (RU_CODE_UPDATE_TEST_TRIGGER=1)
+    pluginAssetRouteLayer, // ru-code: plugins — /plugins/manifests.json + plugin web/assets (before the GET * catch-all)
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
@@ -716,6 +716,10 @@ export const makeServerLayer = Layer.unwrap(
       // types small; the module-level layer is memoized, so this is the same instance the
       // provider-command reactor and the ws RPC layer see.
       Layer.provide(McpManagerHostLayer),
+      // ru-code: plugins — the startup phase calls pluginHost.start. Module-level layer,
+      // so the asset route's own provide (and A5's ws handlers) memo-hit THIS instance;
+      // a second one would have an empty status table and 404 every plugin URL.
+      Layer.provide(PluginHostLayer),
       Layer.provideMerge(RuntimeDependenciesLive),
       Layer.provide(launcherLayer),
     );
@@ -734,7 +738,6 @@ export const makeServerLayer = Layer.unwrap(
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
       AutoUpdateHostLayer, // ru-code: auto-update engine (boot probes + scheduler live with the app)
-      AnalyticsHostLayer, // ru-code: analytics scanner — long-lived, so its forked scan outlives any one request
       // ru-code: Pixso assistant — the ONE job/store instance ws shares. NOTHING sweeps at
       // boot: the layer only builds refs and one `mkdir -p`; the store loads (and sweeps)
       // lazily, on the first store-touching RPC per process — in practice the first panel open.

@@ -1,5 +1,5 @@
 // ru-code: the MCP manager's action half — promise wrappers over the environment-scoped
-// RPC commands, exactly like the catalog client (see useCatalogClient): each call runs
+// RPC commands, exactly like the catalog client the catalogs plugin now owns: each call runs
 // against the PRIMARY environment and unwraps the settled AsyncResult into resolve/reject
 // (the reject carries the server's readable failure message — the panel strips the
 // invariant prefix before display).

@@ -99,22 +99,23 @@ import {
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
-// ru-code: catalog `$skill`/`#agent` composer glue — provider-capability routing + picker data + menu
-// adapters + delimited token, all logic in ru-code / packages; the seams below only call them.
-import { buildCatalogToken } from "@smart-tools/qwen-cli-catalog-core/contracts";
+// ru-code (A25): the `$skill` picker still routes by PROVIDER CAPABILITY — a provider whose skills
+// are its own (`native`) keeps the port's own path. The catalog rows themselves are gone from this
+// file: they arrive as ordinary plugin provider rows through `mergePluginComposerItems` below.
+import { providerSkillSource } from "@ru-code/provider-capabilities";
+// ru-code: dropped-in plugin composer rows (mvp-plan D7) — the merge rule, the revision the
+// menu re-derives on, and the async prompt resolver all live in ru-code/plugins.
 import {
-  providerSkillSource,
-  providerAgentSource,
-  providerCommandSource,
-} from "@ru-code/provider-capabilities";
-import { useCatalogComposerItems } from "../../ru-code/skills-agents/composer/useCatalogComposerItems";
-import {
-  catalogSkillMenuItems,
-  catalogAgentMenuItems,
-  catalogCommandMenuItems,
-} from "../../ru-code/skills-agents/composer/catalogMenuItems";
-import { filterBuiltinAgents } from "../../ru-code/skills-agents/composer/builtinAgents";
-import { useActiveProjectId } from "../../ru-code/skills-agents/catalog/hostPorts";
+  mergePluginComposerItems,
+  resolvePluginComposerPrompt,
+  usePluginComposerItemsRevision,
+} from "../../ru-code/plugins/composerRegistry";
+// ru-code (A22, SDK 0.3.0): the composer PUBLISHES its live trigger + query for the plugin
+// providers' invisible drivers, which are mounted app-wide in `PluginBackgroundSurface`. This is
+// the ONLY plugin seam this file gains, and it is deliberately a plain function call, not a hook:
+// no plugin code runs inside `ChatComposer`'s render — a plugin's `useRows` throwing here would
+// take the composer down, and `renderSafety.tsx` wraps components, not hook calls.
+import { setActiveComposerQuery } from "../../ru-code/plugins/composerProviders";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -1163,25 +1164,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     query: isPathTrigger ? pathTriggerQuery : null,
   });
 
-  // ru-code: catalog picker data (qwen skills/agents). The provider-capability source gates whether the
-  // picker sources from the catalog; a non-catalog provider keeps these empty and skips the fetch.
-  // activeProjectId scopes each row into the Проект vs Глобальные section.
-  const activeProjectId = useActiveProjectId();
-  const catalogSkillItems = useCatalogComposerItems(
-    "skillCatalog",
-    composerTrigger?.query ?? "",
-    providerSkillSource(selectedProvider) === "catalog",
-  );
-  const catalogAgentItems = useCatalogComposerItems(
-    "agentCatalog",
-    composerTrigger?.query ?? "",
-    providerAgentSource(selectedProvider) === "catalog",
-  );
-  const catalogCommandItems = useCatalogComposerItems(
-    "commandCatalog",
-    composerTrigger?.query ?? "",
-    providerCommandSource(selectedProvider) === "catalog",
-  );
+  // ru-code: a dropped-in plugin registers its composer rows during `activate(host)`, which
+  // now runs AFTER the first render (A4 H2/M2) — this revision is what re-derives the menu.
+  // A22: it also covers the dynamic PROVIDER rows, so this stays the composer's one plugin hook.
+  const pluginComposerItemsRevision = usePluginComposerItemsRevision();
+
+  // ru-code (A22): publish the live trigger + query to the plugin provider store. The drivers are
+  // mounted elsewhere (above the router), so this store is the one-way channel between them — and
+  // it must be an EFFECT, not a render-time write: the drivers subscribe through
+  // `useSyncExternalStore`, and updating them while this component renders is both the "cannot
+  // update a component while rendering a different component" warning and a tearing hazard
+  // between the menu and the rows it was derived from.
+  const pluginComposerTrigger =
+    composerTrigger?.kind === "slash-command"
+      ? ("command" as const)
+      : composerTrigger?.kind === "skill"
+        ? ("skill" as const)
+        : composerTrigger?.kind === "subagent"
+          ? ("agent" as const)
+          : null;
+  const pluginComposerQuery = composerTrigger?.query ?? "";
+  useEffect(() => {
+    setActiveComposerQuery(pluginComposerTrigger, pluginComposerQuery);
+  }, [pluginComposerTrigger, pluginComposerQuery]);
 
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
@@ -1204,44 +1209,45 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // ru-code: /compress is offered disabled while composing a draft.
         isDraftThread: routeKind === "draft",
       });
-      // ru-code: our catalog custom commands (already query-filtered by useCatalogComposerItems) lead
-      // the list, grouped into Проект / Глобальные; the native composite (built-ins + provider) follows.
-      const catalogCommands =
-        providerCommandSource(selectedProvider) === "catalog"
-          ? catalogCommandMenuItems(catalogCommandItems, activeProjectId)
-          : [];
-      return [...catalogCommands, ...nativeItems];
+      // ru-code: a dropped-in plugin's `/` rows lead the menu (mvp-plan D7) — which since A25 is
+      // where the catalog's custom commands come from too. They are provider-independent, so every
+      // source keeps its own native composite below them.
+      return mergePluginComposerItems("command", composerTrigger.query, nativeItems);
     }
     if (composerTrigger.kind === "skill") {
-      // ru-code: route the `$skill` picker by provider capability — catalog (qwen) vs the port's native
-      // provider skills. The routing predicate + catalog mapping are ru-code; native path unchanged.
+      // ru-code: route the `$skill` picker by provider capability — catalog (qwen) vs the port's
+      // native provider skills. The routing predicate is ru-code; the native path is unchanged.
       const skillSource = providerSkillSource(selectedProvider);
-      if (skillSource === "catalog")
-        return [...catalogSkillMenuItems(catalogSkillItems, activeProjectId)];
-      if (skillSource === "none") return [];
-      return searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
-        (skill) => ({
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: formatProviderSkillDisplayName(skill),
-          description:
-            skill.shortDescription ??
-            skill.description ??
-            (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
-        }),
+      // ru-code: plugin `$` rows are appended for EVERY provider source (catalog / native /
+      // none) — they are prompts the plugin owns, not provider skills, so a provider without
+      // a skill surface still offers them.
+      const withPluginSkills = (items: ComposerCommandItem[]) =>
+        mergePluginComposerItems("skill", composerTrigger.query, items);
+      // ru-code (A25): `catalog` and `none` are now the same app-side answer — no rows of our own.
+      // A catalog provider's rows arrive through the plugin merge above, exactly like every other
+      // plugin row; only the `native` path below is still the port's own.
+      if (skillSource === "catalog" || skillSource === "none") return withPluginSkills([]);
+      return withPluginSkills(
+        searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
+          (skill) => ({
+            id: `skill:${selectedProvider}:${skill.name}`,
+            type: "skill" as const,
+            provider: selectedProvider,
+            skill,
+            label: formatProviderSkillDisplayName(skill),
+            description:
+              skill.shortDescription ??
+              skill.description ??
+              (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+          }),
+        ),
       );
     }
-    // ru-code: `#agent` picker (catalog only). Catalog agents (already query-filtered) in the
-    // Проект/Глобальные sections + qwen's built-in agents (filtered here — they aren't in the catalog
-    // list) in the Встроенные section.
+    // ru-code (A25): the `#agent` picker has no app-side rows left. Every row — the catalog's
+    // agents in their Проект / Глобальные sections and qwen's built-in agents in Встроенные —
+    // is contributed by a plugin's `agent` provider.
     if (composerTrigger.kind === "subagent") {
-      if (providerAgentSource(selectedProvider) !== "catalog") return [];
-      return [
-        ...catalogAgentMenuItems(catalogAgentItems, activeProjectId),
-        ...filterBuiltinAgents(composerTrigger.query),
-      ];
+      return mergePluginComposerItems("agent", composerTrigger.query, []);
     }
     return [];
   }, [
@@ -1250,10 +1256,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProvider,
     selectedProviderStatus,
     workspaceEntries.entries,
-    catalogSkillItems, // ru-code
-    catalogAgentItems, // ru-code
-    catalogCommandItems, // ru-code
-    activeProjectId, // ru-code
+    pluginComposerItemsRevision, // ru-code: plugins register AFTER first render (A4 H2/M2)
   ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1913,44 +1916,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         return;
       }
-      // ru-code: a catalog custom command inserts `/name ` — qwen runs it as a slash command (identity
-      // is the filename), exactly like a provider slash command.
-      if (item.type === "catalog-command") {
-        const replacement = `/${item.name} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied) {
-          setComposerHighlightedItemId(null);
+      // ru-code: a dropped-in plugin's row inserts the PROMPT the plugin owns (mvp-plan D7).
+      // `prompt` may be a string or an async resolver; the async path re-uses the SAME
+      // `expectedText` guard every other branch uses, so a resolution that lands after the
+      // reader kept typing is a silent no-op — never a throw and never a duplicate insert
+      // (mvp-plan §6 risk 2). `resolvePluginComposerPrompt` never rejects.
+      if (item.type === "plugin-item") {
+        const insertPluginPrompt = (prompt: string) => {
+          // ru-code (A22): a PROVIDER row's `insert` is pasted byte for byte — the SDK promises
+          // "the host inserts it verbatim", and a catalog token already carries its own trailing
+          // space, so appending one here produced `skill:⟦auth⟧  ` (two spaces). A `registerItem`
+          // row keeps the documented `prompt + " "`.
+          const replacement = item.insertVerbatim === true ? prompt : `${prompt} `;
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
+          }
+        };
+        if (typeof item.prompt === "string") {
+          insertPluginPrompt(item.prompt);
+          return;
         }
-        return;
-      }
-      // ru-code: catalog chips insert the DELIMITED wire token (buildCatalogToken); the server strips
-      // the fences + injects the skill/agent system-reminder.
-      if (item.type === "catalog-skill" || item.type === "catalog-agent") {
-        const replacement = `${buildCatalogToken(item.type === "catalog-agent" ? "agent" : "skill", item.name)} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied) {
-          setComposerHighlightedItemId(null);
-        }
+        void resolvePluginComposerPrompt(item).then((prompt) => {
+          if (prompt !== null) insertPluginPrompt(prompt);
+        });
         return;
       }
     },

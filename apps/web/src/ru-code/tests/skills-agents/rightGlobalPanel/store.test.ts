@@ -18,24 +18,24 @@ describe("rightGlobalPanel store", () => {
 
   it("toggle opens a panel, and toggling the same one closes it", () => {
     const { toggle } = useRightGlobalPanelStore.getState();
-    toggle("skills");
-    expect(useRightGlobalPanelStore.getState().open).toBe("skills");
+    toggle("mcp");
+    expect(useRightGlobalPanelStore.getState().open).toBe("mcp");
     expect(isGlobalPanelOpen()).toBe(true);
-    toggle("skills");
+    toggle("mcp");
     expect(useRightGlobalPanelStore.getState().open).toBeNull();
   });
 
   it("toggling a different panel switches (N-way mutual exclusion)", () => {
     const { toggle } = useRightGlobalPanelStore.getState();
-    toggle("skills");
-    toggle("agents");
+    toggle("mcp");
+    toggle("pixso");
     // Only one global panel is ever open.
-    expect(useRightGlobalPanelStore.getState().open).toBe("agents");
+    expect(useRightGlobalPanelStore.getState().open).toBe("pixso");
   });
 
   it("close() hands the slot back to the thread panel", () => {
     const { toggle, close } = useRightGlobalPanelStore.getState();
-    toggle("agents");
+    toggle("pixso");
     close();
     expect(useRightGlobalPanelStore.getState().open).toBeNull();
     expect(isGlobalPanelOpen()).toBe(false);
@@ -43,7 +43,7 @@ describe("rightGlobalPanel store", () => {
 
   describe("closeGlobalPanelIfOpen (right-panel toggle handoff)", () => {
     it("closes an open panel and reports it was open", () => {
-      useRightGlobalPanelStore.getState().toggle("skills");
+      useRightGlobalPanelStore.getState().toggle("mcp");
       expect(closeGlobalPanelIfOpen()).toBe(true);
       expect(useRightGlobalPanelStore.getState().open).toBeNull();
     });

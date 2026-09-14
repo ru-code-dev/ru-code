@@ -832,6 +832,29 @@ function makeFlowScenario(): FakeAcpScript {
   };
 }
 
+// ru-code (cli-reload): ONE-SHOT `-p` MODE. A real qwen CLI invoked as
+// `node <cli.js> -p <prompt> … --output-format json` answers on stdout and EXITS; it does not
+// speak ACP. This fake used to ignore argv and serve the ACP protocol forever, so every
+// text-generation run (thread titles, commit messages) left a child alive for the whole
+// 180 s CLI_TEXT_GENERATION_TIMEOUT_MS — invisible while nothing depended on those children,
+// and fatal once the CLI spawn gate started serializing CLI spawns behind them: the first
+// interactive send of a boot waited out a `-p` child that was never going to exit
+// (logs/implement/playwright-core-1.log — `[cli-textgen] dispatch model fallback` 19:35:07.684,
+// the session's own `initialize` blocked until 19:36:10.247).
+//
+// Answering like the real CLI removes BOTH: the harness stops leaking a child per first turn,
+// and the gate's hold is as short here as it is in production.
+const oneShotPromptIndex = process.argv.indexOf("-p");
+if (oneShotPromptIndex !== -1) {
+  const prompt = process.argv[oneShotPromptIndex + 1] ?? "";
+  // The envelope `extractQwenResultText` reads (QwenTextGeneration.ts:111-125): an array of
+  // messages whose `result` entry carries the model's text.
+  process.stdout.write(
+    `${JSON.stringify([{ type: "result", result: `fake: ${prompt.slice(0, 40)}` }])}\n`,
+  );
+  process.exit(0);
+}
+
 const scenarioId = process.env["RU_CODE_FAKE_ACP"] ?? "OK";
 const script = SCENARIOS[scenarioId] ?? SCENARIOS["OK"]!;
 

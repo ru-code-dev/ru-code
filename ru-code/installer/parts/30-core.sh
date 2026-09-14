@@ -245,6 +245,7 @@ run_preflight() {
   CLI_JS=$(printf '%s\n'   "$out" | grep '^CLI_JS='   | head -n 1 | cut -d'=' -f2- || true)
   CLI_SPAWN_KIND=$(printf '%s\n' "$out" | grep '^CLI_SPAWN_KIND=' | head -n 1 | cut -d'=' -f2- || true)
   CLI_IDENTITY=$(printf '%s\n' "$out" | grep '^CLI_IDENTITY=' | head -n 1 | cut -d'=' -f2- || true)
+  CLI_IDENTITY_PATH=$(printf '%s\n' "$out" | grep '^CLI_IDENTITY_PATH=' | head -n 1 | cut -d'=' -f2- || true)
   CONFIG_DIR=$(printf '%s\n' "$out" | grep '^CONFIG_DIR=' | head -n 1 | cut -d'=' -f2- || true)
   CONFIG_DIR_ALT=$(printf '%s\n' "$out" | grep '^CONFIG_DIR_ALT=' | head -n 1 | cut -d'=' -f2- || true)
   LEGACY_ROOT=$(printf '%s\n' "$out" | grep '^LEGACY_ROOT=' | head -n 1 | cut -d'=' -f2- || true)
@@ -315,7 +316,8 @@ warm_up_cli() {
   # present — never written as an empty variable. `exec` keeps $pid = the CLI itself, so the
   # watchdog's TERM still hits the real process, and bash exports the assignment prefix across it.
   (
-    [ -n "$CLI_IDENTITY" ] && export @@CLI_IDENTITY_ENV_NAME@@="$CLI_IDENTITY"
+    [ -n "$CLI_IDENTITY" ] && export @@CLI_IDENTITY_EXPORTS@@
+    [ -n "$CLI_IDENTITY_PATH" ] && export @@CLI_IDENTITY_PATH_EXPORTS@@
     case "$CLI_SPAWN_KIND" in
       cmd|direct) @@CLI_WARM_UP_ENV@@ exec "$CLI_JS" @@CLI_MCP_OFF_ARGS@@ -p "test" ;;
       *) @@CLI_WARM_UP_ENV@@ exec "$NODE_PATH" $NODE_FLAGS "$CLI_JS" @@CLI_MCP_OFF_ARGS@@ -p "test" ;;

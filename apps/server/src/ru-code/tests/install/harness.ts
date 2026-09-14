@@ -222,6 +222,8 @@ export function writeFakePreflight(
     readonly cliSpawnKind?: "node" | "cmd" | "direct";
     /** Package-identity value emitted as CLI_IDENTITY (exported into the warm-up env). */
     readonly cliIdentity?: string;
+    /** Identity FILE path emitted as CLI_IDENTITY_PATH (exported into the warm-up env). */
+    readonly cliIdentityPath?: string;
     /** qwen profile dir emitted as CONFIG_DIR (the warm-up target). */
     readonly configDir?: string;
     /** Linux-relocation alternative profile dir emitted as CONFIG_DIR_ALT. */
@@ -248,6 +250,7 @@ export function writeFakePreflight(
     if (opts.cliJs !== undefined) lines.push(`CLI_JS=${opts.cliJs}`);
     if (opts.cliSpawnKind !== undefined) lines.push(`CLI_SPAWN_KIND=${opts.cliSpawnKind}`);
     if (opts.cliIdentity !== undefined) lines.push(`CLI_IDENTITY=${opts.cliIdentity}`);
+    if (opts.cliIdentityPath !== undefined) lines.push(`CLI_IDENTITY_PATH=${opts.cliIdentityPath}`);
     if (opts.configDir !== undefined) lines.push(`CONFIG_DIR=${opts.configDir}`);
     if (opts.configDirAlt !== undefined) lines.push(`CONFIG_DIR_ALT=${opts.configDirAlt}`);
     if (opts.legacyRoot !== undefined) lines.push(`LEGACY_ROOT=${opts.legacyRoot}`);

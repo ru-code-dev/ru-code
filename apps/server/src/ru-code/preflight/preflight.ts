@@ -17,6 +17,7 @@ import {
   collectDiagnostics,
   MESSAGES,
   probeCliIdentity,
+  resolveIdentityPath,
   resolveQwenCli,
 } from "./common/index.ts";
 import type { CheckResult } from "./common/index.ts";
@@ -80,6 +81,10 @@ const main = async (): Promise<void> => {
   if (resolution.cliDetected)
     process.stdout.write(`CLI_SPAWN_KIND=${cliSpawnKind(resolution.cliJs)}\n`);
   if (identityProbe.state === "ok") process.stdout.write(`CLI_IDENTITY=${identityProbe.value}\n`);
+  // ru-code: the identity FILE path for this platform (the registry's CLI row) — the warm-up
+  // exports it under the registry-baked name(s); emitted only when a path is configured.
+  const identityPath = resolveIdentityPath();
+  if (identityPath.length > 0) process.stdout.write(`CLI_IDENTITY_PATH=${identityPath}\n`);
   process.stdout.write(`CONFIG_DIR=${resolution.configDir}\n`);
   process.stdout.write(`CONFIG_DIR_ALT=${resolution.configDirAlt}\n`);
   process.stdout.write(`SOURCE=${resolution.source}\n`);

@@ -152,6 +152,18 @@ describe("the shipped registry's output (literal snapshot)", () => {
     expect(namesOf(cliEnvAssignments())).not.toContain("QWEN_PACKAGE_IDENTITY");
   });
 
+  // ru-code: the CLI row — the identity FILE path for the platform, absent when unconfigured.
+  it("adds the CLI identity-path row from the runtime, absent otherwise", () => {
+    expect(cliEnvAssignments({ CLI: "/opt/cli/identity.sh" })).toEqual([
+      ["QWEN_CODE_NO_RELAUNCH", "true"],
+      ...CLI_ENV.CLI.names.map((name) => [name, "/opt/cli/identity.sh"] as const),
+    ]);
+    for (const name of CLI_ENV.CLI.names) {
+      expect(namesOf(cliEnvAssignments())).not.toContain(name);
+      expect(namesOf(cliEnvAssignments({ CLI: "" }))).not.toContain(name);
+    }
+  });
+
   it("emits the MCP-off flag pair on every spawn", () => {
     expect(cliArgAssignments()).toEqual(["--allowed-mcp-server-names", "__none__"]);
   });

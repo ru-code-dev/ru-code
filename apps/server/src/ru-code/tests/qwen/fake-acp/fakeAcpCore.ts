@@ -635,6 +635,20 @@ export interface FakeAcpScript {
    * `${slug}(${authMethod})` setModel value. Omitted ⇒ no capture (existing tests).
    */
   readonly onAuthenticate?: (methodId: string) => void;
+  /**
+   * ru-code (cli-reload): EFFECTFUL `authenticate` observation — runs (awaited) inside the
+   * handler BEFORE the reply, in the fake agent's fiber, exactly like `onCreateSessionEffect`.
+   * A test that must HOLD the auth window open (the spawn gate's permit is held precisely
+   * across this reply) parks here. Keep the effect INFALLIBLE.
+   */
+  readonly onAuthenticateEffect?: () => Effect.Effect<void>;
+  /**
+   * ru-code (cli-reload): how the fake answers `authenticate`. "ok" (default) replies; "error"
+   * replies with a JSON-RPC error — a lapsed/rejected token, which is the case where the spawn
+   * gate's RELEASE POINT is observable (owner ruling D2: the permit goes back at the reply,
+   * success or failure, not at the end of the whole session start).
+   */
+  readonly authenticateBehavior?: "ok" | "error";
   readonly onSetConfigOption?: (configId: string, value: string | boolean) => void;
   /**
    * ru-code: capture the `RequestPermissionResponse.outcome` the adapter (client)
@@ -1163,10 +1177,20 @@ export const runFakeAcpAgent = (
               },
             }),
     );
-    yield* agent.handleAuthenticate((request) => {
-      script.onAuthenticate?.(request.methodId); // ru-code: capture the resolved methodId
-      return Effect.succeed({});
-    });
+    yield* agent.handleAuthenticate((request) =>
+      Effect.gen(function* () {
+        script.onAuthenticate?.(request.methodId); // ru-code: capture the resolved methodId
+        // ru-code (cli-reload): park here when the test holds the auth window open.
+        if (script.onAuthenticateEffect) yield* script.onAuthenticateEffect();
+        if (script.authenticateBehavior === "error") {
+          return yield* new AcpErrors.AcpRequestError({
+            code: -32000,
+            errorMessage: "authenticate rejected (fake)",
+          });
+        }
+        return {};
+      }),
+    );
     // ru-code: the START handshake honours `script.startBehavior` so tests can drive
     // a wedged ("hang") or failing ("error") `cli --acp` boot, not just the happy path.
     // session/new and session/load carry DIFFERENT response shapes (only session/new

@@ -60,6 +60,8 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+// ru-code: cli-reload — the CLI spawn scheduler's turn-start reservation (see the seam below).
+import { withQwenTurnStartReservation } from "../../ru-code/cli-reload/turnStartReservation.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -1616,7 +1618,13 @@ const make = Effect.gen(function* () {
         return;
       }
       case "thread.turn-start-requested":
-        yield* processTurnStartRequested(event);
+        // ru-code: cli-reload — a turn start is about to need a CLI session, and THIS handler
+        // forks the first-turn title generation (below) BEFORE it ensures that session. The
+        // reservation claims the session's place in the CLI spawn scheduler here, so the
+        // session start wins the auth window instead of queueing behind a background `-p` run.
+        // A NO-OP unless this turn would start a qwen session (owner ruling R1) — the decision
+        // is in ru-code/cli-reload/turnStartReservation.ts; released when this handler returns.
+        yield* withQwenTurnStartReservation(event.payload, processTurnStartRequested(event));
         return;
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);

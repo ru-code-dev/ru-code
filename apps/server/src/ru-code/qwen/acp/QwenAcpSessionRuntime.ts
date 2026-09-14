@@ -34,6 +34,11 @@ import {
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "../../../provider/acp/AcpRuntimeModel.ts";
+// ru-code (cli-reload): the auth flag + the early permit release. This runtime is NOT a
+// spawn-scheduler client — the permit is taken one level up, around the whole session start —
+// but it is where the AUTH WINDOW closes, so it is where the permit is handed back.
+import { markAuthOk, releaseCliSpawnPermitEarly } from "../../cli-reload/cliSpawnScheduler.ts";
+import { registerLiveCliChild } from "../../cli-reload/liveCliChildren.ts";
 // ru-code (sub-agents): the sub-agent `_meta` reader, shared with the adapter so
 // the gate below and `classifyQwenToolCallFrame` agree on what an agent frame is.
 import {
@@ -366,6 +371,17 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    // ru-code (cli-reload): THE registration of a live CLI child — at the spawn, before the
+    // handshake, so a session still parked in `authenticate` is visible to the reload's kill
+    // pass (adversary A-2: the adapter's `sessions` map only learns about it after the whole
+    // start completes). Scoped to the runtime, so it disappears with the child.
+    yield* registerLiveCliChild({
+      pid: Number(child.pid),
+      kind: "acp",
+      forceKill: Effect.ignore(child.kill({ killSignal: "SIGKILL" })),
+      waitForExit: Effect.ignore(child.exitCode),
+    }).pipe(Effect.provideService(Scope.Scope, runtimeScope));
+
     const acpContext = yield* Layer.build(
       EffectAcpClient.layerChildProcess(child, {
         // ru-code: PERMANENT env-gated harness equipment —
@@ -577,7 +593,17 @@ const makeAcpSessionRuntime = (
         "authenticate",
         authenticatePayload,
         acp.agent.authenticate(authenticatePayload),
+      ).pipe(
+        // ru-code (cli-reload, owner ruling D2): the AUTH WINDOW closes at the `authenticate`
+        // REPLY — success OR failure — so the permit goes back here, not at the end of the whole
+        // session start. On failure that is the difference between a queued spawn waiting
+        // milliseconds and waiting out the 60 s start ceiling (adversary A-5b).
+        Effect.onExit(() => releaseCliSpawnPermitEarly),
       );
+      // ru-code (cli-reload): a completed `authenticate` IS the proof the token works; from
+      // here every CLI spawn goes unguarded until an idle reset / reload / restart clears it,
+      // and the scheduler releases everyone still queued.
+      yield* markAuthOk;
 
       return { initializeResult } satisfies AcpWarmedState;
     });

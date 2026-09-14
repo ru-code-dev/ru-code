@@ -172,17 +172,29 @@ describe("probeCliIdentity / resolveCliIdentity", () => {
     expect(resolveCliIdentity(options)).toBeUndefined();
   });
 
-  it("identityEnvRuntime: registry fragment on a hit, empty object on any miss", () => {
+  // ru-code: the fragment passes BOTH rows through as resolved (value + identity FILE path); the
+  // registry's own empty-omits rule turns a miss into an absent variable, so a miss here is an
+  // undefined value / empty path, never a missing key.
+  it("identityEnvRuntime: value + path on a hit; path alone when the file has no value; nothing configured → both empty", () => {
     const hit = {
       enabled: true,
       paths: { ...table, linux: join(dir, "identity.sh") },
       platform: "linux" as const,
       env: {},
     };
-    expect(identityEnvRuntime(hit)).toEqual({ PACKAGE_IDENTITY: "id-ok_1" });
-    expect(identityEnvRuntime({ enabled: false })).toEqual({});
+    expect(identityEnvRuntime(hit)).toEqual({
+      PACKAGE_IDENTITY: "id-ok_1",
+      CLI: join(dir, "identity.sh"),
+    });
+    // The path is the CLI row's value whether or not a value was extracted from the file.
+    expect(
+      identityEnvRuntime({ ...hit, paths: { ...table, linux: join(dir, "no-key.sh") } }),
+    ).toEqual({ PACKAGE_IDENTITY: undefined, CLI: join(dir, "no-key.sh") });
+    expect(
+      identityEnvRuntime({ enabled: false, paths: table, platform: "linux", env: {} }),
+    ).toEqual({ PACKAGE_IDENTITY: undefined, CLI: "" });
     expect(identityEnvRuntime({ enabled: true, paths: table, platform: "linux", env: {} })).toEqual(
-      {},
+      { PACKAGE_IDENTITY: undefined, CLI: "" },
     );
   });
 

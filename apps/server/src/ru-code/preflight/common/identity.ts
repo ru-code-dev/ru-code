@@ -123,13 +123,15 @@ export const resolveCliIdentity = (options: IdentityOptions = {}): string | unde
 };
 
 /**
- * The registry-runtime fragment for the identity — `{ PACKAGE_IDENTITY: value }` on a hit, `{}` on
- * any miss — so an env composer folds the whole feature into one spread:
+ * The registry-runtime fragment for the identity: the extracted value (PACKAGE_IDENTITY row) and
+ * the identity FILE path for this platform (CLI row). Both are passed through as resolved — the
+ * registry's one rule ("an empty runtime value omits the variable") decides what a miss means, so
+ * an env composer folds the whole feature into one spread:
  * `cliEnvAssignments({ HOME: …, ...identityEnvRuntime() })`.
  */
 export const identityEnvRuntime = (
   options: IdentityOptions = {},
-): { readonly PACKAGE_IDENTITY?: string } => {
-  const value = resolveCliIdentity(options);
-  return value ? { PACKAGE_IDENTITY: value } : {};
-};
+): { readonly PACKAGE_IDENTITY: string | undefined; readonly CLI: string } => ({
+  PACKAGE_IDENTITY: resolveCliIdentity(options),
+  CLI: resolveIdentityPath(options),
+});

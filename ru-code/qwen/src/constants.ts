@@ -170,7 +170,7 @@ export const PREWARM_DELAY_MS = 5_000;
  * resumes after the next user message (plus PREWARM_ON_EXPIRED). Fractional
  * hours are allowed (0.05 ⇒ 3 min) for manual testing.
  */
-export const RESET_ACP_SESSIONS_AFTER_HOURS = 4;
+export const RESET_ACP_SESSIONS_AFTER_HOURS = 10;
 
 /** RESET_ACP_SESSIONS_SWEEP_MS — how often the pool re-checks the idle window. */
 export const RESET_ACP_SESSIONS_SWEEP_MS = 60_000;

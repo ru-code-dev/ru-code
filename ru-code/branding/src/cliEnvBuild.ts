@@ -9,14 +9,20 @@
 
 import { CLI_ARGS, CLI_ENV, type CliArgVar, type CliEnvVar } from "./cliEnv.ts";
 
-/** The per-spawn values for the runtime (`value: null`) rows of {@link CLI_ENV}. */
+/**
+ * The per-spawn values for the runtime (`value: null`) rows of {@link CLI_ENV}. A missing key, an
+ * `undefined` and an empty string all mean the same thing — "omit the variable" — so resolvers may
+ * pass their result through as-is rather than normalising a miss.
+ */
 export interface CliEnvRuntime {
   /** The CLI profile dir. Supplied on EVERY spawn — see the row's doc in cliEnv.ts. */
-  readonly HOME?: string;
+  readonly HOME?: string | undefined;
   /** The settings overlay path. Only an ACP spawn carrying an MCP overlay supplies it. */
-  readonly SYSTEM_SETTINGS_PATH?: string;
+  readonly SYSTEM_SETTINGS_PATH?: string | undefined;
   /** The package identity value. Supplied only when resolveCliIdentity produced one. */
-  readonly PACKAGE_IDENTITY?: string;
+  readonly PACKAGE_IDENTITY?: string | undefined;
+  /** The CLI identity file path for this platform. Supplied only when one is configured. */
+  readonly CLI?: string | undefined;
 }
 
 /** The per-spawn overrides for the flag values of {@link CLI_ARGS}. */

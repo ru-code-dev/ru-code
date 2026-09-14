@@ -36,6 +36,7 @@ import { healthzRouteLayer } from "./ru-code/auto-update/healthz.ts"; // ru-code
 import { localBootstrapRouteLayer } from "./ru-code/auth/localAutoAuth.ts"; // ru-code: loopback auto-auth credential endpoint
 import { autoUpdateTestTriggerRouteLayer } from "./ru-code/auto-update/apply/testTriggerRoute.ts"; // ru-code: default-off live-cycle test trigger
 import { AutoUpdateHostLayer } from "./ru-code/auto-update/autoUpdateWiring.ts"; // ru-code: auto-update engine
+import { CliReloadHostLayer } from "./ru-code/cli-reload/cliReloadWiring.ts"; // ru-code: CLI-reload engine
 import { PixsoAssistantHostLayer } from "./ru-code/pixso-assistant/ports.ts"; // ru-code: Pixso assistant
 import { QwenModelDiscoveryStore } from "./ru-code/qwen/discovery/QwenModelDiscoveryStore.ts"; // ru-code
 import { QwenCompactionHistory } from "./ru-code/qwen/compaction/QwenCompactionHistory.ts"; // ru-code
@@ -735,6 +736,9 @@ export const makeServerLayer = Layer.unwrap(
       cloudDesiredLinkReconcileLayer,
       AutoUpdateHostLayer, // ru-code: auto-update engine (boot probes + scheduler live with the app)
       AnalyticsHostLayer, // ru-code: analytics scanner — long-lived, so its forked scan outlives any one request
+      // ru-code: CLI-reload engine — long-lived for the same reason: a reload is forked into
+      // this service's scope so it outlives the request that asked for it (ru-code/cli-reload).
+      CliReloadHostLayer,
       // ru-code: Pixso assistant — the ONE job/store instance ws shares. NOTHING sweeps at
       // boot: the layer only builds refs and one `mkdir -p`; the store loads (and sweeps)
       // lazily, on the first store-touching RPC per process — in practice the first panel open.

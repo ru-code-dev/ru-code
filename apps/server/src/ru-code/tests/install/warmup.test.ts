@@ -44,6 +44,12 @@ function writeWarmStub(sb: Sandbox): string {
     `  const idKey = ${JSON.stringify(IDENTITY_KEY)};\n` +
     `  const idVal = idKey in process.env ? process.env[idKey] : "<absent>";\n` +
     `  fs.appendFileSync(process.env.WARM_ARGV_LOG, "identity=" + idVal + "\\n");\n` +
+    // ru-code: same for the CLI row (the identity FILE path) — one line per alias, so a fork's
+    // second alias is asserted to reach the spawn too.
+    `  for (const name of ${JSON.stringify([...CLI_ENV.CLI.names])}) {\n` +
+    `    const v = name in process.env ? process.env[name] : "<absent>";\n` +
+    `    fs.appendFileSync(process.env.WARM_ARGV_LOG, "identityPath:" + name + "=" + v + "\\n");\n` +
+    `  }\n` +
     `}\n` +
     `if (process.env.WARM_HANG === "1") { setInterval(() => {}, 1000); return; }\n` +
     `const home = names.map((n) => process.env[n]).find((v) => v);\n` +
@@ -81,6 +87,8 @@ describe("install CLI warm-up", () => {
       expect(argv).toContain("-p");
       // No CLI_IDENTITY from the preflight ⇒ the variable is OMITTED, never written blank.
       expect(argv).toContain("identity=<absent>");
+      // Same for the identity FILE path (the CLI row): no CLI_IDENTITY_PATH line ⇒ omitted.
+      for (const name of CLI_ENV.CLI.names) expect(argv).toContain(`identityPath:${name}=<absent>`);
       const log = readLog(sb);
       expect(log).toContain("warm-up: run");
       expect(log).toContain(`warm-up: profile created at ${configDir}`);
@@ -216,6 +224,36 @@ describe("install CLI warm-up", () => {
 
       expect(r.status).toBe(0);
       expect(NodeFS.readFileSync(argvLog, "utf8")).toContain("identity=id-from-preflight");
+    } finally {
+      sb.cleanup();
+    }
+  });
+
+  // ru-code: the CLI row — the preflight's CLI_IDENTITY_PATH value must reach the warm-up CHILD
+  // under EVERY alias of the row (the export list is generated from the registry, like the env
+  // prefix); the absent case is pinned in the first test.
+  it("exports the preflight-resolved identity file path into the warm-up spawn, under every alias", () => {
+    const sb = makeSandbox();
+    try {
+      const cliJs = writeWarmStub(sb);
+      const configDir = sb.path("home", ".qwen");
+      const identityPath = sb.path("opt", "cli", "identity.sh");
+      const preflight = writeFakePreflight(sb, {
+        ourRoot: sb.appRoot,
+        cliJs,
+        configDir,
+        cliIdentityPath: identityPath,
+      });
+      writeFakeRelease(sb);
+      sb.write("home/.bashrc", "# shell\n");
+
+      const argvLog = sb.path(ARGV_LOG);
+      const r = runInstaller(sb, { preflight, env: { WARM_ARGV_LOG: argvLog } });
+
+      expect(r.status).toBe(0);
+      const argv = NodeFS.readFileSync(argvLog, "utf8");
+      for (const name of CLI_ENV.CLI.names)
+        expect(argv).toContain(`identityPath:${name}=${identityPath}`);
     } finally {
       sb.cleanup();
     }

@@ -13,7 +13,10 @@ import {
   CLI_ERROR_TASK_TYPE,
   CONTEXT_COMPACTION_TASK_PREFIX,
   CONTEXT_COMPACTION_TASK_TYPE,
+  // ru-code (cli-reload): what an idle expiry removes, and whether it removes anything.
+  DELETE_ON_CLI_RESTART,
   QWEN_KIND,
+  REMOVE_SESSION_FILES_ON_EXPIRY,
 } from "@ru-code/branding";
 import {
   ApprovalRequestId,
@@ -56,6 +59,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 import {
   type AbortMethod,
   ACP_CANCEL_GRACE_MS,
@@ -188,6 +192,11 @@ import {
 } from "../../provider/acp/AcpCoreRuntimeEvents.ts";
 import { parsePermissionRequest } from "../../provider/acp/AcpRuntimeModel.ts";
 import { makeQwenAcpRuntime } from "./QwenAcpSupport.ts";
+// ru-code (cli-reload): the spawn scheduler (this is the HIGH-priority `acp` class) + the
+// reload registry.
+import { clearAuthOk, withCliSpawnPermit } from "../cli-reload/cliSpawnScheduler.ts";
+import { removeCliResetEntries } from "../cli-reload/deletePaths.ts";
+import { registerQwenInstance } from "../cli-reload/reloadRuntime.ts";
 // ru-code: resolve the instance's effective bin/name/artifact (profile + settings + preflight)
 // and the per-model auth method + wire format appended at setModel.
 import { formatQwenModelId, resolveCliProfileSettings } from "./profileResolver.ts";
@@ -2308,7 +2317,15 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     const scheduleTeardown = (ctx: QwenSessionContext, method: AbortMethod) =>
       abortSession(ctx, method).pipe(Effect.forkIn(layerScope), Effect.asVoid);
 
-    const startSession: QwenAdapterShape["startSession"] = (input) => {
+    const startSession: QwenAdapterShape["startSession"] = (input) =>
+      // ru-code (cli-reload): THE `acp` spawn class. The permit is asked for at the very first
+      // instruction of a session start — before the pool take, before any event — so a session
+      // start never queues behind a background title generation (owner ruling). The wrapper
+      // also carries the reload wait and the pool's idle-edge read, in that order, with
+      // nothing held (see cliSpawnScheduler.withCliSpawnPermit).
+      withCliSpawnPermit("acp", startSessionGuarded(input));
+
+    const startSessionGuarded: QwenAdapterShape["startSession"] = (input) => {
       // ru-code (warm engine): set once the "starting" feedback left the
       // adapter — a failed start then compensates with a terminal state.
       let startingEmitted = false;
@@ -5715,6 +5732,45 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
     );
 
     const stopAll: QwenAdapterShape["stopAll"] = () => (warmEngine ? stopAllWarm : stopAllClassic);
+
+    // ru-code (cli-reload): join the reload registry for the life of this adapter layer.
+    // Registering from HERE (rather than iterating ProviderService's adapters) keeps the
+    // reload qwen-only by construction (owner ruling R1), needs zero upstream edits, and is
+    // the only way to carry this instance's PROFILE DIR and pool state — neither of which
+    // `getAdapterEntries` exposes (research D-G1 / A-G1).
+    const instanceProfileDir = resolved.dir.length > 0 ? expandHomePath(resolved.dir) : "";
+    yield* registerQwenInstance({
+      instanceId: String(boundInstanceId),
+      // A stop failure is not a per-instance concern of the registry: it becomes a DEFECT so
+      // the reload's `catchCause` logs the real cause at debug (owner ruling R7) and fails
+      // the RPC, instead of being silently swallowed here.
+      stopAll: stopAll().pipe(Effect.orDie),
+      profileDir: instanceProfileDir,
+      readPool:
+        warmPool === undefined
+          ? Effect.succeed(null)
+          : Effect.map(warmPool.stats, (stats) => ({
+              state: stats.state,
+              pendingRefills: stats.pendingRefills,
+              total: stats.total,
+            })),
+      // ru-code (cli-reload, D4): idle reset ⇒ the auth flag is stale (every warm child is
+      // dead), and with the branding flag on the configured entries go too. Built here
+      // because this is where FileSystem/Path are already bound.
+      onIdleExpiry: clearAuthOk.pipe(
+        Effect.andThen(
+          REMOVE_SESSION_FILES_ON_EXPIRY
+            ? removeCliResetEntries({
+                dirs: [instanceProfileDir],
+                entries: DELETE_ON_CLI_RESTART,
+              }).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              )
+            : Effect.void,
+        ),
+      ),
+    });
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {

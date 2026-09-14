@@ -45,6 +45,8 @@ import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReape
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 // ru-code: closes qwen work that died with the previous process (see module doc).
+// ru-code: cli-reload boot cleanup (ru-code/cli-reload).
+import { runCliResetOnBoot } from "./ru-code/cli-reload/CliReloadService.ts";
 import { runQwenBootSweep } from "./ru-code/startup/qwenBootSweep.ts";
 import {
   formatHeadlessServeOutput,
@@ -470,6 +472,10 @@ export const make = (options?: StartupOptions) =>
           // problem never blocks startup.
           yield* Effect.logDebug("startup phase: qwen boot sweep");
           yield* runStartupPhase("qwen.boot-sweep", runQwenBootSweep);
+          // ru-code: cli-reload — optional boot cleanup of the CLI profile dir (branding
+          // REMOVE_SESSION_FILES_ON_EXPIRY; ships false, so this is a no-op by default).
+          // After the sweep, before anything spawns; never fails (ru-code/cli-reload).
+          yield* runStartupPhase("qwen.cli-reset.boot", runCliResetOnBoot);
           if (serverConfig.startupPresentation === "headless") {
             const accessInfo = yield* issueHeadlessServeAccessInfo();
             yield* runStartupPhase(

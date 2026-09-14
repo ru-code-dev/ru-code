@@ -19,7 +19,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { RU_CODE_TMP_ROOT } from "../harness/primitives.ts";
+import { FAKE_ACP_ENTRY, RU_CODE_TMP_ROOT } from "../harness/primitives.ts";
 import { PIXSO_MCP_ENDPOINT } from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
 
 // T10 (reorg wave, decisions 438/442, owner option A "full merge"): the fake REMOTE
@@ -40,10 +40,7 @@ const STATE_FILE = NodePath.join(ARTIFACTS_DIR, "harness-state.json");
 // T10 (reorg wave): ONE pid file for the ONE merged process — it now serves BOTH the
 // local (`/local-mcp`) and remote (`/remote-mcp`) routes, so there is no second pid file.
 const PIXSO_PID_FILE = NodePath.join(ARTIFACTS_DIR, "fake-pixso-pid.json");
-const FAKE_ACP_ENTRY = NodePath.join(
-  REPO_ROOT,
-  "apps/server/src/ru-code/tests/qwen/fake-acp/fake-acp-server.ts",
-);
+// ru-code (cli-reload): one definition, shared with the live-child counter (primitives.ts).
 // ru-code: the mock WEB update source the auto-update specs drive (see mockUpdateServer.ts).
 const MOCK_UPDATE_ENTRY = NodePath.join(import.meta.dirname, "mockUpdateServer.ts");
 // ru-code: the BUILT server bundle, by ABSOLUTE path — the teardown sweep matches process

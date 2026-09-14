@@ -22,11 +22,12 @@ import {
   BRAND_GRADIENT_FROM,
   BRAND_GRADIENT_TO,
   SUPPORT_CHANNEL_URL,
-  IDENTITY_KEY,
+  CLI_ENV,
   NODE_BIN_PATHS,
   USE_RC_SOURCED_LAUNCHER,
   cliArgAssignments,
   cliEnvAssignments,
+  type CliEnvVar,
 } from "@ru-code/branding";
 
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -52,6 +53,15 @@ function warmUpEnvPrefix(): string {
   return cliEnvAssignments({ HOME: "$CONFIG_DIR" })
     .map(([name, value]) => `${name}="${value}"`)
     .join(" ");
+}
+
+/**
+ * ru-code: the `export` list for one optional registry row the installer fills at run time —
+ * every alias of the row assigned the same bash variable REFERENCE, so a fork's second alias is
+ * carried by the warm-up exactly as the app's spawns carry it. Emitted as `export <fragment>`.
+ */
+function warmUpExports(row: CliEnvVar, bashVar: string): string {
+  return row.names.map((name) => `${name}="$${bashVar}"`).join(" ");
 }
 
 /** Minimum major from the engine range (min of every clause's major) — no drift with the range. */
@@ -110,11 +120,12 @@ const CONFIG: Record<string, string> = {
   // bash FRAGMENTS, not values in a quoted assignment, which is why they bypass the escaper.
   CLI_WARM_UP_ENV: warmUpEnvPrefix(),
   CLI_MCP_OFF_ARGS: cliArgAssignments().join(" "),
-  // ru-code: the env-var NAME the warm-up exports the preflight-extracted identity value under
-  // (CLI_PASS_IDENTITY). The name comes from the registry (IDENTITY_KEY → the PACKAGE_IDENTITY
-  // row), so bash never writes a variable name by hand; the VALUE arrives at install time via the
-  // preflight's CLI_IDENTITY stdout line and is exported only when non-empty.
-  CLI_IDENTITY_ENV_NAME: IDENTITY_KEY,
+  // ru-code: the two OPTIONAL registry rows the warm-up fills from preflight stdout lines
+  // (CLI_IDENTITY, CLI_IDENTITY_PATH). They cannot ride the env prefix — an absent value must
+  // OMIT the variable, not write it blank — so each gets a guarded `export` whose name list is
+  // generated from the row's aliases (see warmUpExports), like the prefix. Bash fragments ⇒ RAW.
+  CLI_IDENTITY_EXPORTS: warmUpExports(CLI_ENV.PACKAGE_IDENTITY, "CLI_IDENTITY"),
+  CLI_IDENTITY_PATH_EXPORTS: warmUpExports(CLI_ENV.CLI, "CLI_IDENTITY_PATH"),
   // Hints — bodies for the §10 message table. Placeholders (author-filled).
   CLI_INSTALL_HINT: "Установите CLI-движок (см. документацию проекта).",
   CLI_UPDATE_HINT: "Обновите CLI-движок до последней версии.",
@@ -158,7 +169,12 @@ export function escapeForDoubleQuotedShell(value: string): string {
  * that defers `CONFIG_DIR` to bash at install time. Every other token keeps its escaping; adding a
  * name here means taking responsibility for that fragment's shell safety at its generator.
  */
-const RAW_TOKENS: ReadonlySet<string> = new Set(["CLI_WARM_UP_ENV", "CLI_MCP_OFF_ARGS"]);
+const RAW_TOKENS: ReadonlySet<string> = new Set([
+  "CLI_WARM_UP_ENV",
+  "CLI_MCP_OFF_ARGS",
+  "CLI_IDENTITY_EXPORTS",
+  "CLI_IDENTITY_PATH_EXPORTS",
+]);
 
 /** Deterministic assembly: parts in filename order, tokens replaced, joined by exactly one \n. */
 export function buildInstaller(): string {

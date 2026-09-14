@@ -4,6 +4,8 @@ import {
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
+// ru-code: "Reload CLI" header action (icon + confirm modal), right of the brand.
+import { CliReloadHeaderAction } from "../../ru-code/cliReload/CliReloadHeaderAction";
 // ru-code: the fork's single footer seam (auto-update pill + feature rows).
 import { RuCodeFeaturesMenu } from "../../ru-code/sidebar/RuCodeFeaturesMenu";
 // ru-code: global-panel triggers (skills/agents/commands/mcp) live in the footer icon row.
@@ -77,6 +79,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         )}
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
+      <CliReloadHeaderAction onBackdrop={backdropVariant !== null} /> {/* ru-code */}
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"

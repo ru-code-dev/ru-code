@@ -29,6 +29,11 @@ import { buildCliSpawn } from "@ru-code/qwen/spawn";
 import { CLI_TEXT_GENERATION_TIMEOUT_MS, MCP_ENGINE_USE_OVERLAY } from "@ru-code/qwen/constants";
 // ru-code: same allowlist argument the ACP spawns use — one definition, one behaviour.
 import { buildCliEnv } from "./profileResolver.ts";
+// ru-code (cli-reload): the spawn scheduler (this is the LOW-priority `textgen` class) + the
+// one-shot child registry the reload kills (research A-G3: these children are in no journal
+// and `stopAll` never reached them).
+import { markAuthOk, withCliSpawnPermit } from "../cli-reload/cliSpawnScheduler.ts";
+import { registerLiveCliChild } from "../cli-reload/liveCliChildren.ts";
 import { haltOnExit } from "@ru-code/qwen/haltOnExit";
 // ru-code: resolve the auth method a given model dispatches with (built-in →
 // profile default, custom → its stored method, else instance default).
@@ -278,6 +283,21 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
         ),
       );
 
+    // ru-code (cli-reload): the one line that says a `-p` CHILD EXISTS, as opposed to a `-p`
+    // run having been decided on (`dispatch model fallback`, logged above before the spawn
+    // scheduler is consulted). The priority ruling is about which CHILD comes first, so this
+    // is the marker the e2e reads to prove the order end to end.
+    yield* Effect.logDebug("[cli-textgen] child spawned", { operation: input.operation });
+
+    // ru-code (cli-reload): the reload's kill pass reaches this child through the ONE live-child
+    // registry every CLI child uses. Deregistered when this run's scope closes.
+    yield* registerLiveCliChild({
+      pid: Number(child.pid),
+      kind: "textgen",
+      forceKill: Effect.ignore(child.kill({ killSignal: "SIGKILL" })),
+      waitForExit: Effect.ignore(child.exitCode),
+    });
+
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
         readStreamAsString(input.operation, child.stdout.pipe(haltOnExit(child.exitCode))),
@@ -295,6 +315,10 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
       ],
       { concurrency: "unbounded" },
     );
+
+    // ru-code (cli-reload, D2): output without an error is proof the token works. A FAILED
+    // run never clears the flag — a model/prompt error says nothing about authorization.
+    if (exitCode === 0) yield* markAuthOk;
 
     if (exitCode !== 0) {
       const stderrDetail = stderr.trim();
@@ -318,8 +342,12 @@ export const makeQwenTextGeneration = Effect.fn("makeQwenTextGeneration")(functi
     prompt: string;
     model: string | null | undefined;
   }) =>
-    runQwenCommand(input).pipe(
-      Effect.scoped,
+    // ru-code (cli-reload): a one-shot `-p` run is the LOW-priority spawn class. While the
+    // auth flag is false it never goes ahead of an ACP session start (owner ruling), and with
+    // nothing else queued it runs immediately — a standalone regenerate-title after a restart,
+    // a reload or an idle reset waits on nothing. The permit covers the whole run because for
+    // a `-p` child the auth window IS the process; the timeout below bounds the hold.
+    withCliSpawnPermit("textgen", runQwenCommand(input).pipe(Effect.scoped)).pipe(
       Effect.timeoutOption(CLI_TEXT_GENERATION_TIMEOUT_MS),
       Effect.flatMap(
         Option.match({

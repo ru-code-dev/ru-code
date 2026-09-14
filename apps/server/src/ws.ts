@@ -104,6 +104,11 @@ import {
 import { buildAutoUpdateRpcHandlers } from "./ru-code/auto-update/rpcHandlers.ts";
 import { AutoUpdateHostLayer } from "./ru-code/auto-update/autoUpdateWiring.ts";
 import { UpdateEngine } from "./ru-code/auto-update/UpdateEngine.ts";
+// ru-code: CLI-reload RPC handler (logic in ru-code/cli-reload; scopes live in
+// auth/RpcAuthorization.ts).
+import { buildCliReloadRpcHandlers } from "./ru-code/cli-reload/rpcHandlers.ts";
+import { CliReloadHostLayer } from "./ru-code/cli-reload/cliReloadWiring.ts";
+import { CliReloadEngine } from "./ru-code/cli-reload/CliReloadService.ts";
 import {
   buildMcpRpcHandlers,
   type ObserveMcpRpc,
@@ -505,6 +510,8 @@ const makeWsRpcLayer = (
       const qwenTranscript = yield* QwenTranscriptService;
       // ru-code: the auto-update engine (same memoized instance the runtime graph provides).
       const updateEngine = yield* UpdateEngine;
+      // ru-code: the CLI-reload engine (one unary command; see ru-code/cli-reload).
+      const cliReload = yield* CliReloadEngine;
       // ru-code: the analytics scanner (incremental reader of qwen's transcript tree).
       const analyticsScanner = yield* AnalyticsScanner;
       // ru-code: the Pixso MCP assistant service (content-addressed scan store + MCP client).
@@ -1708,6 +1715,11 @@ const makeWsRpcLayer = (
           observeRpcEffect,
           observeRpcStreamEffect,
         }),
+        // ru-code: CLI-reload RPC handler (ru-code/cli-reload/rpcHandlers).
+        ...buildCliReloadRpcHandlers({
+          cliReload,
+          observeRpcEffect,
+        }),
         // ru-code: analytics RPC handlers (extracted to ru-code/analytics).
         ...buildAnalyticsRpcHandlers({
           analyticsScanner,
@@ -2611,6 +2623,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provide(PixsoAssistantHostLayer),
               // ru-code: the auto-update engine (same memoized module-level layer).
               Layer.provide(AutoUpdateHostLayer),
+              // ru-code: the CLI-reload engine (stops every qwen CLI process, sweeps the
+              // work they left parked, deletes the configured profile-dir entries).
+              Layer.provide(CliReloadHostLayer),
               // ru-code: transcript reader. The session directory is a stateless
               // read facade over the runtime-binding repository, so we build our own
               // instance here (SqlClient/ProjectionSnapshotQuery/ServerConfig/

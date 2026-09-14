@@ -7,6 +7,7 @@
 export * from "./cliEnv.ts";
 export * from "./cliEnvBuild.ts";
 export * from "./cliProfiles.ts";
+export * from "./cliReset.ts";
 export * from "./hiddenModels.ts";
 export * from "./modelNameWords.ts";
 

@@ -148,6 +148,7 @@ BIN_DIR=""                # APP_ROOT/bin
 CLI_JS=""                 # qwen bin (`node <CLI_JS>`); "" when qwen isn't detected
 CLI_SPAWN_KIND=""         # HOW to run CLI_JS: node|cmd|direct (from the app's one dispatcher); ""≡node
 CLI_IDENTITY=""           # package-identity value extracted by the preflight; "" = none (var omitted)
+CLI_IDENTITY_PATH=""      # identity FILE path for this platform (preflight); "" = none (var omitted)
 CONFIG_DIR=""             # qwen profile dir (primary) — the warm-up target
 CONFIG_DIR_ALT=""         # Linux-relocation alternative profile dir (else ""); warm-up re-check only
 PREFLIGHT_STATUS=1        # 0 only when the environment is compatible

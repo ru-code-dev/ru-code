@@ -24,11 +24,74 @@ export const REPO_ROOT = NodePath.resolve(import.meta.dirname, "../../..");
 export const SERVER_DIST = NodePath.join(REPO_ROOT, "apps/server/dist");
 export const DIST_BUNDLE = NodePath.join(REPO_ROOT, "dist-bundle");
 export const WEB_DIST = NodePath.join(REPO_ROOT, "apps/web/dist");
+// ru-code (cli-reload): THE fake CLI the harness spawns as qwen (bootApp's RU_CODE_CLI_JS).
+// Defined here, next to the other repo locations, because two consumers need it: the boot
+// script that installs it, and the live-child counter below.
+export const FAKE_ACP_ENTRY = NodePath.join(
+  REPO_ROOT,
+  "apps/server/src/ru-code/tests/qwen/fake-acp/fake-acp-server.ts",
+);
 
 // ── tiny helpers ───────────────────────────────────────────────────────────────────────────────
 export const log = (message: string): void => process.stdout.write(`${message}\n`);
 export const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * ru-code (cli-reload): every LIVE fake-CLI child, with its full command line.
+ *
+ * `execFileSync`, never `execSync` with a shell STRING: `execSync` runs the command through
+ * `/bin/sh -c "<command>"`, that shell's OWN argv then contains the needle, and `pgrep -f`
+ * matches it — the check reports itself as a survivor on every run, even clean ones. That
+ * exact trap is documented at scripts/stopApp.ts:71-90; this helper follows the same shape.
+ *
+ * `pgrep` exits 1 when nothing matches — the clean case, not an error.
+ */
+export interface LiveFakeCliProcess {
+  readonly pid: number;
+  readonly args: string;
+}
+
+export function liveFakeCliProcesses(): ReadonlyArray<LiveFakeCliProcess> {
+  const run = (file: string, args: ReadonlyArray<string>): string => {
+    try {
+      return NodeChildProcess.execFileSync(file, [...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return "";
+    }
+  };
+  const pids = run("pgrep", ["-f", FAKE_ACP_ENTRY])
+    .split("\n")
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (pids.length === 0) return [];
+  const lines = run("ps", ["-o", "pid=,args=", "-p", pids.join(",")])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return lines.map((line) => {
+    const space = line.indexOf(" ");
+    return { pid: Number.parseInt(line.slice(0, space), 10), args: line.slice(space + 1) };
+  });
+}
+
+/**
+ * The children a RELOAD owns: ACP sessions and warm spares (`--acp`, the daemon's own marker —
+ * ru-code/daemon/src/journalReap.ts:36-38) plus one-shot text generation (`-p`).
+ *
+ * The CLI **version probe** is deliberately NOT in this set: it is untracked by design (owner
+ * ruling R5 keeps the probe cache, and research A-G5 / the wave plan's D3 record the probe as
+ * owner-accepted out of scope), and the 5-minute snapshot refresh re-spawns it against a fake
+ * that never answers `--version`. Counting it would assert a guarantee nobody made.
+ */
+export function liveReloadOwnedCliProcesses(): ReadonlyArray<LiveFakeCliProcess> {
+  return liveFakeCliProcesses().filter(
+    (process) => / --acp(\s|$)/.test(process.args) || / -p(\s|$)/.test(process.args),
+  );
+}
 
 export class AssertionError extends Error {}
 export const assert = (condition: unknown, message: string): void => {

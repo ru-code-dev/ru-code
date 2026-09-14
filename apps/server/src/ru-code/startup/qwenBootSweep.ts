@@ -79,6 +79,26 @@ export const CANCELLED_USER_INPUT_TEXT = "Question cancelled by a server restart
 export const INTERRUPTED_AGENT_TEXT = "Agent interrupted by a server restart.";
 
 /**
+ * ru-code (cli-reload, B-G1): the sweep's closing WORDING, as data. The boot run passes
+ * {@link QWEN_BOOT_SWEEP_TEXTS} (the constants above, unchanged); the CLI reload passes its
+ * own — "a CLI reload" is not "a server restart", and the sweep is otherwise identical, so
+ * the copy is the only thing that varies.
+ */
+export interface QwenSweepTexts {
+  readonly interruptedCompaction: string;
+  readonly cancelledApproval: string;
+  readonly cancelledUserInput: string;
+  readonly interruptedAgent: string;
+}
+
+export const QWEN_BOOT_SWEEP_TEXTS: QwenSweepTexts = {
+  interruptedCompaction: INTERRUPTED_COMPACTION_TEXT,
+  cancelledApproval: CANCELLED_APPROVAL_TEXT,
+  cancelledUserInput: CANCELLED_USER_INPUT_TEXT,
+  interruptedAgent: INTERRUPTED_AGENT_TEXT,
+};
+
+/**
  * The whole sweep decision for one thread, pure: which closing rows its
  * history needs. Compaction closures reuse the morphing row's task pair
  * (`task.completed{stopped}` under the same taskId — the web merges it into
@@ -91,6 +111,8 @@ export const INTERRUPTED_AGENT_TEXT = "Agent interrupted by a server restart.";
 export function planQwenBootSweepRows(
   threadId: ThreadId,
   activities: ReadonlyArray<SweepActivityInput>,
+  // ru-code (cli-reload): defaulted, so every existing caller is byte-identical.
+  texts: QwenSweepTexts = QWEN_BOOT_SWEEP_TEXTS,
 ): ReadonlyArray<QwenBootSweepRowSpec> {
   const rows: QwenBootSweepRowSpec[] = [];
   for (const taskId of findDanglingCompactionTaskIds(activities)) {
@@ -98,8 +120,8 @@ export function planQwenBootSweepRows(
       threadId,
       kind: "task.completed",
       tone: "info",
-      summary: INTERRUPTED_COMPACTION_TEXT,
-      payload: { taskId, status: "stopped", detail: INTERRUPTED_COMPACTION_TEXT },
+      summary: texts.interruptedCompaction,
+      payload: { taskId, status: "stopped", detail: texts.interruptedCompaction },
     });
   }
   for (const taskId of findDanglingSubAgentTaskIds(activities)) {
@@ -107,8 +129,8 @@ export function planQwenBootSweepRows(
       threadId,
       kind: "task.completed",
       tone: "info",
-      summary: INTERRUPTED_AGENT_TEXT,
-      payload: { taskId, status: "stopped", detail: INTERRUPTED_AGENT_TEXT },
+      summary: texts.interruptedAgent,
+      payload: { taskId, status: "stopped", detail: texts.interruptedAgent },
     });
   }
   for (const request of findDanglingParkedRequests(activities)) {
@@ -116,7 +138,7 @@ export function planQwenBootSweepRows(
       threadId,
       kind: request.kind === "approval" ? "approval.resolved" : "user-input.resolved",
       tone: "info",
-      summary: request.kind === "approval" ? CANCELLED_APPROVAL_TEXT : CANCELLED_USER_INPUT_TEXT,
+      summary: request.kind === "approval" ? texts.cancelledApproval : texts.cancelledUserInput,
       payload: { requestId: request.requestId },
     });
   }
@@ -219,6 +241,8 @@ export interface QwenBootSweepDeps {
   ) => Effect.Effect<QwenSweepThreadState | null, ProjectionRepositoryError>;
   readonly dispatch: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
   readonly randomUuid: Effect.Effect<string>;
+  /** ru-code (cli-reload): closing wording; defaults to the boot copy. */
+  readonly texts?: QwenSweepTexts;
 }
 
 const SweepThreadLookupInput = Schema.Struct({ threadId: ThreadId });
@@ -434,7 +458,11 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
         closedCount += 1;
       }
 
-      for (const row of planQwenBootSweepRows(threadId, state.activities)) {
+      for (const row of planQwenBootSweepRows(
+        threadId,
+        state.activities,
+        deps.texts ?? QWEN_BOOT_SWEEP_TEXTS,
+      )) {
         const commandUuid = yield* deps.randomUuid;
         const activityUuid = yield* deps.randomUuid;
         const createdAt = DateTime.formatIso(yield* DateTime.now);
@@ -486,17 +514,35 @@ export const runQwenBootSweepWith = (deps: QwenBootSweepDeps) =>
     Effect.catchCause((cause) => Effect.logError("[qwen-boot-sweep] sweep failed", { cause })),
   );
 
-/** Production entry: resolves the deps from the runtime context. */
-export const runQwenBootSweep = Effect.gen(function* () {
-  const directory = yield* ProviderSessionDirectory;
-  const projectionQuery = yield* ProjectionSnapshotQuery;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const crypto = yield* Crypto.Crypto;
-  const sql = yield* SqlClient.SqlClient;
-  yield* runQwenBootSweepWith({
-    listBindings: () => directory.listBindings(),
-    readSweepThreadState: makeSweepThreadStateReader(sql, projectionQuery.getThreadShellById),
-    dispatch: engine.dispatch,
-    randomUuid: crypto.randomUUIDv4.pipe(Effect.orDie),
+/**
+ * Production entry: resolves the deps from the runtime context.
+ *
+ * ru-code (cli-reload): the CLI reload runs the SAME sweep at runtime with its own wording —
+ * nothing here is boot-only (no latch, no first-run guard), so the reload calls this with
+ * `CLI_RELOAD_SWEEP_TEXTS` instead of duplicating the dependency resolution.
+ */
+export type QwenSweepRuntimeServices =
+  | ProviderSessionDirectory
+  | ProjectionSnapshotQuery
+  | OrchestrationEngine.OrchestrationEngineService
+  | Crypto.Crypto
+  | SqlClient.SqlClient;
+
+export const runQwenSweepFromRuntime = (texts: QwenSweepTexts = QWEN_BOOT_SWEEP_TEXTS) =>
+  Effect.gen(function* () {
+    const directory = yield* ProviderSessionDirectory;
+    const projectionQuery = yield* ProjectionSnapshotQuery;
+    const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+    const crypto = yield* Crypto.Crypto;
+    const sql = yield* SqlClient.SqlClient;
+    yield* runQwenBootSweepWith({
+      listBindings: () => directory.listBindings(),
+      readSweepThreadState: makeSweepThreadStateReader(sql, projectionQuery.getThreadShellById),
+      dispatch: engine.dispatch,
+      randomUuid: crypto.randomUUIDv4.pipe(Effect.orDie),
+      texts,
+    });
   });
-});
+
+/** The boot run — the wording is the boot copy. */
+export const runQwenBootSweep = runQwenSweepFromRuntime();

@@ -62,6 +62,12 @@ export const CLI_ENV = {
    * disagree.
    */
   PACKAGE_IDENTITY: { names: [IDENTITY_KEY], value: null },
+  /**
+   * The deployment's CLI identity FILE path for the running platform (CLI_IDENTITY_PATHS, resolved
+   * by preflight/common/identity.ts `resolveIdentityPath` at every spawn — never baked at build
+   * time). Runtime-supplied AND optional: omitted whenever no path is configured for the platform.
+   */
+  CLI: { names: ["XXX_CLI"], value: null },
 } as const satisfies Record<string, CliEnvVar>;
 
 export const CLI_ARGS = {

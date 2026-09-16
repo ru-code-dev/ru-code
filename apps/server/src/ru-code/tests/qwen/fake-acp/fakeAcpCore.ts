@@ -35,7 +35,14 @@ import {
   type QwenDrainCallSite,
 } from "./qwen021MidTurnDrain.ts";
 import {
+  QWEN_ACP_INTERNAL_ERROR_MESSAGE,
+  QWEN_COMPRESS_FAILURE_MESSAGE,
+  QWEN_COMPRESS_PROGRESS_MESSAGE,
   qwenAgentSpawnPermissionRequest,
+  qwenAutoCompressionDiagnostic,
+  qwenCompressFailureErrorData,
+  qwenCompressResultMessage,
+  qwenEmitAgentDiagnosticMessage,
   qwenEmitAgentMessage,
   qwenEmitAgentPreparingStart,
   qwenEmitAgentThought,
@@ -43,11 +50,14 @@ import {
   qwenEmitGoalTerminal,
   qwenEmitPlan,
   qwenEmitPreparationDiscarded,
+  qwenEmitSlashCommandOutput,
   qwenEmitStopHookLoop,
   qwenEmitToolCallError,
   qwenEmitToolCallResult,
   qwenEmitToolCallStart,
+  qwenSessionTokenLimitDiagnostic,
   qwenEmitUsageMetadata,
+  qwenSlashCommandHardLineBreaks,
   type QwenSubagentMeta,
 } from "./qwen021Frames.ts";
 // ru-code (agentic-flow wave, P2): the background-agent transcription. Every
@@ -539,6 +549,77 @@ export interface PromptSteps {
    */
   emitExtNotification(method: string, params: unknown): PromptSteps;
   /**
+   * ru-code (qwen-compression wave): the `/compress` PROGRESS message —
+   * "Compressing context..." (compressCommand.ts:97-100) on an ordinary
+   * `session/update` `agent_message_chunk` carrying `_meta.source:"slash_command"`.
+   *
+   * That is the ONLY channel qwen 0.21.1 has for slash-command output
+   * (MessageEmitter.ts:152-165); the CLI's one surviving `extNotification` is
+   * `_qwencode/end_turn` (Session.ts:6078). The 0.13.1 vendor notification
+   * `_qwencode/slash_command` is not modelled any more — the adapter's reader
+   * for it was retired with this wave.
+   */
+  emitCompressProgress(): PromptSteps;
+  /**
+   * ru-code (qwen-compression wave): the `/compress` RESULT message
+   * (`Context compressed (X -> Y).`, compressCommand.ts:109-112) on the same
+   * channel as {@link emitCompressProgress}.
+   */
+  emitCompressResult(input: {
+    readonly preTokens: number;
+    readonly postTokens: number;
+  }): PromptSteps;
+  /**
+   * ru-code (qwen-compression wave): the `/compress` FAILURE — NO FRAME AT ALL.
+   *
+   * An `error` message inside `stream_messages` is THROWN by
+   * `Session.ts:8475-8477` before it can reach `sendUpdate`, so the host never
+   * sees the RESULT text on a `session/update`: it sees a FAILED
+   * `session/prompt` — JSON-RPC `-32603`, message `"Internal error"`, qwen's own
+   * sentence in `data.details` (binary-verified, see
+   * `qwen021Frames.qwenCompressFailureErrorData`). TERMINAL — it ends the prompt.
+   *
+   * The PROGRESS frame still goes out first: `compressCommand` yields it before
+   * the throw. A faithful script chains
+   * `emitCompressProgress().emitCompressFailure(…)`.
+   */
+  emitCompressFailure(message?: string): PromptSteps;
+  /**
+   * ru-code (qwen-compression wave): qwen's OWN mid-turn AUTO-compaction notice
+   * — a BARE `agent_message_chunk` with no `_meta` whatsoever
+   * (Session.ts:4668-4673, reached from :4436-4440).
+   *
+   * Emit it where qwen does — BEFORE the model stream of the same turn, since
+   * `#sendMessageStreamWithAutoCompression` compresses first and only then calls
+   * `sendMessageStream` (Session.ts:4330-4476).
+   */
+  emitAutoCompaction(input: {
+    readonly model: string;
+    readonly preTokens?: number;
+    readonly postTokens?: number;
+    readonly triggerReason?: "image_overflow" | (string & {});
+  }): PromptSteps;
+  /**
+   * ru-code (qwen-compression wave): the SESSION-CAP notice
+   * (Session.ts:4427-4431), on the same BARE channel as the auto-compaction
+   * notice.
+   *
+   * IT REPLACES THAT NOTICE — they never both appear. The compaction runs first
+   * and its diagnostic is only BUILT (`compressionDiagnostic`,
+   * Session.ts:4378-4392); the cap check at `:4414-4433` returns
+   * `stopReason:"max_tokens"` at `:4432`, i.e. BEFORE the emit at `:4436-4440`.
+   * So a turn that trips the cap sends exactly ONE frame — this one — and no
+   * model round follows. BINARY-VERIFIED: with `model.sessionTokenLimit: 500`
+   * and a post-compaction count of 1008 the real binary sent
+   * `Session token limit exceeded: 1008 tokens > 500 limit. …` and nothing else
+   * (@ru-code/qwen-real-harness scenario `session-token-limit`).
+   *
+   * A faithful script is therefore
+   * `emitSessionTokenLimit(…).respondOk("max_tokens")` — with NO
+   * `emitAutoCompaction` beside it.
+   */
+  emitSessionTokenLimit(input: { readonly tokens: number; readonly limit: number }): PromptSteps;
+  /**
    * ru-code (mid-turn wave): send an agent→client ACP extension REQUEST (with an
    * id) and AWAIT the host's answer, mid-prompt — the direction qwen 0.21.1 uses
    * for `craft/drainMidTurnQueue` (Session.ts:4707,
@@ -898,6 +979,17 @@ type FakeStep =
   | { readonly kind: "tap"; readonly run: () => void }
   | { readonly kind: "awaitGate"; readonly gate: Deferred.Deferred<void> }
   | { readonly kind: "extNotification"; readonly method: string; readonly params: unknown }
+  | { readonly kind: "compressProgress" }
+  | { readonly kind: "compressResult"; readonly preTokens: number; readonly postTokens: number }
+  | { readonly kind: "compressFailure"; readonly message: string }
+  | { readonly kind: "sessionTokenLimit"; readonly tokens: number; readonly limit: number }
+  | {
+      readonly kind: "autoCompaction";
+      readonly model: string;
+      readonly preTokens?: number;
+      readonly postTokens?: number;
+      readonly triggerReason?: string;
+    }
   | { readonly kind: "drainMidTurn"; readonly callSite: QwenDrainCallSite }
   | {
       readonly kind: "extRequest";
@@ -1096,6 +1188,44 @@ class PromptStepsRecorder implements PromptSteps {
   }
   emitExtNotification(method: string, params: unknown): PromptSteps {
     this.steps.push({ kind: "extNotification", method, params });
+    return this;
+  }
+  emitCompressProgress(): PromptSteps {
+    this.steps.push({ kind: "compressProgress" });
+    return this;
+  }
+  emitCompressResult(input: {
+    readonly preTokens: number;
+    readonly postTokens: number;
+  }): PromptSteps {
+    this.steps.push({
+      kind: "compressResult",
+      preTokens: input.preTokens,
+      postTokens: input.postTokens,
+    });
+    return this;
+  }
+  emitCompressFailure(message = QWEN_COMPRESS_FAILURE_MESSAGE): PromptSteps {
+    this.steps.push({ kind: "compressFailure", message });
+    return this;
+  }
+  emitAutoCompaction(input: {
+    readonly model: string;
+    readonly preTokens?: number;
+    readonly postTokens?: number;
+    readonly triggerReason?: "image_overflow" | (string & {});
+  }): PromptSteps {
+    this.steps.push({
+      kind: "autoCompaction",
+      model: input.model,
+      ...(input.preTokens !== undefined ? { preTokens: input.preTokens } : {}),
+      ...(input.postTokens !== undefined ? { postTokens: input.postTokens } : {}),
+      ...(input.triggerReason !== undefined ? { triggerReason: input.triggerReason } : {}),
+    });
+    return this;
+  }
+  emitSessionTokenLimit(input: { readonly tokens: number; readonly limit: number }): PromptSteps {
+    this.steps.push({ kind: "sessionTokenLimit", tokens: input.tokens, limit: input.limit });
     return this;
   }
   extRequest(
@@ -1747,6 +1877,66 @@ export const runFakeAcpAgent = (
               // ru-code: fire-and-forget agent→client extension notification (the
               // slash-command /compress feed the adapter's handleUnknownExtNotification reads).
               yield* agent.client.extNotification(step.method, step.params);
+              break;
+            // ru-code (qwen-compression wave): the COMPRESSION wire, one case
+            // per message. Every literal is built in `qwen021Frames.ts` against
+            // the qwen 0.21.1 source line that produces it.
+            case "compressProgress":
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: qwenEmitSlashCommandOutput(
+                  qwenSlashCommandHardLineBreaks(QWEN_COMPRESS_PROGRESS_MESSAGE),
+                ),
+              });
+              break;
+            case "compressResult":
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: qwenEmitSlashCommandOutput(
+                  qwenSlashCommandHardLineBreaks(
+                    qwenCompressResultMessage(step.preTokens, step.postTokens),
+                  ),
+                ),
+              });
+              break;
+            case "compressFailure":
+              // `stream_messages` THROWS on a `messageType:"error"` message
+              // (Session.ts:8475-8477), so the host gets a FAILED
+              // `session/prompt` and no RESULT frame. BINARY-VERIFIED shape (see
+              // `qwenCompressFailureErrorData`): the JSON-RPC message is the
+              // SDK's generic "Internal error" and qwen's own sentence rides
+              // `data.details`. Terminal: the prompt is over.
+              return yield* new AcpErrors.AcpRequestError({
+                code: -32603,
+                errorMessage: QWEN_ACP_INTERNAL_ERROR_MESSAGE,
+                data: qwenCompressFailureErrorData(step.message),
+              });
+            case "sessionTokenLimit":
+              // Same BARE channel as the auto-compaction notice
+              // (Session.ts:4427-4431 → :4668-4673).
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: qwenEmitAgentDiagnosticMessage(
+                  qwenSessionTokenLimitDiagnostic({ tokens: step.tokens, limit: step.limit }),
+                ),
+              });
+              break;
+            case "autoCompaction":
+              // A BARE agent_message_chunk, no `_meta` at all
+              // (Session.ts:4668-4673).
+              yield* agent.client.sessionUpdate({
+                sessionId: request.sessionId,
+                update: qwenEmitAgentDiagnosticMessage(
+                  qwenAutoCompressionDiagnostic({
+                    model: step.model,
+                    ...(step.preTokens !== undefined ? { originalTokenCount: step.preTokens } : {}),
+                    ...(step.postTokens !== undefined ? { newTokenCount: step.postTokens } : {}),
+                    ...(step.triggerReason !== undefined
+                      ? { triggerReason: step.triggerReason }
+                      : {}),
+                  }),
+                ),
+              });
               break;
             case "drainMidTurn": {
               const drain = script.midTurnDrain;

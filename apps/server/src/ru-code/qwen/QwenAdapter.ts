@@ -67,7 +67,10 @@ import {
   ACP_WARM_ENGINE,
   AUTO_COMPACT_DISARM_FRACTION,
   COMPACT_MIN_GAIN_PRE_FRACTION,
-  COMPACTION_RESTART_METHOD,
+  // ru-code (qwen-compression wave): COMPACTION_RESTART_METHOD retired with
+  // the post-compaction session teardown — see its commented-out call site
+  // in compactContext and the constant itself in ru-code/qwen/src/constants.ts.
+  // COMPACTION_RESTART_METHOD,
   AUTO_COMPACT_USED_FRACTION,
   MAINTENANCE_METHOD,
   MCP_ENGINE_USE_OVERLAY,
@@ -232,6 +235,15 @@ import {
   isAutoCompactDisarmed,
   type QwenThreadCompactionState,
 } from "./compaction/compactionHistory.ts";
+// ru-code (qwen-compression wave): the compaction-wire readers. qwen 0.21.1
+// carries every compaction as PROSE on an ordinary `agent_message_chunk`, so
+// these three decide what a chunk is; the gate lives at the call site.
+import {
+  hasQwenDiagnosticHead,
+  isQwenBareAgentFrame,
+  isQwenSlashCommandFrame,
+  parseQwenCompactionText,
+} from "./compaction/compactionWire.ts";
 import { discoveredModelsFromSessionSetup } from "./discovery/discoveredModelsFromSessionSetup.ts";
 import { detectModelErrorDiscovery } from "./discovery/modelErrorDiscovery.ts";
 import { resolveQwenModelContextWindow } from "./discovery/resolveQwenModelContextWindow.ts";
@@ -242,6 +254,9 @@ import {
 // ru-code: live token feed — pull qwen's running promptTokenCount off each
 // agent_message_chunk's _meta so the context meter updates mid-turn.
 import { extractQwenInputTokens } from "./usage.ts";
+// ru-code (qwen-compression wave): the app-side auto-compaction capability. One
+// registry decides it for the adapter AND for the settings row.
+import { providerAppAutoCompaction } from "@ru-code/provider-capabilities";
 import { triggerGenericPrewarm } from "./warmPrewarmTrigger.ts";
 
 const PROVIDER = ProviderDriverKind.make(QWEN_KIND);
@@ -543,6 +558,16 @@ interface QwenSessionContext {
     | { readonly kind: "success"; readonly preTokens: number; readonly postTokens: number }
     | { readonly kind: "error"; readonly message: string }
     | undefined;
+  // ru-code (qwen-compression wave): has this turn already produced agent
+  // output (text or thought)? ONE of the two admissions for qwen's own bare
+  // diagnostics, which are indistinguishable from model prose
+  // (Session.ts:4668-4673): the FIRST send's compaction runs before anything of
+  // ours has spoken (Session.ts:4363-4372), so an opening bare chunk is qwen's.
+  // A CONTINUATION send's compaction arrives after the turn has spoken and is
+  // admitted by the emitter's invariant head instead — see
+  // `hasQwenDiagnosticHead` and `readCompactionChunk`'s gate. Reset at turn
+  // start, set by the text and thought branches.
+  sawTurnAgentOutput?: boolean;
   // ─── ru-code (agentic-flow wave): background agents ───────────────────────
   //
   // A background launch produces NO live wire traffic at all — the tracker is
@@ -1970,6 +1995,188 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         );
       });
 
+    // ─── ru-code (qwen-compression wave): THE COMPACTION INGRESS ─────────────
+    //
+    // Everything a compaction writes, in ONE place, reached from ONE gate in the
+    // `ContentDelta` case. Before this wave the same writes sat inside the
+    // `_qwencode/slash_command` ext-notification handler, on a channel qwen
+    // 0.21.1 does not use at all (see the retired reader above).
+
+    /**
+     * The RING WRITE. The one thing a manual and an automatic compaction share:
+     * the thread's used-token count is now the post-compaction figure.
+     *
+     * Also moves the live-feed dedupe cursor, so the next `_meta.usage` frame
+     * carrying the same size does not re-fire the meter, and so the auto-compact
+     * trigger reads the compacted figure rather than the pre-compaction one.
+     */
+    const applyCompactionRing = (ctx: QwenSessionContext, postTokens: number) =>
+      Effect.gen(function* () {
+        if (!Number.isFinite(postTokens) || postTokens <= 0) return;
+        ctx.lastEmittedUsedTokens = postTokens;
+        yield* offerRuntimeEvent({
+          type: "thread.token-usage.updated",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          // ru-code (qwen-compression wave): a HIDDEN compaction has no active
+          // turn by construction (compactContext refuses to start during one),
+          // so this row lands with `turnId: null` and supersedes every earlier
+          // usage row of the thread — see `contextWindowSupersedes`.
+          ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+          payload: {
+            usage: {
+              usedTokens: postTokens,
+              maxTokens: yield* currentContextWindowTokens(ctx),
+            },
+          },
+        });
+      });
+
+    /**
+     * ONE closed compaction row for a compaction the APP never asked for — the
+     * only surface qwen's own auto-compaction can have. Same row kind the manual
+     * flow uses (`CONTEXT_COMPACTION_TASK_PREFIX` + `CONTEXT_COMPACTION_TASK_TYPE`),
+     * so the timeline, the subagent-roster exclusion and the circuit breaker all
+     * treat it exactly like ours; only the text differs. No `task.progress`
+     * precedes it: the work is already over when the notice arrives, and the
+     * collapse key renders a lone terminal row fine.
+     */
+    const emitObservedCompactionRow = (
+      ctx: QwenSessionContext,
+      payload: {
+        readonly status: "completed" | "failed";
+        readonly summary: string;
+        readonly usage?: { readonly preTokens: number; readonly postTokens: number };
+      },
+    ) =>
+      Effect.gen(function* () {
+        const taskId = RuntimeTaskId.make(`${CONTEXT_COMPACTION_TASK_PREFIX}${yield* cryptoUuid}`);
+        yield* offerRuntimeEvent({
+          type: "task.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          payload: { taskId, taskType: CONTEXT_COMPACTION_TASK_TYPE, ...payload },
+        });
+      });
+
+    /**
+     * THE GATE + THE INGRESS. Returns true when the chunk WAS a compaction report
+     * and has been fully handled (its raw English must not reach the chat).
+     *
+     * Two admissible channels, and nothing else:
+     *   (a) a chunk qwen stamped `_meta.source:"slash_command"` — always a
+     *       slash-command report, so the loose text reading is safe on it
+     *       (MessageEmitter.ts:152-165);
+     *   (b) a BARE chunk — qwen's own diagnostics, which carry no marker
+     *       whatsoever (Session.ts:4668-4673) — admitted on EITHER of two
+     *       proofs that it is qwen's voice and not the model's:
+     *         · it opens the turn, before any text or thought of ours, which is
+     *           where the FIRST send's compaction lands
+     *           (`Session.ts:4363-4372`); or
+     *         · its text carries one of the emitter's invariant heads
+     *           (`hasQwenDiagnosticHead`), which is the only thing that
+     *           identifies a CONTINUATION send's compaction. qwen runs the
+     *           compaction check before every send of the turn loop
+     *           (`Session.ts:3602` → `:3655`, and `:2970`, `:5319`, `:5829`) and
+     *           emits from whichever send compacted (`:4437-4441`), so in the
+     *           ordinary agentic shape — text → tool call → tool result → the
+     *           continuation compacts — the notice arrives after the turn has
+     *           already spoken. Requiring it to open the turn dropped exactly
+     *           that case, and dropping it means rendering qwen's raw English
+     *           with no row and no ring write (WORKFLOW/04 §A.1 S5/S6).
+     *
+     * Both paths need a live turn: these diagnostics are only ever emitted from
+     * inside a `session/prompt`, so a bare chunk outside one is never qwen's.
+     *
+     * On channel (b) a report must also STATE ITS NUMBERS (or be the session-cap
+     * notice). A bare chunk that merely mentions compressing is the model
+     * talking — swallowing it would delete assistant output, which is worse than
+     * rendering a notice qwen itself could not put numbers on.
+     */
+    const readCompactionChunk = (
+      ctx: QwenSessionContext,
+      event: { readonly text: string; readonly rawPayload: unknown; readonly itemId?: string },
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const tagged = isQwenSlashCommandFrame(event.rawPayload);
+        const bare =
+          !tagged && isQwenBareAgentFrame(event.rawPayload) && ctx.activeTurnId !== undefined;
+        const bareAdmitted =
+          bare &&
+          // the FIRST send's compaction: nothing of ours has spoken yet …
+          (ctx.sawTurnAgentOutput !== true ||
+            // … or ANY send's, identified by the emitter's own head.
+            hasQwenDiagnosticHead(event.text));
+        if (!tagged && !bareAdmitted) return false;
+        const signal = parseQwenCompactionText(event.text);
+        if (signal === undefined) return false;
+
+        // ── (a) slash-command output: OUR `/compress`, hidden or visible ──────
+        if (tagged) {
+          if (ctx.hiddenCompressActive) {
+            // The hidden flow owns the row; stash the outcome for the awaiting
+            // compactContext (it reads through the barrier below) and stay silent.
+            if (signal.kind === "result") {
+              ctx.hiddenCompressOutcome = {
+                kind: "success",
+                preTokens: signal.preTokens,
+                postTokens: signal.postTokens,
+              };
+              yield* applyCompactionRing(ctx, signal.postTokens);
+            } else if (signal.kind === "session-limit") {
+              ctx.hiddenCompressOutcome = { kind: "error", message: event.text };
+            }
+            return true;
+          }
+          // The user typed `/compress` as an ordinary turn: the bubble gets the
+          // LOCALIZED line, never qwen's raw English.
+          const text =
+            signal.kind === "result"
+              ? `\nCompaction succeeded (${String(signal.preTokens)} -> ${String(signal.postTokens)}).\n`
+              : signal.kind === "session-limit"
+                ? `❌ ${event.text}\n`
+                : "Compacting context, please wait…\n";
+          yield* offerRuntimeEvent(
+            makeAcpContentDeltaEvent({
+              stamp: yield* makeEventStamp(),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              turnId: attributeItemDelta(ctx.itemTurnIds, itemAttributionState(ctx), event.itemId),
+              ...(event.itemId ? { itemId: event.itemId } : {}),
+              text,
+              rawPayload: event.rawPayload,
+            }),
+          );
+          if (signal.kind === "result") yield* applyCompactionRing(ctx, signal.postTokens);
+          return true;
+        }
+
+        // ── (b) qwen's OWN compaction, observed ───────────────────────────────
+        // A bare chunk must STATE ITS NUMBERS (or be the cap notice) — see the
+        // doc above. Everything else on this channel is the model talking and is
+        // handed back to the ordinary text path untouched.
+        if (signal.kind === "progress") return false;
+        if (signal.kind === "session-limit") {
+          // qwen compacted and the prompt STILL exceeds the session cap: the send
+          // was dropped and the prompt resolves `max_tokens` (Session.ts:4418-4434).
+          // No ring write — no post-compaction size was reported.
+          yield* emitObservedCompactionRow(ctx, {
+            status: "failed",
+            summary: `Qwen reported the session token limit was exceeded: ${event.text}`,
+          });
+          return true;
+        }
+        yield* emitObservedCompactionRow(ctx, {
+          status: "completed",
+          usage: { preTokens: signal.preTokens, postTokens: signal.postTokens },
+          summary: `Qwen compacted the context automatically (${String(signal.preTokens)} -> ${String(signal.postTokens)}).`,
+        });
+        yield* applyCompactionRing(ctx, signal.postTokens);
+        return true;
+      });
+
     const requireSession = (
       threadId: ThreadId,
     ): Effect.Effect<QwenSessionContext, ProviderAdapterSessionNotFoundError> => {
@@ -2728,15 +2935,22 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   });
                 }),
             );
-            // ru-code: catch every CLI vendor extension notification.
-            // Always log the raw payload so unknown methods surface.
-            // For slash-command progress + result notifications (compress,
-            // summary, ...), synthesise a `content.delta` event so the text
-            // lands in the active turn's assistant bubble — same pipeline
-            // real `agent_message_chunk` text uses. Only the vendor namespace
-            // prefix varies by CLI build (`_qwencode/…`, `_vendor/…`, a
-            // fork's own), the payload is identical — so match the stable
-            // `/slash_command` suffix instead of enumerating vendors.
+            // ru-code: catch every CLI vendor extension notification and log the
+            // raw payload, so an unknown method surfaces in the native ACP log
+            // instead of vanishing.
+            //
+            // ru-code (qwen-compression wave): the `/slash_command` COMPRESSION
+            // READER that used to live here is GONE. It matched qwen 0.13.1's
+            // vendor notification `_qwencode/slash_command` `{message,
+            // messageType}` (v0.13.1 Session.ts:1011-1055), and that channel does
+            // not exist in the CLI any more: 0.21.1's `Session.ts` makes exactly
+            // ONE `extNotification` call in the whole file — `_qwencode/end_turn`
+            // (Session.ts:6078) — and slash-command output moved onto an ordinary
+            // `session/update` `agent_message_chunk` stamped
+            // `_meta.source:"slash_command"` (MessageEmitter.ts:152-165), for the
+            // reason qwen states at Session.ts:8446-8448 ("extNotification only
+            // goes to the ACP debug log and is not rendered by Zed"). The reader
+            // now sits in the `ContentDelta` case below, where the frames land.
             yield* acp.handleUnknownExtNotification((method, params) =>
               Effect.gen(function* () {
                 yield* logNative(input.threadId, method, params, "acp.jsonrpc");
@@ -2745,87 +2959,6 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   method,
                   params,
                 });
-
-                if (!method.endsWith("/slash_command")) return;
-
-                const record = isRecord(params) ? params : undefined;
-                const rawMessage = record?.message;
-                const message = typeof rawMessage === "string" ? rawMessage : "";
-                if (message.length === 0) return;
-
-                const messageType = record?.messageType;
-
-                // ru-code: qwen streams the /compress flow as English text only
-                // ("Compressing context..." then "Context compressed (X -> Y).")
-                // with no _meta.usage (its ACP slash path returns end_turn before
-                // emitUsageMetadata — Session.ts). Localize the bubble text and,
-                // on success, emit a token-usage update so the context meter
-                // snaps to the post-compaction size. Format is a raw,
-                // non-localized string in cli 0.13.1 (compressCommand.ts).
-                const compaction = /Context compressed \((\d+)\s*->\s*(\d+)\)/.exec(message);
-
-                // ru-code: HIDDEN compaction (compactContext) — no user turn is
-                // active and nothing must land in a bubble. Stash the outcome
-                // for the awaiting compactContext call (it emits the timeline
-                // row); the meter update below still fires.
-                if (ctx?.hiddenCompressActive) {
-                  if (messageType === "error") {
-                    ctx.hiddenCompressOutcome = { kind: "error", message };
-                  } else if (compaction) {
-                    // Raw numbers, not a formatted string — compactContext
-                    // formats the row AND feeds the circuit breaker off them.
-                    ctx.hiddenCompressOutcome = {
-                      kind: "success",
-                      preTokens: Number(compaction[1]),
-                      postTokens: Number(compaction[2]),
-                    };
-                  }
-                } else {
-                  let text: string;
-                  if (messageType === "error") {
-                    text = `❌ ${message}\n`;
-                  } else if (message.startsWith("Compressing context")) {
-                    text = "Compacting context, please wait…\n";
-                  } else if (compaction) {
-                    text = `\nCompaction succeeded (${compaction[1]} -> ${compaction[2]}).\n`;
-                  } else {
-                    text = `${message}\n`;
-                  }
-
-                  yield* offerRuntimeEvent(
-                    makeAcpContentDeltaEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: input.threadId,
-                      turnId: ctx?.activeTurnId,
-                      text,
-                      rawPayload: params,
-                    }),
-                  );
-                }
-
-                // ru-code: emit the post-compaction size so the meter updates.
-                if (compaction && messageType !== "error") {
-                  const newTokenCount = Number(compaction[2]);
-                  if (Number.isFinite(newTokenCount) && newTokenCount >= 0) {
-                    // ru-code: keep the live-feed dedupe cursor in step so the next
-                    // agent_message_chunk carrying this same size doesn't re-fire.
-                    if (ctx) ctx.lastEmittedUsedTokens = newTokenCount;
-                    yield* offerRuntimeEvent({
-                      type: "thread.token-usage.updated",
-                      ...(yield* makeEventStamp()),
-                      provider: PROVIDER,
-                      threadId: input.threadId,
-                      ...(ctx?.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
-                      payload: {
-                        usage: {
-                          usedTokens: newTokenCount,
-                          maxTokens: yield* currentContextWindowTokens(ctx),
-                        },
-                      },
-                    });
-                  }
-                }
               }),
             );
             // ru-code: read through a function call, not a bare `ctx?.stopped`
@@ -3316,6 +3449,16 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
                 switch (event._tag) {
+                  // ru-code (qwen-compression wave): the ordering BARRIER. A
+                  // caller that must read a per-chunk side effect after its own
+                  // `session/prompt` resolves offers one of these and awaits the
+                  // acknowledgement; FIFO then guarantees every frame ahead of it
+                  // has already been handled by this loop. Mirrors the port's
+                  // generic runtime and its two adapters (CursorAdapter.ts:789,
+                  // GrokAdapter.ts:787) exactly.
+                  case "EventStreamBarrier":
+                    yield* Deferred.succeed(event.acknowledge, undefined);
+                    return;
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted": {
@@ -3790,6 +3933,13 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     // has never had a surface in this app (no `reasoning` item is
                     // rendered anywhere), and inventing one is a product change,
                     // not an ingestion fix. Called out in the phase-3 report.
+                    //
+                    // ru-code (qwen-compression wave): a thought is agent output
+                    // too, so it closes the window in which a BARE chunk may be
+                    // read as qwen's auto-compaction notice. qwen compresses
+                    // before the model send, so its notice always precedes the
+                    // first thought (Session.ts:4363-4372).
+                    ctx.sawTurnAgentOutput = true;
                     if (isQwenSubAgentFrame(event.rawPayload)) ctx.sawV2AgentWire = true;
                     const thoughtWindow = resolveQwenAgentWindow(
                       ctx.subAgentWindows,
@@ -3894,6 +4044,18 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                     // (provenance is tool-call-only, so a text-only stream has no
                     // other). Kept alongside the tool-call latch, not replaced by
                     // it: the provenance stamp is EARLIER, never broader.
+                    // ru-code (qwen-compression wave): A COMPACTION REPORT, on
+                    // either of qwen 0.21.1's two channels. Checked FIRST — ahead
+                    // of the pseudo-turn and sub-agent routing — because its own
+                    // gate is the narrowest of the three (a `slash_command` stamp,
+                    // or a bare chunk opening the turn) and a handled report must
+                    // never reach a bubble as raw English. `readCompactionChunk`
+                    // returns false for everything else, so nothing below moves.
+                    if (yield* readCompactionChunk(ctx, event)) return;
+                    // ru-code (qwen-compression wave): from here on this turn has
+                    // spoken, so qwen's auto-compaction notice can no longer be
+                    // mistaken for a later chunk that mentions compressing.
+                    ctx.sawTurnAgentOutput = true;
                     // ru-code (agentic-flow wave, P3c): a pseudo-turn frame is
                     // NOT the parent's narration and belongs to no turn of ours
                     // — it gets a message of its own. Checked first because it
@@ -4649,6 +4811,9 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           }
           activeCtx = ctx;
           ctx.activeTurnId = turnId;
+          // ru-code (qwen-compression wave): a fresh turn has not spoken yet, so
+          // its FIRST bare agent chunk may be qwen's auto-compaction notice.
+          ctx.sawTurnAgentOutput = false;
           // ru-code: survives the finalizer's activeTurnId clear — attribution
           // fallback for items/deltas trailing the prompt response.
           ctx.lastTurnId = turnId;
@@ -5195,10 +5360,14 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         // closes it on the paths that can't reach a completeTask call
         // (fiber interruption: session teardown, instance rebuild, shutdown).
         let compactionRowClosed = false;
-        // ru-code: set once qwen CONFIRMS the compression ("Context compressed
-        // (X -> Y)"). Drives the post-compaction session teardown below — see
-        // COMPACTION_RESTART_METHOD for why the session must not live on.
-        let compressionConfirmed = false;
+        // ru-code (qwen-compression wave): RETIRED, kept commented out rather
+        // than deleted so the decision stays visible and reversible. It existed
+        // ONLY to drive the post-compaction session teardown below, and that
+        // teardown is wrong for this CLI — qwen swaps the compressed chat into
+        // the live session in place, so the next prompt already uses it. Proof
+        // chain in WORKFLOW/02 §3 (geminiChat.ts:1843-1847, client.ts:3301-3305,
+        // Session.ts:4276-4278, :4613-4622).
+        // let compressionConfirmed = false;
         const completeTask = (payload: {
           readonly status: "completed" | "failed" | "stopped";
           readonly summary: string;
@@ -5255,17 +5424,49 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                   threadId,
                   error,
                 });
+                // ru-code (qwen-compression wave): prefer qwen's OWN words.
+                //
+                // A failed `/compress` reaches the host as a JSON-RPC
+                // `-32603 "Internal error"` whose detail sits in
+                // `data.details` — binary-verified:
+                //   {"code":-32603,"message":"Internal error",
+                //    "data":{"details":"Failed to compress chat history: …"}}
+                // `mapAcpToAdapterError` copies `error.message`, so without
+                // this the row read "Could not compact the context: Internal
+                // error" and threw away the only sentence that says WHY.
+                // `readAcpDetails` is the same reader the error recognizers
+                // mine, wrapped-cause aware.
+                const acpDetails = readAcpDetails(error);
                 const failureDetail =
-                  "detail" in error && typeof error.detail === "string" && error.detail.length > 0
-                    ? error.detail
-                    : error.message;
+                  acpDetails !== undefined && acpDetails.length > 0
+                    ? acpDetails
+                    : "detail" in error &&
+                        typeof error.detail === "string" &&
+                        error.detail.length > 0
+                      ? error.detail
+                      : error.message;
                 yield* completeTask({
                   status: "failed",
                   summary: `Could not compact the context: ${failureDetail}`,
                 });
               }),
-            onSuccess: (promptResult) =>
+            onSuccess: () =>
               Effect.gen(function* () {
+                // ru-code (qwen-compression wave): THE ORDERING BARRIER, and the
+                // reason this path needs no timeout.
+                //
+                // qwen awaits its confirmation chunk before returning `end_turn`
+                // (Session.ts:8477-8480, MessageEmitter.ts:152-165,
+                // Session.ts:4247-4254) and both ride ONE ordered stdio pipe, so
+                // the chunk is always OFFERED into the runtime's FIFO event queue
+                // before this prompt resolves. What is not guaranteed is that the
+                // notification fiber has CONSUMED it — that fiber is separate from
+                // this one, and at 0.13.1 the gap did not exist because the ext
+                // handler ran inline in transport dispatch. Draining closes the
+                // gap deterministically: the barrier is dequeued strictly after
+                // the chunk, so the outcome below is final. No timer, and the
+                // failure case (no chunk at all) behaves identically.
+                yield* ctx.acp.drainEvents;
                 // Read via a helper: the `= undefined` write above narrows the
                 // ctx property for TS, but the notification fiber mutates it
                 // during the prompt — the call boundary defeats the narrowing.
@@ -5274,16 +5475,22 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
                 if (outcome?.kind !== "success") {
                   yield* completeTask({
                     status: "failed",
+                    // ru-code (qwen-compression wave): no `stopReason` in the
+                    // text. It was misleading: `end_turn` is the NORMAL
+                    // terminator of a successful `/compress` (Session.ts:2787-2797),
+                    // so quoting it invited the reading "the provider answered
+                    // wrong" for what is really "no confirmation arrived".
                     summary:
                       outcome?.kind === "error"
                         ? outcome.message
-                        : `The provider did not confirm context compaction (stopReason: ${promptResult.stopReason ?? "unknown"}).`,
+                        : "The provider sent no compaction confirmation.",
                   });
                   return;
                 }
                 // qwen compressed and recorded it — every branch below (plain
                 // success AND the low-gain warnings) is a real compression.
-                compressionConfirmed = true;
+                // ru-code (qwen-compression wave): see the retired flag above.
+                // compressionConfirmed = true;
                 const numbers = `(${outcome.preTokens} -> ${outcome.postTokens})`;
                 const usage = { preTokens: outcome.preTokens, postTokens: outcome.postTokens };
                 const windowTokens = yield* currentContextWindowTokens(ctx);
@@ -5339,6 +5546,21 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
           ),
         );
 
+        // ru-code (qwen-compression wave): THE POST-COMPACTION SESSION RETIRE IS
+        // RETIRED. Commented out, not deleted, so the reversal stays auditable.
+        //
+        // The premise below was measured against qwen 0.13.1 and is FALSE for
+        // 0.21.1 — and, for manual `/compress`, was already false there
+        // (WORKFLOW/02 §3, §4). `GeminiChat.tryCompress` mutates the live chat in
+        // place (geminiChat.ts:1843-1847), `GeminiClient.tryCompressChat` then
+        // rebuilds the chat object from the compressed history
+        // (client.ts:3301-3305), and the ACP session caches NO chat — it re-reads
+        // `getGeminiClient().getChat()` on every send (Session.ts:4276-4278) and
+        // explicitly resyncs its token counter when the object is swapped
+        // (Session.ts:4613-4622). So the very next `session/prompt` on the SAME
+        // session already carries the compressed history, and tearing the session
+        // down bought a `session/load` round-trip and a fresh spawn for nothing.
+        //
         // ru-code: a CONFIRMED compression retires the session — qwen 0.13.1's
         // live ACP session keeps its pre-compress chat, so keeping it alive
         // makes the /compress cosmetic (the meter drops, the model still gets
@@ -5349,9 +5571,9 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         // safe: this is a request fiber, not a session-bound fiber, and no turn
         // is active (guarded above). Failed/unconfirmed compressions keep the
         // session — nothing changed worth restarting for.
-        if (compressionConfirmed) {
-          yield* abortSession(ctx, COMPACTION_RESTART_METHOD);
-        }
+        // if (compressionConfirmed) {
+        //   yield* abortSession(ctx, COMPACTION_RESTART_METHOD);
+        // }
       });
 
     // Auto-compact trigger — evaluated at the END of each successful turn
@@ -5362,6 +5584,17 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
       Effect.gen(function* () {
         const bail = (reason: string, extra?: Record<string, unknown>) =>
           Effect.logDebug("[cli-adapter] auto-compact skipped", { threadId, reason, ...extra });
+        // ru-code (qwen-compression wave): OFF for qwen, and not as a preference.
+        // qwen 0.21.1 compresses itself before EVERY model send on its own
+        // warn/auto/hard ladder (Session.ts:4363-4372,
+        // chatCompressionService.ts:159-254), so this 75 %-of-window trigger was
+        // a second, earlier summariser layered under the CLI's own — it fired
+        // first and paid for a side-query qwen was about to make anyway. The
+        // whole path below (threshold, breaker, history reader, setting) is kept
+        // intact and dormant: flip the capability back and it works again.
+        // MANUAL compaction is untouched — the meter button and the composer's
+        // `/compress` both still reach `compactContext` directly.
+        if (!providerAppAutoCompaction(PROVIDER)) return yield* bail("provider-self-compacts");
         const getAutoCompactContext = options?.getAutoCompactContext;
         if (!getAutoCompactContext) return yield* bail("no-settings-getter");
         const ctx = sessions.get(threadId);

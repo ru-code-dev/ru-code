@@ -3,13 +3,16 @@
 // DURING session/load), after a HIDDEN compression (the meter button and the
 // composer's `/compress` both call compactContext), the next regular turn's
 // response allegedly never surfaces: the model streams, the UI shows nothing.
-// This pins the adapter/runtime half of that pipeline. Since the stale-chat
-// fix, a CONFIRMED compression RETIRES the session (see
-// compactionRetiresSession.e2e.test.ts), so the flow here mirrors what
-// ProviderService recovery does live: resume+replay → compress (session ends)
-// → resume again (replay again) → the next turn must emit its content.delta
-// and assistant item events, attributed to the turn, with every replay window
-// suppressed.
+// This pins the adapter/runtime half of that pipeline.
+//
+// ru-code (qwen-compression wave): the flow lost a hop. A confirmed compression
+// used to RETIRE the session, so the sequence was resume+replay → compress
+// (session ends) → resume again (replay again) → turn. qwen 0.21.1 swaps the
+// compressed chat into the LIVE session (see compactionKeepsSession.e2e.test.ts),
+// so the session survives and the next turn goes straight out on it: one
+// session/load window, not two. The surviving contract is the one that matters
+// here — the replayed history must not surface as this turn's deltas, and the
+// turn must emit its content.delta and assistant item events attributed to it.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { QwenSettings, ThreadId, type ProviderRuntimeEvent } from "@t3tools/contracts";
@@ -26,7 +29,12 @@ import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
-const COMPRESS_METHOD = "_qwencode/slash_command";
+// ru-code (qwen-compression wave): the compress steps below speak qwen 0.21.1's
+// ONLY channel — `session/update` `agent_message_chunk` +
+// `_meta.source:"slash_command"` (MessageEmitter.ts:152-165). The vendor
+// notification `_qwencode/slash_command` this suite used to script by hand is
+// gone from the CLI (Session.ts:6078 is its one `extNotification` call) and the
+// adapter's reader for it is retired.
 const REPLY_TEXT = "Привет! 👋";
 
 const testServices = ServerConfig.layerTest(process.cwd(), {
@@ -43,14 +51,8 @@ const script = (input: { readonly promptTexts: string[] }): FakeAcpScript => ({
     const lastPrompt = input.promptTexts[input.promptTexts.length - 1] ?? "";
     if (lastPrompt.trim() === "/compress") {
       steps
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Compressing context...",
-          messageType: "info",
-        })
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Context compressed (15142 -> 4236).",
-          messageType: "info",
-        })
+        .emitCompressProgress()
+        .emitCompressResult({ preTokens: 15142, postTokens: 4236 })
         .respondOk();
       return;
     }
@@ -85,17 +87,10 @@ it.effect(
           resumeCursor,
         });
         // Meter button / the composer's /compress — both are compactContext.
-        // The confirmed compression retires the session (stale-chat fix)…
+        // ru-code (qwen-compression wave): the compaction keeps the session, so
+        // there is no second resume; the next turn rides the SAME child.
         yield* adapter.compactContext!(threadId).pipe(Effect.timeout("10 seconds"));
-        assert.isFalse(yield* adapter.hasSession(threadId), "compression retires the session");
-        // …and the next action resumes it — live this is ProviderService's
-        // allowRecovery on the next turn; the load replays history AGAIN.
-        yield* adapter.startSession({
-          threadId,
-          cwd: process.cwd(),
-          runtimeMode: "approval-required",
-          resumeCursor,
-        });
+        assert.isTrue(yield* adapter.hasSession(threadId), "compaction keeps the session");
 
         const turn = yield* adapter
           .sendTurn({ threadId, input: "привет", runtimeMode: "approval-required" })
@@ -123,7 +118,7 @@ it.effect(
         // The prompts in order: the hidden compression, then the turn.
         assert.deepStrictEqual(promptTexts, ["/compress", "привет"]);
 
-        // Replay chunks from BOTH session/load windows must NOT surface.
+        // Replay chunks from the session/load window must NOT surface.
         const deltas = collected.filter(
           (event): event is Extract<ProviderRuntimeEvent, { type: "content.delta" }> =>
             event.type === "content.delta",

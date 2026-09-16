@@ -43,17 +43,27 @@ export const MODE_CHANGE_METHOD: AbortMethod = "end-force";
 /** MAINTENANCE_METHOD — teardown for non-user reasons (stopSession/stopAll/shutdown). */
 export const MAINTENANCE_METHOD: AbortMethod = "end-force";
 
-/**
- * COMPACTION_RESTART_METHOD — teardown after a CONFIRMED successful `/compress`.
- * qwen 0.13.1's ACP session captures its chat object once (acpAgent.ts:487) while
- * `tryCompressChat` replaces `client.chat` underneath it (client.ts:236), so the
- * live session keeps sending the FULL pre-compress history to the model — the
- * compression is recorded to the session file but never applied to the running
- * chat. Ending the session makes the next action resume via `session/load`
- * (same sessionId), which rebuilds the chat from the recorded COMPRESSED
- * history. "end-force" for the same hang-resistance reasons as the Stop button.
- */
-export const COMPACTION_RESTART_METHOD: AbortMethod = "end-force";
+// ru-code (qwen-compression wave): RETIRED — commented out, not deleted, so the
+// reversal stays auditable. There is no post-compaction restart any more: qwen
+// swaps the compressed chat into the LIVE session and the ACP session caches no
+// chat object, so the next `session/prompt` already carries the compressed
+// history. The rationale below was measured against 0.13.1's `acpAgent.ts:487`
+// capture, which 0.21.1 does not do — see WORKFLOW/02 §3 for the proof chain
+// (geminiChat.ts:1843-1847, client.ts:3301-3305, Session.ts:4276-4278,
+// Session.ts:4613-4622) and §4 for the 0.13.1-vs-0.21.1 diff. The sole consumer
+// was `QwenAdapter.compactContext`, whose call is commented out beside it.
+//
+// /**
+//  * COMPACTION_RESTART_METHOD — teardown after a CONFIRMED successful `/compress`.
+//  * qwen 0.13.1's ACP session captures its chat object once (acpAgent.ts:487) while
+//  * `tryCompressChat` replaces `client.chat` underneath it (client.ts:236), so the
+//  * live session keeps sending the FULL pre-compress history to the model — the
+//  * compression is recorded to the session file but never applied to the running
+//  * chat. Ending the session makes the next action resume via `session/load`
+//  * (same sessionId), which rebuilds the chat from the recorded COMPRESSED
+//  * history. "end-force" for the same hang-resistance reasons as the Stop button.
+//  */
+// export const COMPACTION_RESTART_METHOD: AbortMethod = "end-force";
 
 /**
  * CONTEXT_WINDOW_TOKENS — FALLBACK context window advertised to the UI when

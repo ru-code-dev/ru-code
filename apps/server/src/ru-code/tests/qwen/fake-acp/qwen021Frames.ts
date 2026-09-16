@@ -821,3 +821,186 @@ export const qwenSubAgentPermissionRequest = (input: {
       },
     },
   }) as AcpSchema.RequestPermissionRequest;
+
+// ────────────────────────────────────────────────────────────────────────────
+// ru-code (qwen-compression wave): THE 0.21.1 COMPRESSION WIRE.
+//
+// At 0.13.1 the ACP session reported a slash command's output as a VENDOR
+// EXTENSION NOTIFICATION (`_qwencode/slash_command` with `{message,messageType}`),
+// which is the only channel `QwenAdapter.handleUnknownExtNotification` listens on.
+//
+// At 0.21.1 that channel is GONE from the CLI. `Session.ts` emits exactly ONE
+// `extNotification` in the whole file — `_qwencode/end_turn`
+// (Session.ts:6078), for background-notification turns — and nothing else.
+// `_qwencode/slash_command` survives only as a legacy INBOUND handler in the
+// VS Code companion (vscode-ide-companion/src/services/acpConnection.ts:379).
+// Slash-command output now rides an ordinary `session/update`
+// `agent_message_chunk` stamped `_meta.source: 'slash_command'`
+// (MessageEmitter.ts:152-165), because — in qwen's own words at
+// Session.ts:8446-8448 — "extNotification only goes to the ACP debug log and is
+// not rendered by Zed."
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * THE 0.21.1 CHANNEL FOR `/compress` OUTPUT is `qwenEmitSlashCommandOutput`
+ * above (MessageEmitter.ts:152-165) — already transcribed for the signal-frame
+ * wave, and reused verbatim here rather than re-declared. Its `_meta` is
+ * `{source:"slash_command"}` (plus a finite `timestamp`), which is the whole
+ * difference between a compress result and an ordinary assistant chunk at
+ * 0.21.1, and the reason a host matching on an ext-notification method sees
+ * nothing at all.
+ */
+
+/**
+ * Session.ts:8478-8480 — the `stream_messages` branch of
+ * `#processSlashCommandResult` rewrites bare `\n` into Markdown hard
+ * line-breaks BEFORE handing the text to `emitSlashCommandOutput`, so Zed's
+ * renderer keeps the line structure. Transcribed rather than inlined because
+ * the compress messages happen to contain no newline today and a future one
+ * would silently diverge.
+ */
+export const qwenSlashCommandHardLineBreaks = (content: string): string =>
+  content.replace(/\n/g, "  \n");
+
+/**
+ * Session.ts:4668-4673 (`#emitAgentDiagnosticMessage`) — THE 0.21.1 CHANNEL FOR
+ * AUTO-COMPRESSION.
+ *
+ * A BARE `agent_message_chunk`: no `_meta` AT ALL. Not a signal frame, not a
+ * slash-command frame, not a usage frame — byte-identical to an ordinary
+ * assistant text chunk, which is precisely why a host cannot tell an
+ * auto-compaction notice apart from the model talking. Reached from
+ * `#emitAgentDiagnosticMessageSafely` (Session.ts:4657-4666), which swallows a
+ * send failure, so the notice is best-effort.
+ */
+export const qwenEmitAgentDiagnosticMessage = (text: string): AcpSchema.SessionUpdate =>
+  ({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text },
+  }) as AcpSchema.SessionUpdate;
+
+/**
+ * compressCommand.ts:97-100 — the FIRST message the ACP `stream_messages`
+ * generator yields. Three dots, no period, `messageType: 'info'`. Byte-identical
+ * to 0.13.1's payload text; only the CHANNEL changed.
+ */
+export const QWEN_COMPRESS_PROGRESS_MESSAGE = "Compressing context...";
+
+/**
+ * compressCommand.ts:109-112 — the SUCCESS message.
+ *
+ * NOTE THE TRAILING PERIOD, which sits OUTSIDE the parenthesis:
+ * `Context compressed (1000 -> 400).` The numbers come straight off
+ * `ChatCompressionInfo` and are NOT localized (`t()` is never applied here),
+ * while every failure string next door is.
+ */
+export const qwenCompressResultMessage = (preTokens: number, postTokens: number): string =>
+  `Context compressed (${String(preTokens)} -> ${String(postTokens)}).`;
+
+/**
+ * compressCommand.ts:102-107 — the falsy-result failure, `messageType: 'error'`.
+ *
+ * CONSEQUENCE, and the reason this is not just another chunk: an `error` message
+ * inside `stream_messages` is THROWN by Session.ts:8475-8477
+ * (`throw new Error(msg.content || 'Slash command failed.')`) instead of being
+ * emitted. The host therefore never sees the text on a `session/update` at all —
+ * it surfaces as a FAILED `session/prompt`, not as a frame.
+ */
+export const QWEN_COMPRESS_FAILURE_MESSAGE = "Failed to compress chat history.";
+
+/**
+ * compressCommand.ts:116-118 — the thrown-error failure variant. Same
+ * `messageType: 'error'` fate as above (Session.ts:8475-8477).
+ */
+export const qwenCompressErrorMessage = (error: string): string =>
+  `Failed to compress chat history: ${error}`;
+
+/**
+ * Session.ts:4427-4431 — THE SESSION-CAP NOTICE, on the same BARE channel as the
+ * auto-compaction notice (`#emitAgentDiagnosticMessageSafely`).
+ *
+ * It fires AFTER a compaction, when the post-compaction prompt count still
+ * exceeds `model.sessionTokenLimit`: the send is DROPPED and the prompt resolves
+ * `stopReason:"max_tokens"` (Session.ts:4432) with no model round.
+ *
+ * IT REPLACES THE COMPACTION NOTICE. The compaction's diagnostic is only BUILT
+ * at `:4378-4392` and emitted at `:4436-4440`, which the cap's early return at
+ * `:4432` never reaches — so the turn carries THIS frame and nothing else.
+ * BINARY-VERIFIED with `model.sessionTokenLimit: 500` and a post-compaction
+ * count of 1008 (@ru-code/qwen-real-harness scenario `session-token-limit`).
+ *
+ * Note it never says "compress": a host matching on that word alone cannot see
+ * it, which is why `parseQwenCompactionText` checks the cap phrase first and
+ * independently.
+ */
+export const qwenSessionTokenLimitDiagnostic = (input: {
+  readonly tokens: number;
+  readonly limit: number;
+}): string =>
+  `Session token limit exceeded: ${String(input.tokens)} tokens > ${String(input.limit)} limit. ` +
+  `Please start a new session or increase the sessionTokenLimit in your settings.json.`;
+
+/**
+ * THE FAILURE, AS THE HOST ACTUALLY SEES IT — binary-verified against qwen
+ * 0.21.1 (a `/compress` whose summariser call was answered HTTP 500 by the
+ * scripted backend; capture: @ru-code/qwen-real-harness scenario
+ * `compress-failure`):
+ *
+ *   {"code":-32603,
+ *    "message":"Internal error",
+ *    "data":{"details":"Failed to compress chat history: Failed to generate
+ *             text content (compress-…): 500 …"}}
+ *
+ * TWO THINGS THE FIRST TRANSCRIPTION GOT WRONG, both corrected here because the
+ * capture disagreed with it:
+ *
+ *  1. The `message` is the ACP SDK's GENERIC `"Internal error"`, not qwen's
+ *     sentence. qwen's own text is demoted into `data.details`, which is where
+ *     every other `-32603` from this CLI puts it too (see the error recognizers'
+ *     `readAcpDetails`). A host that renders `error.message` shows the user
+ *     nothing but "Internal error".
+ *  2. The progress frame IS sent before the failure. `compressCommand` yields
+ *     "Compressing context..." first and only then throws, so the host sees one
+ *     `slash_command` chunk and then a rejected prompt — not silence. Scripts
+ *     therefore chain `emitCompressProgress().emitCompressFailure(…)`.
+ */
+export const QWEN_ACP_INTERNAL_ERROR_MESSAGE = "Internal error";
+
+export const qwenCompressFailureErrorData = (details: string): { readonly details: string } => ({
+  details,
+});
+
+/**
+ * Session.ts:4381-4391 — THE AUTO-COMPRESSION NOTICE, assembled inside
+ * `#sendMessageStreamWithAutoCompression` when `tryCompressChat` returns
+ * `CompressionStatus.COMPRESSED`, and emitted at Session.ts:4436-4440 through
+ * `#emitAgentDiagnosticMessageSafely` → `qwenEmitAgentDiagnosticMessage`.
+ *
+ * Two clauses only (Session.ts:4383-4386): `image_overflow` names screenshots,
+ * every other `triggerReason` names the input token limit. A missing count
+ * renders the literal string `unknown` (`?? 'unknown'`, :4390-4391), never `0`
+ * and never an omitted field — so a host regex on `\d+` silently matches
+ * nothing on that path.
+ */
+export const qwenAutoCompressionDiagnostic = (input: {
+  readonly model: string;
+  readonly originalTokenCount?: number;
+  readonly newTokenCount?: number;
+  readonly triggerReason?: "image_overflow" | (string & {});
+}): string => {
+  const reasonClause =
+    input.triggerReason === "image_overflow"
+      ? `accumulated enough tool screenshots to trigger compaction for ${input.model}`
+      : `approached the input token limit for ${input.model}`;
+  return (
+    `IMPORTANT: This conversation ${reasonClause}. ` +
+    `A compressed context will be sent for future messages (compressed from: ` +
+    `${input.originalTokenCount === undefined ? "unknown" : String(input.originalTokenCount)} to ` +
+    `${input.newTokenCount === undefined ? "unknown" : String(input.newTokenCount)} tokens).`
+  );
+};
+
+// ru-code (qwen-compression wave): 0.13.1's `_qwencode/slash_command` channel is
+// NOT modelled. The adapter's reader for it was retired with this wave (the CLI
+// stopped sending it — Session.ts:6078 is its only `extNotification` call), so a
+// builder for it could only ever produce frames nothing reads.

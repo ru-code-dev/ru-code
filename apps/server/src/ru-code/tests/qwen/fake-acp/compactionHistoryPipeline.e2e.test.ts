@@ -45,7 +45,12 @@ import { makeOrchestrationIntegrationHarness } from "../../../../../integration/
 
 const decodeQwenSettings = Schema.decodeEffect(QwenSettings);
 const QWEN = ProviderDriverKind.make("qwen");
-const COMPRESS_METHOD = "_qwencode/slash_command";
+// ru-code (qwen-compression wave): the compress steps below speak qwen 0.21.1's
+// ONLY channel — `session/update` `agent_message_chunk` +
+// `_meta.source:"slash_command"` (MessageEmitter.ts:152-165). The vendor
+// notification `_qwencode/slash_command` this suite used to script by hand is
+// gone from the CLI (Session.ts:6078 is its one `extNotification` call) and the
+// adapter's reader for it is retired.
 const NOW = "2026-05-01T00:00:00.000Z";
 
 const registryOverride =
@@ -172,14 +177,8 @@ const completingCompressScript: FakeAcpScript = {
     const promptText = historyPromptTexts[historyPromptTexts.length - 1];
     if (promptText === "/compress") {
       steps
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Compressing context...",
-          messageType: "info",
-        })
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Context compressed (200000 -> 199000)",
-          messageType: "info",
-        })
+        .emitCompressProgress()
+        .emitCompressResult({ preTokens: 200000, postTokens: 199000 })
         .respondOk();
       return;
     }
@@ -303,10 +302,7 @@ const parkedCompressScript: FakeAcpScript = {
   onPrompt: (steps) => {
     const promptText = b5PromptTexts[b5PromptTexts.length - 1];
     if (promptText === "/compress") {
-      steps.emitExtNotification(COMPRESS_METHOD, {
-        message: "Compressing context...",
-        messageType: "info",
-      });
+      steps.emitCompressProgress();
       return; // no terminal step — parked
     }
     steps.emitText("ok").respondOk();

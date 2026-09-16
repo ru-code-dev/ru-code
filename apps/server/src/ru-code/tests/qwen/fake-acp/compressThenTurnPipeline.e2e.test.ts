@@ -5,11 +5,13 @@
 // (the meter button and the composer's `/compress` both dispatch
 // `thread.context.compact`), the NEXT turn's assistant reply must land in the
 // projected thread messages, turn-bound, exactly like a turn with no
-// compression before it. Since the stale-chat fix a confirmed compression
-// RETIRES the provider session (see compactionRetiresSession.e2e.test.ts), so
-// the post-compress turn ALSO proves the pipeline's allowRecovery resume: the
-// adapter must take `session/load` with the persisted sessionId — the path
-// that rebuilds qwen's chat from the recorded COMPRESSED history.
+// compression before it.
+//
+// ru-code (qwen-compression wave): the session is no longer retired by a
+// compaction (qwen 0.21.1 swaps the compressed chat into the LIVE session — see
+// compactionKeepsSession.e2e.test.ts), so this leg now proves the simpler and
+// stronger fact: two compactions and the turn after them all ride ONE live
+// provider session, with no `session/load` recovery hop at all.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -31,7 +33,7 @@ import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
 import { ServerConfig } from "../../../../config.ts";
 import { ProviderAdapterRegistry } from "../../../../provider/Services/ProviderAdapterRegistry.ts";
 import { makeAdapterRegistryMock } from "../../../../provider/testUtils/providerAdapterRegistryMock.ts";
-import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
+import { type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
 import { makeOrchestrationIntegrationHarness } from "../../../../../integration/OrchestrationEngineHarness.integration.ts";
 
@@ -61,14 +63,8 @@ const script: FakeAcpScript = {
     const promptText = promptTexts[promptTexts.length - 1];
     if (promptText === "/compress") {
       steps
-        .emitExtNotification("_qwencode/slash_command", {
-          message: "Compressing context...",
-          messageType: "info",
-        })
-        .emitExtNotification("_qwencode/slash_command", {
-          message: "Context compressed (15142 -> 15236).",
-          messageType: "info",
-        })
+        .emitCompressProgress()
+        .emitCompressResult({ preTokens: 15142, postTokens: 15236 })
         .respondOk();
       return;
     }
@@ -96,7 +92,7 @@ const registryOverride = (ctx: { readonly workspaceDir: string; readonly rootDir
     Layer.orDie,
   );
 
-it.live("after a hidden compress the NEXT turn recovers the session and projects its reply", () =>
+it.live("after a hidden compress the NEXT turn keeps the session and projects its reply", () =>
   Effect.acquireUseRelease(
     makeOrchestrationIntegrationHarness({ registryOverride }),
     (harness) =>
@@ -158,14 +154,11 @@ it.live("after a hidden compress the NEXT turn recovers the session and projects
                 "context-compaction",
               ),
           ).length;
-        const sessionSettledStopped = (thread: { session?: { status?: string } | null }) =>
-          !thread.session || thread.session.status === "stopped";
-
         // The live sequence: meter button, then the composer's /compress —
-        // both dispatch thread.context.compact. The FIRST rides the live
-        // session; the confirmed compression RETIRES it (stale-chat fix), so
-        // the SECOND must succeed by RECOVERING the thread (session/load) —
-        // the reactor no longer pre-requires a live session for compact.
+        // both dispatch thread.context.compact. ru-code (qwen-compression wave):
+        // BOTH ride the same live session now, back to back. A second
+        // compaction on an already-compacted session is the case that used to
+        // need a recovery hop.
         for (const [index, commandId] of [
           "compress-turn-compact-1",
           "compress-turn-compact-2",
@@ -181,15 +174,7 @@ it.live("after a hidden compress the NEXT turn recovers the session and projects
             (thread) => completedCompactionRows(thread) >= index + 1,
             20_000,
           );
-          // Wait for the retirement to settle in the projection so the next
-          // action deterministically exercises the recovery path.
-          yield* harness.waitForThread(THREAD_ID, sessionSettledStopped, 20_000);
         }
-        // The second compaction could only have run on a RECOVERED session.
-        assert.isTrue(
-          loadedSessionIds.includes(FAKE_SESSION_ID),
-          `compress on a retired session must resume via session/load (saw: ${loadedSessionIds.join(", ")})`,
-        );
 
         // THE report: the post-compress turn — its reply must be projected.
         yield* harness.engine.dispatch({
@@ -227,13 +212,13 @@ it.live("after a hidden compress the NEXT turn recovers the session and projects
         assert.isDefined(reply);
         assert.isNotNull(reply!.turnId ?? null, "the reply must keep its turn binding");
         assert.strictEqual(reply!.streaming, false, "the reply must be finalized");
-        // And the turn got there by RESUMING the twice-retired session — a
-        // SECOND session/load beyond the compact-2 recovery above, i.e. qwen's
-        // compressed-history rebuild each time.
-        assert.isAtLeast(
-          loadedSessionIds.filter((sessionId) => sessionId === FAKE_SESSION_ID).length,
-          2,
-          `the post-compress turn must resume via session/load (saw: ${loadedSessionIds.join(", ")})`,
+        // ru-code (qwen-compression wave): and it got there WITHOUT a single
+        // session re-establishment — one `session/new` for the whole leg, no
+        // `session/load`. Nothing was retired, so nothing had to be rebuilt.
+        assert.deepStrictEqual(
+          loadedSessionIds,
+          ["<session/new>"],
+          `two compactions and the turn after them must ride ONE session (saw: ${loadedSessionIds.join(", ")})`,
         );
       }),
     (harness) => harness.dispose,

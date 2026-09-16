@@ -1,3 +1,6 @@
+// ru-code (qwen-compression wave): the context-window retention rule, shared
+// with the client reducer's supersede filter (@ru-code/context-window).
+import { retainCurrentContextWindowRows } from "@ru-code/context-window";
 import type {
   OrchestrationEvent,
   OrchestrationThreadActivity,
@@ -397,23 +400,20 @@ function isResolvableContextWindowActivity(activity: OrchestrationThreadActivity
  * valid earlier row. Live `thread.activity-appended` events are untouched:
  * newer updates still stream through and supersede the retained rows on the
  * client.
+ *
+ * ru-code (qwen-compression wave): the retention RULE moved into
+ * @ru-code/context-window, shared with the client reducer's supersede filter,
+ * because a compaction row has no turn (`turnId: null`) and must supersede
+ * every earlier row rather than forming a bucket of its own. The resolvability
+ * predicate stays here — it is this file's own shape knowledge.
  */
 function dropStaleContextWindowActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  const latestIndexByTurn = new Map<string | null, number>();
-  for (let index = 0; index < activities.length; index += 1) {
-    if (isResolvableContextWindowActivity(activities[index]!)) {
-      latestIndexByTurn.set(activities[index]!.turnId, index);
-    }
-  }
-  if (latestIndexByTurn.size === 0) {
-    return activities;
-  }
-  return activities.filter(
-    (activity, index) =>
-      !isResolvableContextWindowActivity(activity) ||
-      latestIndexByTurn.get(activity.turnId) === index,
+  return retainCurrentContextWindowRows(
+    activities,
+    isResolvableContextWindowActivity,
+    (activity) => activity.turnId,
   );
 }
 

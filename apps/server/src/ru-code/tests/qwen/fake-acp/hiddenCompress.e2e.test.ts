@@ -39,7 +39,12 @@ import { resolveString } from "@ru-code/localization";
 const enText = (value: unknown): string => resolveString(String(value), "en");
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
-const COMPRESS_METHOD = "_qwencode/slash_command";
+// ru-code (qwen-compression wave): the compress steps below speak qwen 0.21.1's
+// ONLY channel — `session/update` `agent_message_chunk` +
+// `_meta.source:"slash_command"` (MessageEmitter.ts:152-165). The vendor
+// notification `_qwencode/slash_command` this suite used to script by hand is
+// gone from the CLI (Session.ts:6078 is its one `extNotification` call) and the
+// adapter's reader for it is retired.
 
 const testServices = (prefix: string) =>
   ServerConfig.layerTest(process.cwd(), { prefix }).pipe(Layer.provideMerge(NodeServices.layer));
@@ -79,12 +84,14 @@ const compressScript = (input: {
   onPromptText: (text) => input.promptTexts.push(text),
   onPrompt: (steps) => {
     if (input.outcome === "error") {
-      steps
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Failed to compress chat history.",
-          messageType: "error",
-        })
-        .respondOk();
+      // ru-code (qwen-compression wave): at 0.21.1 a failed `/compress` produces
+      // NO RESULT frame — `#processSlashCommandResult` throws on a
+      // `messageType:"error"` message before it can `sendUpdate`
+      // (Session.ts:8475-8477) — so the `session/prompt` itself fails. The
+      // PROGRESS frame does go out first, which is the order the real binary was
+      // captured in (@ru-code/qwen-real-harness `compress-failure`).
+      // `emitCompressFailure` is terminal.
+      steps.emitCompressProgress().emitCompressFailure("Failed to compress chat history.");
       return;
     }
     if (input.outcome === "silent") {
@@ -93,14 +100,8 @@ const compressScript = (input: {
       return;
     }
     steps
-      .emitExtNotification(COMPRESS_METHOD, {
-        message: "Compressing context...",
-        messageType: "info",
-      })
-      .emitExtNotification(COMPRESS_METHOD, {
-        message: "Context compressed (200000 -> 12345)",
-        messageType: "info",
-      })
+      .emitCompressProgress()
+      .emitCompressResult({ preTokens: 200000, postTokens: 12345 })
       .respondOk();
   },
 });
@@ -202,7 +203,19 @@ it.effect(
       assert.isDefined(completed);
       assert.strictEqual(completed!.payload.taskId, progress!.payload.taskId);
       assert.strictEqual(completed!.payload.status, "failed");
-      assert.strictEqual(completed!.payload.summary, "Failed to compress chat history.");
+      // ru-code (qwen-compression wave): a 0.21.1 compress failure arrives as a
+      // REJECTED PROMPT, so the row carries the localized wrapper around qwen's
+      // own message rather than the message alone.
+      assert.strictEqual(
+        enText(completed!.payload.summary),
+        "Could not compact the context: Failed to compress chat history.",
+      );
+      // And it must be QWEN'S sentence, not the JSON-RPC envelope's. The real
+      // wire sends `-32603 "Internal error"` with the reason demoted into
+      // `data.details` (binary-verified, @ru-code/qwen-real-harness
+      // `compress-failure`), so a row reading "Internal error" means the
+      // adapter stopped reading the details.
+      assert.notInclude(enText(completed!.payload.summary), "Internal error");
       assert.isUndefined(events.find(isCompactedStateChange));
     }).pipe(
       Effect.scoped,
@@ -234,9 +247,13 @@ it.effect("compactContext: an unconfirmed compress (no frames) ends the row as f
     const completed = events.find(isCompactionCompleted);
     assert.isDefined(completed);
     assert.strictEqual(completed!.payload.status, "failed");
+    // ru-code (qwen-compression wave): no `stopReason` in the text — `end_turn` is
+    // the NORMAL terminator of a successful `/compress` (Session.ts:2787-2797),
+    // so quoting it read as "the provider answered wrong" for what is really
+    // "no confirmation arrived".
     assert.strictEqual(
       enText(completed!.payload.summary),
-      "The provider did not confirm context compaction (stopReason: end_turn).",
+      "The provider sent no compaction confirmation.",
     );
   }).pipe(
     Effect.scoped,
@@ -271,12 +288,7 @@ const breakerScript = (promptTexts: string[]): FakeAcpScript => ({
   onPrompt: (steps) => {
     const promptText = promptTexts[promptTexts.length - 1];
     if (promptText === "/compress") {
-      steps
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Context compressed (199000 -> 9000)",
-          messageType: "info",
-        })
-        .respondOk();
+      steps.emitCompressResult({ preTokens: 199000, postTokens: 9000 }).respondOk();
       return;
     }
     // User turns encode their post-turn usage in the prompt text: "usage:<n>".
@@ -325,12 +337,7 @@ it.effect(
           fakeAcpSpawnerLayer({
             onPromptText: (text) => tripRowPromptTexts.push(text),
             onPrompt: (steps) =>
-              steps
-                .emitExtNotification(COMPRESS_METHOD, {
-                  message: "Context compressed (200000 -> 199000)",
-                  messageType: "info",
-                })
-                .respondOk(),
+              steps.emitCompressResult({ preTokens: 200000, postTokens: 199000 }).respondOk(),
           }),
           testServices("ru-code-hidden-compress-trip-row-"),
         ),
@@ -385,12 +392,7 @@ it.effect(
           fakeAcpSpawnerLayer({
             onPromptText: (text) => ineffectivePromptTexts.push(text),
             onPrompt: (steps) =>
-              steps
-                .emitExtNotification(COMPRESS_METHOD, {
-                  message: "Context compressed (15762 -> 16246)",
-                  messageType: "info",
-                })
-                .respondOk(),
+              steps.emitCompressResult({ preTokens: 15762, postTokens: 16246 }).respondOk(),
           }),
           testServices("ru-code-hidden-compress-ineffective-"),
         ),
@@ -436,12 +438,7 @@ it.effect(
           fakeAcpSpawnerLayer({
             onPromptText: (text) => smallDialogPromptTexts.push(text),
             onPrompt: (steps) =>
-              steps
-                .emitExtNotification(COMPRESS_METHOD, {
-                  message: "Context compressed (12000 -> 2000)",
-                  messageType: "info",
-                })
-                .respondOk(),
+              steps.emitCompressResult({ preTokens: 12000, postTokens: 2000 }).respondOk(),
           }),
           testServices("ru-code-hidden-compress-small-dialog-"),
         ),
@@ -491,12 +488,13 @@ it.effect(
 const THREAD_REARM = ThreadId.make("hidden-compress-rearm");
 const rearmPromptTexts: string[] = [];
 
-it.effect("breaker: a usage dip below 60% in persisted history re-arms auto-compact", () =>
+it.effect("app auto-compaction is OFF: even a re-armed breaker and a heavy turn fire nothing", () =>
   Effect.gen(function* () {
     const adapter = yield* makeQwenAdapter(decodeQwenSettings({}), {
       getAutoCompactContext: Effect.succeed(true),
-      // Same trip, but the history shows usage dropped to 100_000 since —
-      // compression can help again.
+      // Same trip as above, but the history shows usage dropped to 100_000
+      // since — the breaker is RE-ARMED, so nothing downstream of the
+      // capability gate can be blamed for the silence below.
       getThreadCompactionState: () =>
         Effect.succeed({ lastCompaction: TRIPPED_COMPACTION, minUsedTokensSince: 100_000 }),
     });
@@ -507,24 +505,18 @@ it.effect("breaker: a usage dip below 60% in persisted history re-arms auto-comp
       cwd: process.cwd(),
       runtimeMode: "approval-required",
     });
-    // A heavy turn (199000 ≥ 189000) fires the hidden compress again.
+    // ru-code (qwen-compression wave): a heavy turn (199000 ≥ 189000) used to
+    // fire the hidden `/compress` here. It no longer does, and not because of
+    // the setting or the breaker — both say GO above — but because qwen 0.21.1
+    // compresses itself before every model send (Session.ts:4363-4372), so
+    // `appAutoCompaction` is false for this provider and the trigger bails
+    // first (@ru-code/provider-capabilities). The rest of the path — threshold,
+    // breaker, history reader, setting — is kept intact and dormant.
     yield* adapter.sendTurn({ threadId: THREAD_REARM, input: "usage:199000" });
-    let attempt = 0;
-    while (attempt < 250 && rearmPromptTexts.length < 2) {
-      yield* Effect.sleep("20 millis");
-      attempt += 1;
-    }
-    assert.deepStrictEqual(rearmPromptTexts, ["usage:199000", "/compress"]);
-
-    // The compress is effective (→ 9000) → a SUCCESS completion row.
-    const completed = events.find(isCompactionCompleted);
-    assert.isDefined(completed);
-    assert.strictEqual(completed!.payload.status, "completed");
-    assert.strictEqual(
-      enText(completed!.payload.summary),
-      "Compaction succeeded (199000 -> 9000).",
-    );
-    assert.isUndefined(completed!.payload.tone);
+    yield* settleAutoCompactFork;
+    assert.deepStrictEqual(rearmPromptTexts, ["usage:199000"]);
+    assert.isUndefined(events.find(isCompactionProgress));
+    assert.isUndefined(events.find(isCompactionCompleted));
     yield* stop;
   }).pipe(
     Effect.scoped,
@@ -572,10 +564,7 @@ it.effect("child crash mid-compress: the row ends as failed, the call itself suc
       Layer.provideMerge(
         fakeAcpSpawnerLayer({
           onPrompt: (steps) => {
-            steps.emitExtNotification(COMPRESS_METHOD, {
-              message: "Compressing context...",
-              messageType: "info",
-            });
+            steps.emitCompressProgress();
             // The qwen child dies mid-compression.
             steps.exit(1);
           },
@@ -641,10 +630,7 @@ it.effect("fiber interruption mid-compress: the row closes as stopped and send u
             const promptText = interruptPromptTexts[interruptPromptTexts.length - 1];
             if (promptText === "/compress") {
               // Parks — the compaction stays in flight until the interrupt.
-              steps.emitExtNotification(COMPRESS_METHOD, {
-                message: "Compressing context...",
-                messageType: "info",
-              });
+              steps.emitCompressProgress();
               return;
             }
             steps.emitText("ok").respondOk();
@@ -667,10 +653,7 @@ const failFastPromptTexts: string[] = [];
 const parkedCompressScript: FakeAcpScript = {
   onPromptText: (text) => failFastPromptTexts.push(text),
   onPrompt: (steps) => {
-    steps.emitExtNotification(COMPRESS_METHOD, {
-      message: "Compressing context...",
-      messageType: "info",
-    });
+    steps.emitCompressProgress();
     // no respondOk → the prompt parks until teardown
   },
 };
@@ -758,12 +741,7 @@ const autoScript = (promptTexts: string[]): FakeAcpScript => {
         steps.emitUsageChunk(199_000).emitText("done working").respondOk();
         return;
       }
-      steps
-        .emitExtNotification(COMPRESS_METHOD, {
-          message: "Context compressed (199000 -> 9000)",
-          messageType: "info",
-        })
-        .respondOk();
+      steps.emitCompressResult({ preTokens: 199000, postTokens: 9000 }).respondOk();
     },
   };
 };
@@ -800,20 +778,27 @@ const runAutoScenario = (input: {
 const THREAD_AUTO_ON = ThreadId.make("hidden-compress-auto-on");
 const autoOnPromptTexts: string[] = [];
 
-it.effect("auto-compact: a turn ending ≥75% full fires the hidden /compress", () =>
+// ru-code (qwen-compression wave): THE APP-SIDE AUTO-COMPACTION IS OFF, with the
+// setting ON and the window over the threshold — the two facts that used to be
+// sufficient. qwen 0.21.1 auto-compresses before EVERY model send on its own
+// ladder (Session.ts:4363-4372, chatCompressionService.ts:159-254), so a second
+// app-side summariser at 75 % only raced it. Manual compaction is untouched —
+// every `compactContext` case in this file still runs.
+it.effect("auto-compact: a turn ending ≥75% full fires NOTHING (qwen self-compacts)", () =>
   Effect.gen(function* () {
     const events = yield* runAutoScenario({
       threadId: THREAD_AUTO_ON,
       autoCompactEnabled: true,
-      pollAttempts: 250,
+      // A short budget: the assertion is that nothing ever arrives, so a long
+      // poll would only slow the suite down.
+      pollAttempts: 15,
     });
 
-    assert.deepStrictEqual(autoOnPromptTexts, ["do heavy work", "/compress"]);
-    const completed = events.find(isCompactionCompleted);
-    assert.isDefined(completed, "auto-compact did not emit the completion row");
-    assert.strictEqual(
-      enText(completed!.payload.summary),
-      "Compaction succeeded (199000 -> 9000).",
+    assert.deepStrictEqual(autoOnPromptTexts, ["do heavy work"]);
+    assert.isUndefined(events.find(isCompactionProgress));
+    assert.isUndefined(
+      events.find(isCompactionCompleted),
+      "the app must not compact a thread qwen compacts itself",
     );
   }).pipe(
     Effect.scoped,

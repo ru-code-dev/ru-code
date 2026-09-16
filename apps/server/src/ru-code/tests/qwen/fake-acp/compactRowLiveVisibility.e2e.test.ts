@@ -47,10 +47,7 @@ const script: FakeAcpScript = {
   onPrompt: (steps) => {
     const promptText = promptTexts[promptTexts.length - 1];
     if (promptText === "/compress") {
-      steps.emitExtNotification("_qwencode/slash_command", {
-        message: "Compressing context...",
-        messageType: "info",
-      });
+      steps.emitCompressProgress();
       return; // no terminal step — parked
     }
     steps.emitText("ok").respondOk();

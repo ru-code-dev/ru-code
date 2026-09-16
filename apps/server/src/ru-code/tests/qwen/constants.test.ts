@@ -10,7 +10,6 @@ import {
   AUTO_COMPACT_USED_FRACTION,
   CLI_TEXT_GENERATION_TIMEOUT_MS,
   CLI_VERSION_PROBE_TIMEOUT_MS,
-  COMPACTION_RESTART_METHOD,
   CONTEXT_WINDOW_TOKENS,
   EXIT_DRAIN_GRACE_MS,
   MAINTENANCE_METHOD,
@@ -33,7 +32,11 @@ describe("qwen constants", () => {
     expect(STOP_BUTTON_METHOD).toBe("end-force");
     expect(MODE_CHANGE_METHOD).toBe("end-force");
     expect(MAINTENANCE_METHOD).toBe("end-force");
-    expect(COMPACTION_RESTART_METHOD).toBe("end-force");
+    // ru-code (qwen-compression wave): COMPACTION_RESTART_METHOD is gone from
+    // this list because the post-compaction teardown it named is retired — qwen
+    // 0.21.1 swaps the compressed chat into the live session, so there is
+    // nothing to restart (WORKFLOW/02 §3). The constant is commented out, not
+    // deleted, in ru-code/qwen/src/constants.ts.
   });
 
   it("advertises the hardcoded 252k context window", () => {

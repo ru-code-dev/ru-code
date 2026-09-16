@@ -90,6 +90,21 @@ export function writeFakeControl(
       readonly holdGapMs?: number;
     };
     readonly midTurn?: { readonly holdMs: number };
+    // ru-code (qwen-compression wave): the 0.21.1 compression wire over real
+    // pipes. `usageTokens` stamps the turn's closing usage frame so the context
+    // ring starts from a known value; `compress021` answers the app's hidden
+    // "/compress" on qwen 0.21.1's REAL channel (`agent_message_chunk` +
+    // `_meta.source:"slash_command"`, MessageEmitter.ts:152-165) — or, with
+    // `mode:"auto"`, fires qwen's own mid-turn auto-compaction notice on an
+    // ordinary turn (a bare `agent_message_chunk`, Session.ts:4668-4673).
+    // See fake-acp-server.ts FlowControl.compress021.
+    readonly usageTokens?: number;
+    readonly compress021?: {
+      readonly preTokens: number;
+      readonly postTokens: number;
+      readonly mode?: "manual" | "auto";
+      readonly model?: string;
+    };
     // ru-code(e2e, agents): one qwen `agent` tool call for this prompt. Omitting
     // `settle` leaves the run open and the turn parked — the Stop leg.
     readonly subAgent?: {

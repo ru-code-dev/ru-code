@@ -4,8 +4,10 @@
 // with a FAKE ChildProcessHandle (Stream.never stdio) so NO real process is
 // spawned. The full start/prompt/session lifecycle rides real child stdio and is
 // covered by the Phase 3 fake-ACP e2e suite (see AcpJsonRpcConnection.test.ts).
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
@@ -364,4 +366,133 @@ describe("QwenAcpSessionRuntime warm-engine phase split", () => {
       expect(createSessionCount).toBe(1);
     }),
   );
+});
+
+// ru-code (qwen-compression wave): THE EVENT-STREAM BARRIER.
+//
+// `drainEvents` is what makes the compaction outcome readable the moment
+// `session/prompt` resolves, with no timer: it offers an `EventStreamBarrier`
+// into the SAME FIFO queue the `session/update` frames ride and awaits its
+// acknowledgement, so every frame ahead of it must have been consumed first.
+//
+// These two cases pin the mechanism from both sides. The test itself plays the
+// consumer the adapter's notification loop plays in production — including the
+// acknowledgement, which is the whole contract.
+describe("QwenAcpSessionRuntime event-stream barrier", () => {
+  const promptOnce = (runtime: QwenAcpSessionRuntime["Service"]) =>
+    Effect.orDie(
+      runtime
+        .start()
+        .pipe(Effect.andThen(runtime.prompt({ prompt: [{ type: "text", text: "привет" }] }))),
+    );
+
+  // `it.live`: both cases measure a REAL wait (the point is that nothing
+  // resolves the barrier), so the default TestClock would never fire the bound.
+  it.live("blocks while the queued frames are UNCONSUMED", () =>
+    Effect.gen(function* () {
+      const outcome = yield* withFakeAgentRuntime(
+        { onPrompt: (steps) => steps.emitText("один").emitText("два").respondOk() },
+        (runtime) =>
+          Effect.gen(function* () {
+            yield* promptOnce(runtime);
+            // NOTHING has consumed `getEvents()`, so both chunks are still in
+            // the queue and the barrier lands behind them. The wait must not
+            // resolve — this is exactly the window in which the old code read
+            // `hiddenCompressOutcome` and found nothing.
+            return yield* Effect.timeoutOption(runtime.drainEvents, "500 millis");
+          }),
+      );
+      expect(Option.isNone(outcome)).toBe(true);
+    }),
+  );
+
+  it.live("completes once a consumer has drained past it", () =>
+    Effect.gen(function* () {
+      const outcome = yield* withFakeAgentRuntime(
+        { onPrompt: (steps) => steps.emitText("один").emitText("два").respondOk() },
+        (runtime) =>
+          Effect.gen(function* () {
+            yield* promptOnce(runtime);
+            // The consumer: drain forever, acknowledging every barrier — the
+            // adapter's notification loop reduced to its one relevant line.
+            yield* Effect.forkChild(
+              Stream.runForEach(runtime.getEvents(), (event) =>
+                event._tag === "EventStreamBarrier"
+                  ? Deferred.succeed(event.acknowledge, undefined)
+                  : Effect.void,
+              ),
+            );
+            return yield* Effect.timeoutOption(runtime.drainEvents, "10 seconds");
+          }),
+      );
+      expect(Option.isSome(outcome)).toBe(true);
+    }),
+  );
+});
+
+// ru-code (qwen-compression wave): SLASH-COMMAND CHUNKS MINT NO ASSISTANT SEGMENT.
+//
+// A behaviour change the move to the 0.21.1 channel forced. At 0.13.1 a
+// `/compress` report arrived as a vendor ext notification and never reached this
+// machinery at all; at 0.21.1 it is an ordinary `agent_message_chunk`, so it
+// would open an assistant SEGMENT like any text. The adapter either drops that
+// text (a HIDDEN `/compress`, which runs with no turn of ours — the segment's
+// `item.started` would carry no turnId) or replaces it with the localized line,
+// so a segment opened for it survives as an EMPTY assistant bubble in the
+// thread. Suppressed at `QwenAcpSessionRuntime.ts` beside the existing
+// background-frame guard.
+//
+// Pinned from both sides here, because the failure is user-visible on the wave's
+// main path and silent in every other test: a compress suite that only checks
+// the row would never notice the stray bubble.
+describe("QwenAcpSessionRuntime slash-command segment suppression", () => {
+  /** Drain `getEvents()` for `window`, acknowledging barriers, and collect tags. */
+  const tagsOfOnePrompt = (script: FakeAcpScript): Effect.Effect<ReadonlyArray<string>> =>
+    withFakeAgentRuntime(script, (runtime) =>
+      Effect.gen(function* () {
+        const seen: string[] = [];
+        yield* Effect.forkChild(
+          Stream.runForEach(runtime.getEvents(), (event) =>
+            Effect.gen(function* () {
+              seen.push(event._tag);
+              // This fiber IS the consumer, so it owes the barrier its
+              // acknowledgement — exactly what the adapter's loop does.
+              if (event._tag === "EventStreamBarrier") {
+                yield* Deferred.succeed(event.acknowledge, undefined);
+              }
+            }),
+          ),
+        );
+        yield* Effect.orDie(
+          runtime
+            .start()
+            .pipe(Effect.andThen(runtime.prompt({ prompt: [{ type: "text", text: "п" }] }))),
+        );
+        // The frames are offered from the transport's own fiber; drain past them.
+        yield* Effect.orDie(runtime.drainEvents);
+        return seen;
+      }),
+    );
+
+  it("a slash_command chunk yields a ContentDelta and NO AssistantItemStarted", () =>
+    Effect.gen(function* () {
+      const tags = yield* tagsOfOnePrompt({
+        onPrompt: (steps) => steps.emitCompressProgress().respondOk(),
+      });
+      expect(tags, `observed ${tags.join(", ")}`).toContain("ContentDelta");
+      expect(
+        tags,
+        `THE BREAK: a compress report opened an assistant segment — every hidden ` +
+          `/compress would leave an empty bubble. Observed ${tags.join(", ")}`,
+      ).not.toContain("AssistantItemStarted");
+    }).pipe(Effect.runPromise));
+
+  it("an UNTAGGED chunk still yields both — the suppression is scoped", () =>
+    Effect.gen(function* () {
+      const tags = yield* tagsOfOnePrompt({
+        onPrompt: (steps) => steps.emitText("привет").respondOk(),
+      });
+      expect(tags, `observed ${tags.join(", ")}`).toContain("AssistantItemStarted");
+      expect(tags, `observed ${tags.join(", ")}`).toContain("ContentDelta");
+    }).pipe(Effect.runPromise));
 });

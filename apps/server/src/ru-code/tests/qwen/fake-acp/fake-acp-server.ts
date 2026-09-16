@@ -100,6 +100,38 @@ const SCENARIOS: Record<string, FakeAcpScript> = {
   // at RU_CODE_FAKE_CONTROL_FILE ({delayMs, responseText}), re-read every prompt,
   // so specs steer latency without restarting the app.
   FLOW: makeFlowScenario(),
+  // ru-code (qwen-compression wave): the 0.21.1 compression wire as standalone
+  // manual-drive scenarios (RU_CODE_FAKE_ACP=COMPRESS_021 / COMPRESS_021_AUTO),
+  // for eyeballing the real app the way the C4/HOLD ids already are. The
+  // browser suite drives FLOW's `compress021` control knob instead, because it
+  // needs to switch mid-run.
+  //
+  // COMPRESS_021: every prompt answers on qwen 0.21.1's channel —
+  // `agent_message_chunk` + `_meta.source:"slash_command"`
+  // (MessageEmitter.ts:152-165) — and ends `end_turn` (Session.ts:2796).
+  COMPRESS_021: {
+    onPrompt: (steps) =>
+      steps
+        .emitCompressProgress()
+        .emitCompressResult({ preTokens: 190_000, postTokens: 12_345 })
+        .respondOk("end_turn"),
+  },
+  // COMPRESS_021_AUTO: an ORDINARY turn in which qwen auto-compacts first — the
+  // bare, `_meta`-less diagnostic chunk (Session.ts:4668-4673), then the answer,
+  // then the post-compaction usage frame.
+  COMPRESS_021_AUTO: {
+    dialect: "v2",
+    onPrompt: (steps) =>
+      steps
+        .emitAutoCompaction({
+          model: "qwen3-coder-plus",
+          preTokens: 190_000,
+          postTokens: 12_345,
+        })
+        .emitText("Готово.")
+        .emitUsageChunk(13_001)
+        .respondOk("end_turn"),
+  },
 };
 
 interface FlowControl {
@@ -144,6 +176,29 @@ interface FlowControl {
     readonly holdGapMs?: number;
   };
   readonly midTurn?: { readonly holdMs: number };
+  // ru-code (qwen-compression wave): THE 0.21.1 COMPRESSION WIRE, over real pipes.
+  //
+  // `usageTokens` stamps the turn's closing usage frame so the browser's context
+  // ring starts from a known, high value (qwen's dedicated empty-text usage
+  // chunk — MessageEmitter.ts:170-237; the in-memory suite's `emitUsageChunk`).
+  //
+  // `compress021` then answers the app's HIDDEN "/compress" prompt (the meter
+  // button and the composer's `/compress` both dispatch `thread.context.compact`)
+  // on qwen 0.21.1's REAL channel: `agent_message_chunk` +
+  // `_meta.source:"slash_command"` (MessageEmitter.ts:152-165), NOT the
+  // `_qwencode/slash_command` extension notification that no longer exists in the
+  // CLI. `mode:"auto"` instead fires qwen's own mid-turn auto-compaction notice on
+  // an ORDINARY turn (a bare `agent_message_chunk`, Session.ts:4668-4673).
+  //
+  // Unset ⇒ byte-identical FLOW: no compress branch, no usage frame.
+  readonly usageTokens?: number;
+  readonly compress021?: {
+    readonly preTokens: number;
+    readonly postTokens: number;
+    readonly mode?: "manual" | "auto";
+    /** Auto mode only: the model named in qwen's notice (Session.ts:4383-4386). */
+    readonly model?: string;
+  };
   // ru-code (extended-view redesign, H2): REPLAY a real qwen session into THIS thread's
   // transcript. Phase 1 proved the FLOW turn writes only user+assistant records, so live
   // agents/tools never reached the extended view; this knob appends a real JSONL record
@@ -698,6 +753,22 @@ function makeFlowScenario(): FakeAcpScript {
         scriptApproval(steps.sleep(delayMs), control.approval, promptText, responseText);
         return;
       }
+      // ru-code (qwen-compression wave): the HIDDEN "/compress" prompt the app
+      // sends for `thread.context.compact` (QwenAdapter.ts:5245). Answer it on
+      // the 0.21.1 channel and write NO transcript records — a compaction is not
+      // a user turn, and the real CLI's ACP slash path returns `end_turn` before
+      // any model round (Session.ts:2786-2797).
+      if (control.compress021 && promptText === "/compress") {
+        steps
+          .sleep(delayMs)
+          .emitCompressProgress()
+          .emitCompressResult({
+            preTokens: control.compress021.preTokens,
+            postTokens: control.compress021.postTokens,
+          })
+          .respondOk("end_turn");
+        return;
+      }
       // Real qwen writes the user record only after boot/binding — the delay
       // reproduces the fresh-spawn window the empty-screen bug lived in.
       setTimeout(() => {
@@ -827,7 +898,24 @@ function makeFlowScenario(): FakeAcpScript {
         withAgent.emitText(responseText).respondOk("end_turn");
         return;
       }
-      opened.emitText(responseText).respondOk("end_turn");
+      // ru-code (qwen-compression wave): the plain turn, optionally carrying
+      // qwen's own mid-turn AUTO-compaction notice and/or its closing usage
+      // frame. qwen compresses BEFORE the model send
+      // (Session.ts:4364-4392 → the notice at :4436-4440), so the notice leads;
+      // the usage frame closes the round (Session.ts:4103-4110), so it trails.
+      let plain = opened;
+      if (control.compress021?.mode === "auto") {
+        plain = plain.emitAutoCompaction({
+          model: control.compress021.model ?? "qwen3-coder-plus",
+          preTokens: control.compress021.preTokens,
+          postTokens: control.compress021.postTokens,
+        });
+      }
+      plain = plain.emitText(responseText);
+      if (control.usageTokens !== undefined) {
+        plain = plain.emitUsageChunk(control.usageTokens);
+      }
+      plain.respondOk("end_turn");
     },
   };
 }

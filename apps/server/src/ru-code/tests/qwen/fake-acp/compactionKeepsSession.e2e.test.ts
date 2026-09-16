@@ -1,13 +1,27 @@
-// ru-code: the post-compaction session-retirement contract. qwen 0.13.1's ACP
-// session captures its chat object once (acpAgent.ts:487) while tryCompressChat
-// replaces `client.chat` underneath it (client.ts:236) — a live session keeps
-// sending the FULL pre-compress history to the model after a `/compress` (the
-// meter drops; the request does not). The compression IS recorded to the
-// session file, so the fix is: a CONFIRMED compression retires the session
-// (COMPACTION_RESTART_METHOD), and the next action resumes via `session/load`
-// with the SAME sessionId — rebuilding the chat from the compressed history.
-// Unconfirmed or failed compressions must NOT retire the session: nothing was
-// recorded, a restart would only lose the live process for no gain.
+// ru-code (qwen-compression wave): THE POST-COMPACTION SESSION CONTRACT, and it
+// is now "nothing is retired".
+//
+// The suite used to assert the opposite, and was right about qwen 0.13.1: that
+// ACP session captured its chat object once (acpAgent.ts:487) while
+// `tryCompressChat` replaced `client.chat` underneath it (client.ts:236), so a
+// live session kept sending the FULL pre-compress history after a `/compress`
+// (the meter dropped; the request did not). The fix was to retire the session
+// and let the next action resume it via `session/load`, rebuilding the chat from
+// the recorded compressed history.
+//
+// qwen 0.21.1 does not do that capture. `GeminiChat.tryCompress` mutates the
+// live chat in place (geminiChat.ts:1843-1847), `GeminiClient.tryCompressChat`
+// rebuilds the chat object from the compressed history (client.ts:3301-3305),
+// and the ACP session caches NO chat — `#getCurrentChat()` re-reads
+// `getGeminiClient().getChat()` on every send (Session.ts:4276-4278) and
+// `#syncPromptTokenCountWithCurrentChat` explicitly detects the swap
+// (Session.ts:4613-4622). So the very next `session/prompt` on the SAME session
+// already carries the compressed history, and the teardown bought a
+// `session/load` round-trip and a fresh spawn for nothing.
+//
+// What this suite pins now: a CONFIRMED compression keeps the session, its child
+// and its sessionId, and the next turn answers over them; an UNCONFIRMED one and
+// a FAILED compress prompt do the same (they always did).
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { QwenSettings, ThreadId, type ProviderRuntimeEvent } from "@t3tools/contracts";
@@ -20,12 +34,17 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../../config.ts";
 import { makeQwenAdapter } from "../../../qwen/QwenAdapter.ts";
-import { FAKE_SESSION_ID, type FakeAcpScript } from "./fakeAcpCore.ts";
+import { type FakeAcpScript } from "./fakeAcpCore.ts";
 import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
 import { pollForSpawns } from "./testKit.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
-const COMPRESS_METHOD = "_qwencode/slash_command";
+// ru-code (qwen-compression wave): the compress steps below speak qwen 0.21.1's
+// ONLY channel — `session/update` `agent_message_chunk` +
+// `_meta.source:"slash_command"` (MessageEmitter.ts:152-165). The vendor
+// notification `_qwencode/slash_command` this suite used to script by hand is
+// gone from the CLI (Session.ts:6078 is its one `extNotification` call) and the
+// adapter's reader for it is retired.
 const REPLY_TEXT = "Привет! 👋";
 // ru-code (warm engine v2.1): the pool no longer spawns inline — this suite
 // keeps its original counts by asking for the full eager boot budget and a tiny
@@ -54,7 +73,7 @@ const awaitReplyDelta = (collected: ProviderRuntimeEvent[], turnId: string) =>
     return yield* Effect.die(new Error(`reply delta for turn ${turnId} never arrived`));
   });
 
-it.effect("a CONFIRMED compression retires the session; the next start resumes it compressed", () =>
+it.effect("a CONFIRMED compression keeps the session; the next turn answers over it", () =>
   Effect.gen(function* () {
     const promptTexts: string[] = [];
     const collected: ProviderRuntimeEvent[] = [];
@@ -68,14 +87,8 @@ it.effect("a CONFIRMED compression retires the session; the next start resumes i
         const lastPrompt = promptTexts[promptTexts.length - 1] ?? "";
         if (lastPrompt.trim() === "/compress") {
           steps
-            .emitExtNotification(COMPRESS_METHOD, {
-              message: "Compressing context...",
-              messageType: "info",
-            })
-            .emitExtNotification(COMPRESS_METHOD, {
-              message: "Context compressed (15142 -> 4236).",
-              messageType: "info",
-            })
+            .emitCompressProgress()
+            .emitCompressResult({ preTokens: 15142, postTokens: 4236 })
             .respondOk();
           return;
         }
@@ -107,15 +120,19 @@ it.effect("a CONFIRMED compression retires the session; the next start resumes i
 
       yield* adapter.compactContext!(threadId).pipe(Effect.timeout("10 seconds"));
 
-      // THE contract: the confirmed compression ended the session (force-kill +
-      // session.exited) — qwen's stale in-memory chat is gone with it.
-      assert.isFalse(yield* adapter.hasSession(threadId), "session must be retired");
-      assert.strictEqual(kills, 1, "the stale child must be force-killed");
-      assert.isDefined(
-        collected.find((event) => event.type === "session.exited"),
-        "session.exited must be emitted",
+      // THE contract: the confirmed compression changed NOTHING about the
+      // session. Same registry entry, same child, no exit event — because qwen
+      // already swapped the compressed chat into the live session.
+      assert.isTrue(
+        yield* adapter.hasSession(threadId),
+        "session must survive a confirmed compaction",
       );
-      // The compaction row still settled as a success.
+      assert.strictEqual(kills, 0, "no child may be killed for a compaction");
+      assert.isUndefined(
+        collected.find((event) => event.type === "session.exited"),
+        "no session.exited for a compaction",
+      );
+      // The compaction row settled as a success.
       const compactionRow = collected.find(
         (event) =>
           event.type === "task.completed" &&
@@ -127,31 +144,21 @@ it.effect("a CONFIRMED compression retires the session; the next start resumes i
       );
       assert.isDefined(compactionRow, "the compaction task row must complete");
 
-      // The next action (live: ProviderService's allowRecovery on the next
-      // turn) resumes the SAME sessionId over session/load — the path that
-      // rebuilds the chat from the RECORDED (compressed) history.
-      yield* adapter.startSession({
-        threadId,
-        cwd: process.cwd(),
-        runtimeMode: "approval-required",
-        resumeCursor: { schemaVersion: 1, sessionId: FAKE_SESSION_ID },
-      });
-      assert.deepStrictEqual(
-        loadedSessionIds,
-        [FAKE_SESSION_ID],
-        "the restart must take session/load with the same sessionId",
-      );
-      // ru-code (warm engine v2.1): was 2 pre-pool — now 2 boot spares + one
-      // CHAINED refill per successful bind (first start and the post-retire
-      // resume): 4 total, zero cold boots. The session/load assertion above
-      // still proves the compressed resume path.
-      yield* pollForSpawns(() => spawns, 4, "2 boot spares + one chained refill per start");
-      assert.strictEqual(spawns, 4, "2 boot spares + refill per start (x2)");
-
+      // And the next turn goes straight out over the SAME session: no
+      // `session/load`, no second bind, no new session child.
       const secondTurn = yield* adapter
         .sendTurn({ threadId, input: "снова привет", runtimeMode: "approval-required" })
         .pipe(Effect.timeout("10 seconds"));
       yield* awaitReplyDelta(collected, secondTurn.turnId);
+      assert.deepStrictEqual(
+        loadedSessionIds,
+        [],
+        "nothing may be re-loaded: the compaction never retired the session",
+      );
+      // ru-code (warm engine v2.1): 2 boot spares + one CHAINED refill after the
+      // single bind. Was 4 while the retire forced a second bind.
+      yield* pollForSpawns(() => spawns, 3, "2 boot spares + the chained refill");
+      assert.strictEqual(spawns, 3, "2 boot spares + 1 refill; ONE session child");
 
       assert.deepStrictEqual(promptTexts, ["привет", "/compress", "снова привет"]);
       yield* Fiber.interrupt(eventsFiber);
@@ -184,8 +191,11 @@ for (const shape of [
   },
   {
     label: "a FAILED compress prompt keeps the session alive",
+    // ru-code (qwen-compression wave): the real sequence — the progress frame
+    // goes out, then the prompt is rejected (binary-verified,
+    // @ru-code/qwen-real-harness `compress-failure`).
     compressSteps: (steps: import("./fakeAcpCore.ts").PromptSteps) =>
-      steps.respondError(-32603, "compress exploded (fake)"),
+      steps.emitCompressProgress().emitCompressFailure("compress exploded (fake)"),
   },
 ] as const) {
   it.effect(shape.label, () =>

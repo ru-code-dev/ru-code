@@ -24,9 +24,12 @@ import { fakeAcpSpawnerLayer } from "./fakeAcpSpawner.ts";
 
 const decodeQwenSettings = Schema.decodeSync(QwenSettings);
 const THREAD_ID = ThreadId.make("qwen-compress-thread");
-// qwen 0.13.1's own vendor namespace; the adapter matches the `/slash_command`
-// suffix, so any fork prefix rides the same path.
-const COMPRESS_METHOD = "_qwencode/slash_command";
+// ru-code (qwen-compression wave): the compress steps below speak qwen 0.21.1's
+// ONLY channel — `session/update` `agent_message_chunk` +
+// `_meta.source:"slash_command"` (MessageEmitter.ts:152-165). The vendor
+// notification `_qwencode/slash_command` this suite used to script by hand is
+// gone from the CLI (Session.ts:6078 is its one `extNotification` call) and the
+// adapter's reader for it is retired.
 const PRE_TOKENS = 1000;
 const POST_TOKENS = 400;
 
@@ -40,10 +43,7 @@ const script: FakeAcpScript = {
   onPrompt: (steps) =>
     steps
       // qwen streams the compaction result as a raw, non-localized English string.
-      .emitExtNotification(COMPRESS_METHOD, {
-        message: `Context compressed (${PRE_TOKENS} -> ${POST_TOKENS})`,
-        messageType: "info",
-      })
+      .emitCompressResult({ preTokens: PRE_TOKENS, postTokens: POST_TOKENS })
       .respondOk(),
 };
 

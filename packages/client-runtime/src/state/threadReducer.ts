@@ -1,3 +1,6 @@
+// ru-code (qwen-compression wave): the context-window supersede rule, shared
+// with the server's snapshot pruner (@ru-code/context-window).
+import { contextWindowSupersedes } from "@ru-code/context-window";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as O from "effect/Order";
@@ -639,6 +642,11 @@ export function applyThreadDetailEvent(
       // dropStaleContextWindowActivities; retention stays per turn so a
       // thread.reverted that discards turns can still resolve a value from
       // the turns that survive.
+      // ru-code (qwen-compression wave): the supersede KEY is decided by
+      // @ru-code/context-window, shared with the server's snapshot pruner. A
+      // compaction row carries `turnId: null` — no turn owned the change — and
+      // must replace every earlier row, not just the ones of its own (absent)
+      // turn. Per-turn retention is unchanged for ordinary usage rows.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
       const activities = pipe(
         thread.activities,
@@ -647,7 +655,7 @@ export function applyThreadDetailEvent(
             entry.id !== activity.id &&
             !(
               supersedesContextWindow &&
-              entry.turnId === activity.turnId &&
+              contextWindowSupersedes(activity.turnId, entry.turnId) &&
               isResolvableContextWindowActivity(entry)
             ),
         ),

@@ -34,6 +34,12 @@ import {
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "../../../provider/acp/AcpRuntimeModel.ts";
+// ru-code (qwen-compression wave): the barrier event, reused verbatim from the
+// port's generic runtime rather than re-declared — the tag name is what the
+// adapter's notification loop switches on, and Cursor's and Grok's loops already
+// switch on the same one (CursorAdapter.ts:789, GrokAdapter.ts:787). Type-only,
+// so nothing of that module is loaded.
+import type { AcpSessionEventStreamBarrier } from "../../../provider/acp/AcpSessionRuntime.ts";
 // ru-code (cli-reload): the auth flag + the early permit release. This runtime is NOT a
 // spawn-scheduler client — the permit is taken one level up, around the whole session start —
 // but it is where the AUTH WINDOW closes, so it is where the permit is handed back.
@@ -57,6 +63,10 @@ import {
   QwenBackgroundEndTurnParams,
   readQwenBackgroundNotification,
 } from "../background/backgroundTaskContract.ts";
+// ru-code (qwen-compression wave): the slash-command stamp. Read here for the
+// same reason the background marker is — a frame the adapter does not put in the
+// chat must not mint an assistant SEGMENT either.
+import { isQwenSlashCommandFrame } from "../compaction/compactionWire.ts";
 
 // ru-code: how long `readChildExit` waits for the child's exit status before
 // concluding the child is still alive. On the B1 path the child has already
@@ -65,6 +75,21 @@ import {
 const CHILD_EXIT_READ_TIMEOUT_MS = 500;
 
 type AcpClientService = EffectAcpClient.AcpClient["Service"];
+
+/**
+ * ru-code (qwen-compression wave): what `getEvents()` carries — every parsed
+ * `session/update` event, plus the ordering BARRIER `drainEvents` enqueues.
+ *
+ * The barrier exists because qwen 0.21.1 reports a `/compress` on the SAME
+ * ordered stdio pipe as the `session/prompt` response (a `session/update`
+ * chunk, MessageEmitter.ts:152-165, awaited before the response is written —
+ * Session.ts:8477-8480, :4247-4254). The chunk is therefore always OFFERED into
+ * this FIFO queue before the prompt resolves; what is not guaranteed is that the
+ * notification fiber has CONSUMED it yet. A caller that must read a per-chunk
+ * side effect after its prompt resolves offers a barrier and awaits it: FIFO
+ * makes the barrier's consumption strictly later than the chunk's.
+ */
+export type QwenAcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
 
 function formatConfigOptionValue(value: string | boolean): string {
   return JSON.stringify(value);
@@ -155,7 +180,18 @@ export interface AcpSessionRuntimeShape {
   readonly bindAndStart: (
     params: AcpSessionBindParams,
   ) => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
-  readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
+  readonly getEvents: () => Stream.Stream<QwenAcpSessionRuntimeEvent, never>;
+  /**
+   * ru-code (qwen-compression wave): block until every `session/update`
+   * already queued has been CONSUMED by the notification loop.
+   *
+   * Offers an `EventStreamBarrier` into the same FIFO queue the frames ride
+   * and awaits its acknowledgement, so it needs no timer and cannot be
+   * defeated by a slow consumer. `compactContext` calls it after
+   * `session/prompt` resolves, which is what makes the compaction outcome
+   * final before it is read (see `QwenAcpSessionRuntimeEvent`).
+   */
+  readonly drainEvents: Effect.Effect<void>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
   readonly prompt: (
@@ -269,7 +305,7 @@ const makeAcpSessionRuntime = (
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
-    const eventQueue = yield* Queue.unbounded<AcpParsedSessionEvent>();
+    const eventQueue = yield* Queue.unbounded<QwenAcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
@@ -786,6 +822,14 @@ const makeAcpSessionRuntime = (
       warmup: () => Effect.asVoid(warmupInternal),
       bindAndStart: (params) => bindInternal(params),
       getEvents: () => Stream.fromQueue(eventQueue),
+      // ru-code (qwen-compression wave): the ordering barrier. Same shape as
+      // the port's generic runtime (AcpSessionRuntime.ts:709-716), so the
+      // adapter's `case "EventStreamBarrier"` reads identically to Cursor's.
+      drainEvents: Effect.gen(function* () {
+        const acknowledge = yield* Deferred.make<void>();
+        yield* Queue.offer(eventQueue, { _tag: "EventStreamBarrier", acknowledge });
+        yield* Deferred.await(acknowledge);
+      }),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       prompt: (payload) =>
@@ -898,7 +942,7 @@ const handleSessionUpdate = ({
   params,
   runtimeInstanceId,
 }: {
-  readonly queue: Queue.Queue<AcpParsedSessionEvent>;
+  readonly queue: Queue.Queue<QwenAcpSessionRuntimeEvent>;
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
@@ -986,6 +1030,19 @@ const handleSessionUpdate = ({
         // other half: closing it would break a live turn's own reply in two
         // just because a detached agent happened to finish mid-sentence.
         if (readQwenBackgroundNotification(event.rawPayload) !== undefined) {
+          yield* Queue.offer(queue, event);
+          continue;
+        }
+        // ru-code (qwen-compression wave): a SLASH-COMMAND report
+        // (`_meta.source:"slash_command"`, MessageEmitter.ts:152-165) must not
+        // mint an assistant segment either. At 0.13.1 this text arrived as a
+        // vendor ext notification and never reached this machinery; at 0.21.1 it
+        // is an ordinary `agent_message_chunk`, and the adapter either drops it
+        // (a HIDDEN `/compress`, which runs with no turn of ours at all — the
+        // segment's `item.started` would carry no turnId) or replaces its text
+        // with the localized line. Either way a segment opened here would
+        // survive as an empty assistant bubble.
+        if (isQwenSlashCommandFrame(event.rawPayload)) {
           yield* Queue.offer(queue, event);
           continue;
         }
@@ -1110,7 +1167,7 @@ const ensureActiveAssistantSegment = ({
   sessionId,
   runtimeInstanceId,
 }: {
-  readonly queue: Queue.Queue<AcpParsedSessionEvent>;
+  readonly queue: Queue.Queue<QwenAcpSessionRuntimeEvent>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly sessionId: string;
   readonly runtimeInstanceId: string;
@@ -1148,7 +1205,7 @@ const closeActiveAssistantSegment = ({
   queue,
   assistantSegmentRef,
 }: {
-  readonly queue: Queue.Queue<AcpParsedSessionEvent>;
+  readonly queue: Queue.Queue<QwenAcpSessionRuntimeEvent>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
 }) =>
   Ref.modify(assistantSegmentRef, (current) => {

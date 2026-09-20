@@ -19,7 +19,7 @@ import {
   catalogKindConfig,
   parseCatalogTokenSegments,
   type CatalogKind,
-} from "@smart-tools/qwen-cli-catalog-core/contracts";
+} from "@smart-tools/qwen-cli-common/catalog-token";
 
 import {
   COMPOSER_INLINE_CHIP_ICON_CLASS_NAME,

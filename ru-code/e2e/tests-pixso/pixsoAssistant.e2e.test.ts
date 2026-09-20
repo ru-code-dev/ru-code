@@ -947,3 +947,67 @@ test("a wedged get_image never blocks a scan — the card still lands, on the SV
   await expect(overview.locator('img[src^="data:image/svg+xml"]').first()).toBeVisible();
   await expect(overview.getByTestId("pixso-preview-source")).toHaveCount(0);
 });
+
+// S78 F1 — two tabs, one server gallery. The drain's re-read after a gallery edit is how a tab
+// falls back to the SERVER's gallery (`store.ts` `mutateGallery` → `refreshSnapshot`). Tab B pins a
+// group; tab A — which still holds the gallery it read before, since nothing pushes the gallery —
+// toggles the same pin: it shows "pinned" at once (optimistic) while the server, running the same
+// reducer on ITS state, unpins it. After tab A's edit is persisted, both tabs must show what the
+// server holds. Since S76 the re-read is a query that hands back the object it already held when
+// the server's answer is equal to it, and the store drops an object it already applied.
+test("two tabs toggle the same group's pin: tab A shows what the server holds (S78 F1)", async ({
+  page,
+}) => {
+  // The menu item reads «Закрепить» for an unpinned group and «Открепить» for a pinned one.
+  const PIN = "Закрепить";
+  await openPixsoPanel(page);
+  // The gallery renders its sections only with something in it.
+  await runScan(page);
+  await openGallery(page);
+
+  const groupName = `S78 ${String(Date.now())}`;
+  await page.getByTestId("pixso-new-group-button").click();
+  await page.getByTestId("pixso-new-group-name").fill(groupName);
+  await page.getByTestId("pixso-new-group-create").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await awaitGalleryPersisted(page);
+  const header = (tab: Page) =>
+    tab
+      .getByTestId("pixso-group-section")
+      .filter({ hasText: groupName })
+      .first()
+      .getByText(groupName)
+      .first();
+  const menuItem = async (tab: Page, label: string) => {
+    await header(tab).click({ button: "right" });
+    return tab.getByRole("menuitem", { name: label, exact: true });
+  };
+
+  // Tab B opens AFTER the group exists, so its first read holds it.
+  const other = await page.context().newPage();
+  try {
+    await openPixsoPanel(other);
+    await openGallery(other);
+    await (await menuItem(other, PIN)).click();
+    await awaitGalleryPersisted(other);
+
+    // Tab A still shows the group unpinned, and toggles it: the server unpins it.
+    await (await menuItem(page, PIN)).click();
+    await awaitGalleryPersisted(page);
+
+    // The server's truth, read fresh by a reloaded tab B: unpinned.
+    await openPixsoPanel(other);
+    await openGallery(other);
+    await expect(await menuItem(other, PIN), "the server holds the group unpinned").toBeVisible();
+    await other.keyboard.press("Escape");
+
+    // Tab A must say the same once its drain's re-read has landed.
+    await expect(
+      await menuItem(page, PIN),
+      "tab A after its own edit is persisted and re-read",
+    ).toBeVisible({ timeout: 15_000 });
+    await page.keyboard.press("Escape");
+  } finally {
+    await other.close();
+  }
+});

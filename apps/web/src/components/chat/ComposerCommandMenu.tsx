@@ -19,10 +19,10 @@ import {
   CommandSeparator,
 } from "../ui/command";
 import { PierreEntryIcon } from "./PierreEntryIcon";
-// ru-code: catalog `$skill`/`#agent` row icon — logic/markup lives in ru-code.
-import { CatalogMenuItemIcon } from "~/ru-code/skills-agents/composer/catalogMenuRender";
-// ru-code: 3-section (Проект / Глобальные / Встроенные) grouping for catalog-sourced picker rows.
-import { groupCatalogComposerItems } from "~/ru-code/skills-agents/composer/groupCatalogComposerItems";
+// ru-code: plugins — one section per plugin for `plugin-item` rows, and the lucide-by-name glyph.
+import { groupPluginComposerItems } from "~/ru-code/plugins/composerRows";
+import { PluginIcon } from "~/ru-code/plugins/PluginIcon";
+import { pluginDisplayName } from "~/ru-code/plugins/status";
 
 export type ComposerCommandItem =
   | {
@@ -58,35 +58,25 @@ export type ComposerCommandItem =
       label: string;
       description: string;
     }
-  // ru-code: catalog-sourced skill/agent picker rows (qwen). Distinct from the native `skill` row so
-  // the port's own $skill path is never disturbed. Inserted as delimited `skill:⟦name⟧`/`agent:⟦name⟧`.
+  // ru-code: plugins — a row a dropped-in plugin contributed for one of the three EXISTING triggers —
+  // `command` → `/`, `skill` → `$`, `agent` → `#`. No new trigger and no new Lexical node.
+  //
+  // `insert` is the EXACT text pasted, always. v1 had two rules (a registered item's prompt got a
+  // trailing space appended, a provider row's did not) carried per row as `insertVerbatim`; the
+  // SDK now says the author owns the trailing space, so the host has one rule and no field for it.
+  // `icon` is a lucide NAME rendered by the host — plugin React never reaches this menu.
   | {
       id: string;
-      type: "catalog-skill";
-      name: string;
+      type: "plugin-item";
+      trigger: "command" | "skill" | "agent";
+      pluginId: string;
       label: string;
       description: string;
-      // ru-code: which section this row groups under (Проект / Глобальные / Встроенные).
-      scope: "project" | "global" | "builtin";
-    }
-  | {
-      id: string;
-      type: "catalog-agent";
-      name: string;
-      label: string;
-      description: string;
-      // ru-code: which section this row groups under (Проект / Глобальные / Встроенные).
-      scope: "project" | "global" | "builtin";
-    }
-  // ru-code: catalog-sourced custom slash-command rows (qwen). Inserted as plain `/name ` — qwen runs
-  // it as a slash command (identity = filename), unlike the delimited $skill/#agent tokens.
-  | {
-      id: string;
-      type: "catalog-command";
-      name: string;
-      label: string;
-      description: string;
-      scope: "project" | "global" | "builtin";
+      insert: string;
+      /** Section label; absent ⇒ the plugin's own display name. */
+      group?: string;
+      /** A `lucide-react` icon name; unknown or absent ⇒ the plugin family's puzzle glyph. */
+      icon?: string;
     };
 
 type ComposerCommandGroup = {
@@ -119,16 +109,24 @@ function groupCommandItems(
   triggerKind: ComposerTriggerKind | null,
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroup[] {
-  // ru-code: skill/agent pickers. When the rows are catalog-sourced (qwen), group them into the
-  // Проект / Глобальные / Встроенные sections; the logic lives in ru-code so this stays a delegate.
-  // Native (non-catalog) providers carry no `scope`, so groupCatalogComposerItems returns [] and we
-  // fall back to the single flat group.
+  // ru-code: skill/agent pickers. A plugin's rows carry their own section label (a catalog
+  // provider names Проект / Глобальные / Встроенные), so the sectioning is one delegate; the app's
+  // own native provider rows have no `group` and fall back to the single flat group below.
   if (triggerKind === "skill" || triggerKind === "subagent") {
-    const catalogGroups = groupCatalogComposerItems(items);
-    if (catalogGroups.length > 0) return catalogGroups;
-    return items.length > 0
-      ? [{ id: triggerKind, label: triggerKind === "skill" ? "Skills" : "Agents", items }]
-      : [];
+    // ru-code: plugins — plugin rows get their own section per plugin, after the app's own sections.
+    const pluginGroups = groupPluginComposerItems(items, pluginDisplayName);
+    const ownItems = items.filter((item) => item.type !== "plugin-item");
+    const ownGroups =
+      ownItems.length > 0
+        ? [
+            {
+              id: triggerKind,
+              label: triggerKind === "skill" ? "Skills" : "Agents",
+              items: ownItems,
+            },
+          ]
+        : [];
+    return [...ownGroups, ...pluginGroups];
   }
   if (triggerKind !== "slash-command" || !groupSlashCommandSections) {
     return [{ id: "default", label: null, items }];
@@ -138,9 +136,10 @@ function groupCommandItems(
   const providerItems = items.filter((item) => item.type === "provider-slash-command");
 
   const groups: ComposerCommandGroup[] = [];
-  // ru-code: our catalog-sourced custom commands first, grouped by scope (Проект / Глобальные).
-  for (const catalogGroup of groupCatalogComposerItems(items)) {
-    groups.push(catalogGroup);
+  // ru-code: a dropped-in plugin's `/` rows lead the menu, one section per plugin — which since
+  // A25 is where the catalog's custom commands (Проект / Глобальные) arrive too.
+  for (const pluginGroup of groupPluginComposerItems(items, pluginDisplayName)) {
+    groups.push(pluginGroup);
   }
   if (builtInItems.length > 0) {
     groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
@@ -300,14 +299,10 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           <SkillGlyph className="size-3.5" />
         </span>
       ) : null}
-      {/* ru-code: catalog skill/agent row icon delegated to ru-code. */}
-      {props.item.type === "catalog-skill" || props.item.type === "catalog-agent" ? (
-        <CatalogMenuItemIcon kind={props.item.type === "catalog-agent" ? "agent" : "skill"} />
-      ) : null}
-      {/* ru-code: catalog custom-command row — a slash command, so the slash-command icon. */}
-      {props.item.type === "catalog-command" ? (
-        <BotIcon className="size-4 shrink-0 text-muted-foreground/80" />
-      ) : null}
+      {/* ru-code: plugins — the row's glyph is a lucide NAME the HOST renders (V2-6) — a plugin component
+          can no longer reach this menu at all, which is what makes a throwing glyph impossible
+          rather than merely wrapped. An unknown name falls back to the puzzle. */}
+      {props.item.type === "plugin-item" ? <PluginRowIcon name={props.item.icon} /> : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0">{props.item.label}</span>
         <span className="min-w-0 flex-1 truncate text-secondary-label text-xs">
@@ -320,3 +315,12 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     </CommandItem>
   );
 });
+
+/** ru-code: plugins — a row's glyph — the lucide icon it named, or the plugin family's puzzle. */
+function PluginRowIcon({ name }: { readonly name: string | undefined }) {
+  return (
+    <span className="inline-flex size-4 shrink-0 items-center justify-center text-icon-muted">
+      <PluginIcon className="size-3.5" name={name} />
+    </span>
+  );
+}

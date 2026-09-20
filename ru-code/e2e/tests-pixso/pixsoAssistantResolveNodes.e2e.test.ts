@@ -30,7 +30,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { NODES_FETCH_ENABLED } from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
+import { NODES_FETCH_ENABLED } from "@smart-tools/t3-code-pixso-mcp-assistant-plugin/contracts";
 
 import type { HarnessState } from "../scripts/bootApp.ts";
 import { expect, readHarnessState, test, type Page } from "../tests-core/fixtures.ts";

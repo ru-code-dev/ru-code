@@ -35,7 +35,9 @@ export function browseInputEndPaddingClass(input: {
  * search (⇧⌘F). One reducer owns open/mode state so the surfaces can never
  * stack and re-triggering a mode's shortcut toggles it closed.
  */
-export type SearchOverlayMode = "command" | "files" | "content";
+// ru-code: plugins — `"folder"` is the host-owned folder picker a plugin asked for through
+// `ctx.pickFolder` (V2-33): the same dialog, one more body (`ru-code/plugins/FolderPickerPalette`).
+export type SearchOverlayMode = "command" | "files" | "content" | "folder";
 
 export interface CommandPaletteOpenIntent {
   readonly kind: "add-project" | "new-thread-in";
@@ -52,6 +54,8 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
   | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
+  // ru-code: plugins — a plugin's `ctx.pickFolder` request (V2-33): open the picker, or keep it.
+  | { readonly _tag: "OpenFolderPicker" }
   | { readonly _tag: "ClearOpenIntent" };
 
 export function reduceCommandPaletteUiState(
@@ -73,6 +77,12 @@ export function reduceCommandPaletteUiState(
       return { open: true, mode: "command", openIntent: { kind: "add-project" } };
     case "OpenNewThreadIn":
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
+    // ru-code: plugins — (V2-33) a no-op while the picker is already showing, so a queued second
+    // request re-opens the mode rather than toggling it shut.
+    case "OpenFolderPicker":
+      return state.open && state.mode === "folder"
+        ? state
+        : { open: true, mode: "folder", openIntent: null };
     case "ClearOpenIntent":
       return state.openIntent ? { ...state, openIntent: null } : state;
   }

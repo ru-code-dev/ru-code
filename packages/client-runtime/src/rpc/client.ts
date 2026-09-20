@@ -1,8 +1,8 @@
 import {
   AUTO_UPDATE_METHODS, // ru-code: auto-update live state subscription
   MCP_MANAGER_METHODS,
+  PLUGIN_METHODS, // ru-code: the plugin system's server→web state stream (V2-58)
   ORCHESTRATION_WS_METHODS,
-  PIXSO_ASSISTANT_METHODS, // ru-code: the Pixso assistant scan-job subscription
   TRANSCRIPT_WS_METHODS, // ru-code: extended-chat transcript subscription
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -68,8 +68,12 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof TRANSCRIPT_WS_METHODS.subscribeTranscript
   // ru-code: the auto-update live state subscription.
   | typeof AUTO_UPDATE_METHODS.subscribeAutoUpdate
-  // ru-code: the Pixso assistant scan-job state subscription.
-  | typeof PIXSO_ASSISTANT_METHODS.pixsoAssistantScanSubscribe;
+  // ru-code: plugins — S69 (V2-58): the state seam's stream — one stream per tab, the current
+  // value of every plugin's names first, then each change. A SUBSCRIPTION and not a stream command:
+  // `subscribe` re-opens it on every new session by itself (`SubscriptionRef.changes(
+  // supervisor.session)` + `switchMap`), so the resubscribe on a new session IS the reconnect rule,
+  // and the one thing a plugin must not have to write.
+  | typeof PLUGIN_METHODS.pluginState;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient

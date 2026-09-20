@@ -20,7 +20,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import { FAKE_ACP_ENTRY, RU_CODE_TMP_ROOT } from "../harness/primitives.ts";
-import { PIXSO_MCP_ENDPOINT } from "@smart-tools/t3-code-pixso-mcp-assistant/contracts";
+import { PIXSO_MCP_ENDPOINT } from "@smart-tools/t3-code-pixso-mcp-assistant-plugin/contracts";
 
 // T10 (reorg wave, decisions 438/442, owner option A "full merge"): the fake REMOTE
 // Pixso MCP is no longer a separate process/port — `harness/fakeRemotePixsoMcp.ts` was

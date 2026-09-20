@@ -259,6 +259,29 @@ function stagePayload(): void {
   NodeFS.cpSync(NodePath.join(distDir, "client"), NodePath.join(payloadDir, "client"), {
     recursive: true,
   });
+  // ru-code: plugins — (V2-20) the SHIPPED plugin set, a sibling of `client/` inside the version payload.
+  // `pnpm build` staged it into `apps/server/dist/plugins` (apps/server/scripts/cli.ts); this copy
+  // lands it at `versions/<v>/plugins/<id>` BEFORE `writeChecksums`, so the plugin bytes are
+  // inside the per-file integrity map the installer and the updater both re-verify — not beside
+  // it. Deliberately NOT in `ensureBuild`'s required list and deliberately tolerant of an absent
+  // directory: a release with no shipped plugins is legal (a fork, a minimal build, a clone
+  // without the `ru-code-packages` symlink), and `validate_archive` in the installer does not ask
+  // for `plugins/` either. Nothing downstream enumerates the payload by name, so this new
+  // subdirectory costs the installer and the updater zero changes.
+  const pluginsDist = NodePath.join(distDir, "plugins");
+  if (NodeFS.existsSync(pluginsDist)) {
+    const ids = NodeFS.readdirSync(pluginsDist, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    if (ids.length > 0) {
+      NodeFS.cpSync(pluginsDist, NodePath.join(payloadDir, "plugins"), { recursive: true });
+      log(`staged ${String(ids.length)} shipped plugin(s): ${ids.join(", ")}`);
+    } else {
+      log("no shipped plugins staged (empty apps/server/dist/plugins) — payload carries none");
+    }
+  } else {
+    log("no shipped plugins staged (no apps/server/dist/plugins) — payload carries none");
+  }
 }
 
 // ru-code: the two files that make the extracted tree a LAUNCHABLE install — the frozen wrapper and

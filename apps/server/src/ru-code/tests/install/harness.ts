@@ -293,6 +293,14 @@ export function writeFakeRelease(
      * and `stop`. `cliVersionExit` is ignored when this is set — the script owns every branch.
      */
     readonly cliScript?: string;
+    /**
+     * ru-code (V2-20): SHIPPED plugin ids to write as `versions/<v>/plugins/<id>/plugin.json`.
+     *
+     * Opt-in and absent by default, so every existing spec keeps the payload it has always had —
+     * which is also the case that must keep working: a release carrying no `plugins/` is legal and
+     * `validate_archive` does not ask for it.
+     */
+    readonly shippedPlugins?: ReadonlyArray<string>;
   } = {},
 ): string {
   const version = opts.version ?? "1.0.0";
@@ -332,6 +340,21 @@ export function writeFakeRelease(
   NodeFS.mkdirSync(NodePath.join(payload, "node_modules"), { recursive: true });
   NodeFS.writeFileSync(NodePath.join(payload, "node_modules", ".keep"), "");
   NodeFS.writeFileSync(NodePath.join(payload, "runtime.mjs"), "// bundled sidecar\n");
+
+  // ru-code (V2-20): the shipped set rides INSIDE the version payload, a sibling of `client/` —
+  // so it is copied by the same `cp -R` the installer already does and needs no installer change.
+  for (const id of opts.shippedPlugins ?? []) {
+    const dir = NodePath.join(payload, "plugins", id);
+    NodeFS.mkdirSync(NodePath.join(dir, "web"), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(dir, "plugin.json"),
+      `${JSON.stringify({ id, name: id, version, apiVersion: 2, web: "web/index.mjs" })}\n`,
+    );
+    NodeFS.writeFileSync(
+      NodePath.join(dir, "web", "index.mjs"),
+      `export const shippedBy = ${JSON.stringify(version)};\n`,
+    );
+  }
 
   // The REAL frozen launcher + the REAL pointer shape — same emitters the release build uses.
   NodeFS.writeFileSync(

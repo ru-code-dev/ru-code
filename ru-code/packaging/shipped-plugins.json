@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "ru-code (V2-20): the plugins that SHIP inside the release payload, staged into",
+    "apps/server/dist/plugins by `pnpm stage:plugins` (which `pnpm build` runs) and copied",
+    "into versions/<v>/plugins by prepare-release, beside client/.",
+    "",
+    "Each entry is a FOLDER PATH, not a package name: the folder that IS the plugin (the SDK",
+    "build emits plugin.json at the root of dist/). Relative paths resolve from the app root;",
+    "absolute paths are allowed. The folder is copied to <dest>/<manifest id>, so the path's own",
+    "basename (`dist`) never reaches the payload — the loader's D8 rule (folder name == id) holds",
+    "by construction.",
+    "",
+    "SKIP RULE: a path that does not exist, is not a directory, has no plugin.json, or whose",
+    "plugin.json does not decode is LOGGED and SKIPPED — it never fails the build. A release",
+    "carrying no plugins is legal (a fork, a minimal build), so `plugins/` is not a required",
+    "member of the payload. Duplicate ids: the first entry wins, the later one is skipped.",
+    "",
+    "`demo` deliberately never ships (V2-21) — it is the dev/e2e fixture.",
+    "",
+    "S55: a path MAY POINT THROUGH A SIBLING-REPO SYMLINK. `ru-code-plugin-auto-coder/dist` is the first one —",
+    "that plugin lives in its own repository now (`t3-ru-code/ru-code-plugin-auto-coder`), reached through the",
+    "gitignored `ru-code-plugin-auto-coder` link at the app root, exactly as `ru-code-packages` reaches the",
+    "packages checkout. Nothing here had to learn about repositories: the entry is still a folder",
+    "path, and a clone without the sibling checkout hits the SKIP RULE above and ships without it."
+  ],
+  "plugins": [
+    "ru-code-plugin-auto-coder/dist",
+    "ru-code-packages/packages/plugin-analytics/dist",
+    "ru-code-packages/packages/plugin-catalogs/dist",
+    "ru-code-packages/packages/plugin-project-settings/dist",
+    "ru-code-packages/packages/plugin-demo/dist",
+    "ru-code-packages/packages/t3-code-pixso-mcp-assistant-plugin/dist"
+  ]
+}

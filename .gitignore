@@ -70,6 +70,11 @@ ru-code/keys
 /install
 # cross-repo link to the sibling @smart-tools/qwen-cli-* packages (symlink + pnpm hook)
 ru-code-packages
+# ru-code S55: the same mechanism for the first EXTERNAL plugin repo. `ru-code-plugin-auto-coder` is a symlink to
+# the sibling `t3-ru-code/ru-code-plugin-auto-coder` checkout, and `ru-code/packaging/shipped-plugins.json` names
+# a path through it. Absent ⇒ that one entry is skipped at stage time and the release simply ships
+# without the plugin, which is exactly what `stageShippedPlugins` does for any missing dist.
+ru-code-plugin-auto-coder
 .pnpmfile.cjs
 
 

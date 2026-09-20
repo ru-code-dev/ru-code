@@ -2,7 +2,7 @@
   "name": "@ru-code/e2e",
   "version": "0.0.0",
   "private": true,
-  "description": "Real-Chrome Playwright harness: the real app driven against the fake ACP CLI. Deliberately has NO `test` script — `vp run -r test` (the gates) must never require a browser; run via `pnpm --filter @ru-code/e2e test:core` (or test:contracts / test:warm / test:performance / test:outdated / test:pixso).",
+  "description": "Real-Chrome Playwright harness: the real app driven against the fake ACP CLI. Deliberately has NO `test` script — `vp run -r test` (the gates) must never require a browser; run via `pnpm --filter @ru-code/e2e test:core` (or test:contracts / test:warm / test:performance / test:outdated / test:pixso / test:plugins).",
   "type": "module",
   "scripts": {
     "e2e:clean-up": "find /tmp -mindepth 1 -maxdepth 1 \\( -name 'au-*' -o -name 'cursor-*' -o -name 'pr-*' -o -name 'ru-*' -o -name 't3*' -o -name 'envfacts-*' -o -name 'fetch-*' -o -name 'gc-*' -o -name 'journal-*' -o -name 'layout-*' -o -name 'pointer-*' -o -name 'local-main-*' -o -name 'userdata' -o -name 'caches' -o -name 'worktrees' \\) ! -name '*oxlint*' -exec rm -rf {} + 2>/dev/null; true",
@@ -11,11 +11,12 @@
     "test:warm": "pnpm e2e:clean-up && playwright test -c playwright.warm.config.ts && pnpm e2e:clean-up",
     "test:performance": "pnpm e2e:clean-up && playwright test -c playwright.performance.config.ts && pnpm e2e:clean-up",
     "test:outdated": "pnpm e2e:clean-up && playwright test -c playwright.outdated.config.ts && pnpm e2e:clean-up",
-    "test:pixso": "pnpm e2e:clean-up && playwright test -c playwright.pixso.config.ts && pnpm e2e:clean-up"
+    "test:pixso": "pnpm e2e:clean-up && playwright test -c playwright.pixso.config.ts && pnpm e2e:clean-up",
+    "test:plugins": "pnpm e2e:clean-up && playwright test -c playwright.plugins.config.ts && pnpm e2e:clean-up"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.26.0",
-    "@smart-tools/t3-code-pixso-mcp-assistant": "catalog:",
+    "@smart-tools/t3-code-pixso-mcp-assistant-plugin": "catalog:",
     "zod": "^4.4.3"
   },
   "devDependencies": {

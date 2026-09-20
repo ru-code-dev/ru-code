@@ -20,6 +20,11 @@ import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstall
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { AutoUpdateDriverMount } from "../ru-code/auto-update-ui/notify/AutoUpdateDriverMount";
+// ru-code: plugins — the crash net (below) and every always-mounted plugin component + the ctx signal
+// bridge, above the router — they must keep running across navigation and whether or not any
+// plugin surface is open. `PluginBackground` contributes no DOM.
+import { pluginCrashCandidate, recoverFromPluginCrash } from "../ru-code/plugins/PluginSurface";
+import { PluginBackground } from "../ru-code/plugins/seams";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { Button } from "../components/ui/button";
@@ -147,6 +152,7 @@ function RootRouteView() {
         {/* ru-code: app-wide, so the restart poll and the marker lifecycle keep running on
             /settings/* — where the install is actually started. See AutoUpdateDriverMount. */}
         {primaryEnvironmentAuthenticated ? <AutoUpdateDriverMount /> : null}
+        <PluginBackground /> {/* ru-code: plugins — background components + the ctx signals */}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the
             editor has to survive navigation away from settings. */}
@@ -251,8 +257,37 @@ function HostedStaticEnvironmentBootstrap() {
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
+  // ru-code (A13 round 2, A12 finding R2-H1): this card is where everything React routes past a
+  // plugin's own boundaries lands — an unmount-phase throw, a `label` that is not a string, a
+  // fault raised in a commit no boundary below is alive for. The user was shown «Something went
+  // wrong» for the whole app with nothing naming the plugin, and a reload brought it back.
+  //
+  // So before rendering the card: if a plugin's own boundary caught a fault a moment ago, close
+  // its panel, name the plugin once through the ordinary problem channel, and hand the router its
+  // own `reset()`. Guarded per plugin id inside `recoverFromPluginPanelCrash`, so a second crash
+  // from the same plugin — an app that is genuinely broken — still shows this card. `useState`'s
+  // initializer decides ONCE per mount, before the effect, so the card never flashes on the
+  // recoverable path.
+  //
+  // ru-code (A13 round 3, A12 finding R3-H3): the evidence is that FLAG and nothing else. Round 2
+  // asked only whether a plugin panel was open, which blamed a plugin for every app-level crash
+  // that happened to coincide with its panel — and stayed silent at boot, where a plugin's
+  // malformed `host.toast(…)` put this card on screen with no panel open at all.
+  const [crashedPluginId] = useState(pluginCrashCandidate); // ru-code: plugins — crash attribution
+  const recovered = useRef(false);
+  useEffect(() => {
+    if (crashedPluginId === null || recovered.current) return;
+    recovered.current = true;
+    recoverFromPluginCrash(crashedPluginId, error);
+    reset();
+  }, [crashedPluginId, error, reset]);
+
   const message = errorMessage(error);
   const details = errorDetails(error);
+
+  if (crashedPluginId !== null) {
+    return null;
+  }
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">

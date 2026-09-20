@@ -2,7 +2,7 @@
 //
 // The server itself (both routes, the synthetic PNG, the realistic card tables and the
 // capture loader) moved into `@smart-tools/pixso-core` on 2026-08-24 (the extraction wave)
-// — before that it briefly lived in `@smart-tools/t3-code-pixso-mcp-assistant` (2026-08-21,
+// — before that it briefly lived in `@smart-tools/t3-code-pixso-mcp-assistant-plugin` (2026-08-21,
 // decisions 510/511, when it first moved out of this repo). It is Pixso tooling, it needs
 // the capture corpus, and both now live with pixso-core. This file stays only so the specs'
 // imports keep their names — the import path below is already correct (DW-4 task 8).

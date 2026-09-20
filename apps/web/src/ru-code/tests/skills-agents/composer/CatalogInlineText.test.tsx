@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { buildCatalogToken } from "@smart-tools/qwen-cli-catalog-core/contracts";
+import { buildCatalogToken } from "@smart-tools/qwen-cli-common/catalog-token";
 
 import { CatalogInlineText } from "../../../skills-agents/composer/CatalogInlineText";
 

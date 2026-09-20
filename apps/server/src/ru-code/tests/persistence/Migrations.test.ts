@@ -40,8 +40,9 @@ layer("ru-code fork migrations", (it) => {
         [
           "1_Mcp",
           "2_ProjectionThreadsChatViewMode",
-          "3_QwenUsage",
-          // ru-code (mid-turn wave, P3b): the delivery-mark column.
+          // ru-code (A19): id 3 ("QwenUsage", the analytics transcript cache) was removed when
+          // analytics became a dropped-in plugin. The gap is deliberate and id 3 is burned;
+          // this list is the assertion that the migrator tolerates it on a fresh database.
           "4_ProjectionThreadMessagesDeliveryState",
         ],
       );
@@ -50,7 +51,10 @@ layer("ru-code fork migrations", (it) => {
       assert.include(tables, "mcp_catalog_server");
       assert.include(tables, "mcp_project_binding");
       assert.include(tables, "mcp_probe_cache");
-      assert.include(tables, "analytics_file_cache");
+      // ru-code (A19): the analytics cache table belongs to the analytics PLUGIN now (its own
+      // `data.sqlite`), so a fresh `state.sqlite` must never grow it. Existing installs keep
+      // their orphaned copy — no DROP is shipped (phase-2 plan §4.2 / owner decision O4).
+      assert.notInclude(tables, "analytics_file_cache");
 
       const recorded = yield* sql<{ migration_id: number; name: string }>`
         SELECT migration_id, name FROM ru_code_migrations ORDER BY migration_id
@@ -60,8 +64,7 @@ layer("ru-code fork migrations", (it) => {
         [
           "1_Mcp",
           "2_ProjectionThreadsChatViewMode",
-          "3_QwenUsage",
-          // ru-code (mid-turn wave, P3b): the delivery-mark column.
+          // ru-code (A19): id 3 removed with the compiled-in analytics wiring; see above.
           "4_ProjectionThreadMessagesDeliveryState",
         ],
       );
@@ -114,7 +117,7 @@ coexistenceLayer("ru-code fork migrations — coexistence with upstream", (it) =
       const executed = yield* runRuCodeMigrations();
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [1, 2, 3, 4],
+        [1, 2, 4], // ru-code (A19): id 3 retired with the compiled-in analytics wiring.
       );
 
       const upstreamFirst = yield* sql<{ migration_id: number }>`

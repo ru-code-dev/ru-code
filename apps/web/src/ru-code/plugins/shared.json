@@ -1,0 +1,12 @@
+{
+  "react": "19",
+  "react/jsx-runtime": "19",
+  "react-dom": "19",
+  "react-dom/client": "19",
+  "effect": "4",
+  "zustand": "5",
+  "@base-ui/react": "1",
+  "@pierre/diffs": "1",
+  "effect/unstable/reactivity": "4",
+  "effect/unstable/rpc": "4"
+}

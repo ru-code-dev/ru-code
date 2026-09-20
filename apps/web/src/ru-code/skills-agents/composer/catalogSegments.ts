@@ -6,7 +6,7 @@ import {
   collectComposerInlineTokens,
   type ComposerInlineToken,
 } from "@t3tools/shared/composerInlineTokens";
-import { parseCatalogTokenSegments } from "@smart-tools/qwen-cli-catalog-core/contracts";
+import { parseCatalogTokenSegments } from "@smart-tools/qwen-cli-common/catalog-token";
 
 import type { ComposerPromptSegment } from "~/composer-editor-mentions";
 

@@ -1,7 +1,9 @@
 // ru-code: right-slot mutual exclusion as a STATE INVARIANT maintained at the writes.
 //
-// The thread panel (rightPanelStore) and the global skills/agents panel (useRightGlobalPanelStore)
-// share the right slot. Earlier attempts failed:
+// The thread panel (rightPanelStore) and the global panel (useRightGlobalPanelStore) share the
+// right slot. (Which panels are global is a plugin's own choice since V2-27 — a `mount: "tab"`
+// panel is a SURFACE of the thread panel and needs no exclusion, because it is the same slot's own
+// content.) Earlier attempts failed:
 //   - a cross-store render gate (`!globalPanelOpen` in ChatView) did NOT reliably hide the thread
 //     panel when a global panel opened — the thread panel kept rendering, so both showed;
 //   - a surface-id watcher missed no-op re-opens (re-activating an already-active surface).

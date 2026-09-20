@@ -6,6 +6,17 @@ import {
   useRightGlobalPanelStore,
 } from "../../../skills-agents/rightGlobalPanel/store";
 
+import { pluginPanelId } from "../../../skills-agents/rightGlobalPanel/store";
+
+/**
+ * A SECOND global panel, for the exclusion cases.
+ *
+ * These named a built-in panel until S44, when it became a plugin. A plugin's panel id is
+ * exactly what a second overlay looks like now (`pluginPanelId`), so the cases keep testing
+ * the same N-way rule against the shape the app really hosts.
+ */
+const OTHER_PANEL = pluginPanelId("demo", "notes")!;
+
 describe("rightGlobalPanel store", () => {
   beforeEach(() => {
     useRightGlobalPanelStore.setState({ open: null });
@@ -18,24 +29,24 @@ describe("rightGlobalPanel store", () => {
 
   it("toggle opens a panel, and toggling the same one closes it", () => {
     const { toggle } = useRightGlobalPanelStore.getState();
-    toggle("skills");
-    expect(useRightGlobalPanelStore.getState().open).toBe("skills");
+    toggle("mcp");
+    expect(useRightGlobalPanelStore.getState().open).toBe("mcp");
     expect(isGlobalPanelOpen()).toBe(true);
-    toggle("skills");
+    toggle("mcp");
     expect(useRightGlobalPanelStore.getState().open).toBeNull();
   });
 
   it("toggling a different panel switches (N-way mutual exclusion)", () => {
     const { toggle } = useRightGlobalPanelStore.getState();
-    toggle("skills");
-    toggle("agents");
+    toggle("mcp");
+    toggle(OTHER_PANEL);
     // Only one global panel is ever open.
-    expect(useRightGlobalPanelStore.getState().open).toBe("agents");
+    expect(useRightGlobalPanelStore.getState().open).toBe(OTHER_PANEL);
   });
 
   it("close() hands the slot back to the thread panel", () => {
     const { toggle, close } = useRightGlobalPanelStore.getState();
-    toggle("agents");
+    toggle(OTHER_PANEL);
     close();
     expect(useRightGlobalPanelStore.getState().open).toBeNull();
     expect(isGlobalPanelOpen()).toBe(false);
@@ -43,7 +54,7 @@ describe("rightGlobalPanel store", () => {
 
   describe("closeGlobalPanelIfOpen (right-panel toggle handoff)", () => {
     it("closes an open panel and reports it was open", () => {
-      useRightGlobalPanelStore.getState().toggle("skills");
+      useRightGlobalPanelStore.getState().toggle("mcp");
       expect(closeGlobalPanelIfOpen()).toBe(true);
       expect(useRightGlobalPanelStore.getState().open).toBeNull();
     });

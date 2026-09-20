@@ -179,6 +179,23 @@ const buildCmd = Command.make(
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
       }
 
+      // ru-code: plugins — (V2-20) stage the SHIPPED plugin set into `dist/plugins`, a sibling of
+      // `dist/client`, so one `import.meta.dirname`-relative probe resolves it in dev, in the
+      // release payload (`prepare-release` copies it beside `client`) and in the desktop artifact
+      // (which copies the whole of `apps/server/dist`). Spawned rather than imported for the same
+      // reason `verifyBuild.mjs` below is: `scripts/` is a separate typecheck project, and the
+      // build log wants the staging lines verbatim. NEVER fatal — a listed path that cannot be
+      // staged is logged and skipped (V2-20), and a build with no shipped plugins is legal.
+      yield* Effect.log("[cli] Staging shipped plugins...");
+      yield* runCommand(
+        ChildProcess.make(process.execPath, ["scripts/ru-code/plugins/stageShippedPlugins.ts"], {
+          cwd: repoRoot,
+          stdout: "inherit",
+          stderr: "inherit",
+          shell: false,
+        }),
+      );
+
       // ru-code: fail the build if any dictionary translation did not land in the emitted
       // bundles. Runs here because dist/ now holds BOTH the server bundle (bin.mjs) and the
       // web bundle (dist/client). This is the gate that catches the transform silently not

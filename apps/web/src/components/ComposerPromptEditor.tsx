@@ -85,7 +85,7 @@ import {
   ComposerCatalogTokenNode,
   $createComposerCatalogTokenNode,
 } from "~/ru-code/skills-agents/composer/ComposerCatalogTokenNode";
-import { formatCatalogItemDisplayName } from "@smart-tools/qwen-cli-catalog-core/contracts";
+import { formatCatalogItemDisplayName } from "@smart-tools/qwen-cli-common/catalog-token";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { registerComposerInlineTokenPaste } from "./composerInlineTokenPaste";
 

@@ -22,6 +22,11 @@ import {
   useState,
 } from "react";
 
+// ru-code: plugins — tab-mounted plugin panels (V2-27): the launcher cards, the "+" menu entries
+// (S22), the tab title and the tab icon, all from the panels seam. The host never names a plugin.
+import { PluginIcon } from "../ru-code/plugins/PluginIcon";
+import { displayNameOf, usePluginDisplayNames } from "../ru-code/plugins/status";
+import { usePluginTabSurfaces, type PluginTabSurface } from "../ru-code/plugins/tabSurfaces";
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
@@ -157,6 +162,49 @@ function SurfaceMenuItem(props: {
  * focused. The highlight only appears on hover or arrow use. Unavailable
  * surfaces stay visible with a one-line reason.
  */
+/**
+ * ru-code: plugins — one launcher card, as a VALUE rather than an inferred literal.
+ *
+ * The array below used to be `as const`, which typed the cards by their own literals; a
+ * contributed card (V2-27) is built at runtime, so the shape is stated once and both kinds are
+ * built against it. `shortcut` is nullable for the same reason: the app's letters (B/T/F/D/P/A) are
+ * a fixed table, and a plugin cannot be given one without colliding with the next plugin.
+ */
+interface SurfaceAction {
+  readonly label: string;
+  readonly description: string;
+  readonly icon: (props: { className?: string }) => ReactNode;
+  readonly shortcut: string | null;
+  readonly available: boolean;
+  /** The one-line hint an UNAVAILABLE card carries. A card that cannot be unavailable has none. */
+  readonly disabledReason?: string;
+  readonly onClick: () => void;
+  readonly badgeCount: number;
+}
+
+/** ru-code: plugins — the cards for the tab-mounted panels, in manifest order (V2-27). */
+const pluginSurfaceActions = (surfaces: ReadonlyArray<PluginTabSurface>): SurfaceAction[] =>
+  surfaces.map((surface) => ({
+    label: surface.title,
+    // The plugin's OWN `Panel.description` (S22), localized by the plugin like its title; `""`
+    // when it gave none, and then the card has no second line. Never the manifest name: it was
+    // the same line under every card of a plugin, and it is not what the panel is for.
+    description: surface.description,
+    icon: ({ className }) => <PluginIcon name={surface.icon} className={className} />,
+    shortcut: null,
+    // S15 N4: always. The launcher is the EMPTY STATE of a thread's right panel — `RightPanelTabs`
+    // draws it only when `activeSurfaceId === null`, and the two places that mount the component
+    // are `ChatView` (guarded on a non-null `activeThreadRef`, which is the very ref it publishes
+    // for these cards) and the pull-request route (which mounts it only WITH an active surface, so
+    // it never reaches the empty state). A contributed card is therefore always openable here, and
+    // the "Available from a thread." hint it used to carry was copy nothing could render. The
+    // entry that IS reachable off a chat is the sidebar footer's, and that one carries its own
+    // disabled state (`tabNavEntry`).
+    available: true,
+    onClick: surface.open,
+    badgeCount: 0,
+  }));
+
 function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
@@ -176,8 +224,10 @@ function RightPanelEmptyState(props: {
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
+  // ru-code: plugins — the tab-mounted panels a dropped-in plugin contributes (V2-27).
+  const pluginSurfaces = usePluginTabSurfaces();
 
-  const actions = [
+  const actions: ReadonlyArray<SurfaceAction> = [
     {
       label: "Browser",
       description: "Open a local app or URL.",
@@ -249,9 +299,9 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
     },
-  ] as const;
-
-  type SurfaceAction = (typeof actions)[number];
+    // ru-code: plugins — contributed cards come LAST, after every surface the app owns (V2-27).
+    ...pluginSurfaceActions(pluginSurfaces),
+  ];
 
   const availableActions = actions.filter((action) => action.available);
   const highlightIndex =
@@ -279,7 +329,8 @@ function RightPanelEmptyState(props: {
         if (editable && (editable.textContent ?? "").trim().length > 0) return;
       }
       const action = shortcutActionsRef.current.find(
-        (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),
+        // ru-code: plugins — a contributed card has no letter, and `null` matches no key.
+        (candidate) => candidate.shortcut?.toLowerCase() === event.key.toLowerCase(),
       );
       if (!action) return;
       event.preventDefault();
@@ -354,7 +405,7 @@ function RightPanelEmptyState(props: {
       tabIndex={0}
       onKeyDown={handleKeyDown}
       aria-label="Open a surface"
-      data-surface-launcher-keys={availableActions.map((action) => action.shortcut).join("")}
+      data-surface-launcher-keys={availableActions.map((action) => action.shortcut ?? "").join("")}
       className={cn(
         "flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 pt-6 outline-none",
         // The panel topbar sits above this container; matching bottom padding
@@ -388,14 +439,21 @@ function RightPanelEmptyState(props: {
                   isHighlighted(action) && highlightedCardClass,
                 )}
               >
-                <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
+                {action.shortcut === null ? null : (
+                  <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
+                )}
                 <span className="flex items-center gap-2 pe-8">
                   {actionIcon(action)}
                   <span className="font-medium text-sm">{action.label}</span>
                 </span>
-                <span className="mt-1.5 text-muted-foreground text-xs leading-relaxed">
-                  {action.description}
-                </span>
+                {/* ru-code: plugins — a contributed card may have no description (S22): no second line
+                    then; and one is CLAMPED (S26 A3) — the cap the value shares with a composer row
+                    (1000 chars) bounds the string, the clamp bounds the card. */}
+                {action.description === "" ? null : (
+                  <span className="mt-1.5 line-clamp-2 text-muted-foreground text-xs leading-relaxed">
+                    {action.description}
+                  </span>
+                )}
               </button>
             ) : (
               <div
@@ -405,7 +463,9 @@ function RightPanelEmptyState(props: {
                   cardShellClass,
                 )}
               >
-                <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
+                {action.shortcut === null ? null : (
+                  <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
+                )}
                 <span className="flex items-center gap-2 pe-8">
                   {actionIcon(action)}
                   <span className="font-medium text-sm">{action.label}</span>
@@ -426,6 +486,10 @@ function surfaceTitle(
   surface: RightPanelSurface,
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
+  // ru-code: plugins — the contributed panels, for a `plugin` surface's own title (V2-27).
+  pluginSurfaces: ReadonlyArray<PluginTabSurface>,
+  // ru-code: plugins — the display names the caller subscribed to (S15 B1), for the fallback below.
+  pluginNames: ReadonlyMap<string, string>,
 ): string {
   switch (surface.kind) {
     case "diff":
@@ -443,6 +507,17 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    // ru-code: plugins — the plugin's own `Panel.title`, falling back to the plugin's display name
+    // (S15 A1/A2). The fallback is not a rare frame: a tab whose plugin is uninstalled, disabled or
+    // broken is KEPT and renders empty, so the strip has to label it with the only thing the host
+    // still knows — the name `manifests.json` last gave that plugin, or its id. The names arrive
+    // through a subscription (S15 B1): a plugin that FAILS to load moves nothing else this strip
+    // watches, so without one the label sat on the id until an unrelated repaint.
+    case "plugin":
+      return (
+        pluginSurfaces.find((entry) => entry.surfaceId === surface.id)?.title ??
+        displayNameOf(pluginNames, surface.pluginId)
+      );
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -481,12 +556,15 @@ function SurfaceIcon({
   desktopByTabId,
   theme,
   pullRequestStatuses,
+  pluginSurfaces,
 }: {
   surface: RightPanelSurface;
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>;
   desktopByTabId: Readonly<Record<string, DesktopPreviewOverlay>>;
   theme: "light" | "dark";
   pullRequestStatuses: Readonly<Record<string, PullRequestTabStatus>> | undefined;
+  // ru-code: plugins — the contributed panels, for a `plugin` surface's icon NAME (V2-27).
+  pluginSurfaces: ReadonlyArray<PluginTabSurface>;
 }) {
   switch (surface.kind) {
     case "preview": {
@@ -528,6 +606,14 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    // ru-code: plugins — a lucide icon NAME the HOST renders (V2-6); plugin React never gets here.
+    case "plugin":
+      return (
+        <PluginIcon
+          name={pluginSurfaces.find((entry) => entry.surfaceId === surface.id)?.icon}
+          className="size-3 shrink-0"
+        />
+      );
   }
 }
 
@@ -535,6 +621,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   // ru-code: TERMINAL_UI_VISIBILITY — when off, the Terminal card and the "+" menu item vanish.
   const terminalUiEnabled = useTerminalUiEnabled(usePrimaryEnvironmentId());
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
+  // ru-code: plugins — the tab-mounted panels, for the tab strip's titles and icons (V2-27). The
+  // launcher reads the same hook itself, so a mount site passes nothing for either.
+  const pluginSurfaces = usePluginTabSurfaces();
+  // ru-code: plugins — S15 B1: a tab can outlive its plugin, and a plugin that FAILED to load moves
+  // nothing else this strip watches, so the label it falls back to needs its own subscription.
+  const pluginNames = usePluginDisplayNames();
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
 
@@ -644,7 +736,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             {props.surfaces.map((surface) => {
               const active = surface.id === props.activeSurfaceId;
               const pending = props.pendingSurfaceIds.has(surface.id);
-              const title = surfaceTitle(surface, props.previewSessions, props.terminalLabelsById);
+              const title = surfaceTitle(
+                surface,
+                props.previewSessions,
+                props.terminalLabelsById,
+                pluginSurfaces,
+                pluginNames,
+              );
               return (
                 <div
                   key={surface.id}
@@ -672,6 +770,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         desktopByTabId={props.desktopByTabId}
                         theme={resolvedTheme}
                         pullRequestStatuses={props.pullRequestStatuses}
+                        pluginSurfaces={pluginSurfaces}
                       />
                       {pending ? (
                         <span
@@ -768,6 +867,31 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Bot />
                     Agents
                   </SurfaceMenuItem>
+                  {/* ru-code: plugins — the tab-mounted panels a plugin contributes (S22, V2-27),
+                      LAST, after every surface the app owns, in manifest order. Selecting one
+                      opens the tab or focuses the one it already has — the card's own `open`.
+                      Off a thread (`/pull-requests`) the entry is greyed WITH its reason, like the
+                      app's own six (S26 A5); its description is one truncated line (S26 A3). */}
+                  {pluginSurfaces.map((surface) => (
+                    <SurfaceMenuItem
+                      key={surface.surfaceId}
+                      available={surface.available}
+                      {...(surface.unavailableReason === undefined
+                        ? {}
+                        : { disabledReason: surface.unavailableReason })}
+                      onClick={surface.open}
+                    >
+                      <PluginIcon name={surface.icon} />
+                      <span className="flex min-w-0 max-w-64 flex-col">
+                        <span className="truncate">{surface.title}</span>
+                        {surface.description === "" ? null : (
+                          <span className="truncate text-muted-foreground text-xs">
+                            {surface.description}
+                          </span>
+                        )}
+                      </span>
+                    </SurfaceMenuItem>
+                  ))}
                 </MenuPopup>
               </Menu>
             ) : null}

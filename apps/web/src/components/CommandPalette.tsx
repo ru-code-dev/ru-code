@@ -129,6 +129,12 @@ import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
+// ru-code: plugins — the `folder` mode: the host-owned picker behind `ctx.pickFolder` (V2-33).
+import {
+  FolderPickerPalette,
+  folderPickerAriaLabel,
+  usePluginFolderPickerHost,
+} from "../ru-code/plugins/FolderPickerPalette";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
@@ -404,6 +410,12 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
+  // ru-code: plugins — one line: a plugin's `ctx.pickFolder` opens the `folder` mode (V2-33) when
+  // the palette is not the user's right now (S33 A5).
+  usePluginFolderPickerHost(
+    state,
+    useCallback(() => dispatch({ _tag: "OpenFolderPicker" }), []),
+  );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
@@ -424,7 +436,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (!state.open || state.mode === "command") return;
+    // ru-code: plugins — in the `folder` mode Esc CLOSES (a cancel, V2-33), like the command mode.
+    if (!state.open || state.mode === "command" || state.mode === "folder") return;
     const onEscapeKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.isComposing || event.key !== "Escape") return;
       event.preventDefault();
@@ -489,7 +502,13 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
-          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+          // ru-code: plugins — `folder` closes on Esc too (V2-33).
+          if (
+            !open &&
+            eventDetails.reason === "escape-key" &&
+            state.mode !== "command" &&
+            state.mode !== "folder"
+          ) {
             eventDetails.cancel();
             toggleMode("command");
             return;
@@ -532,7 +551,10 @@ function CommandPaletteDialog(props: {
           ? "File picker"
           : props.mode === "content"
             ? "Search project contents"
-            : "Command palette"
+            : // ru-code: plugins — the `folder` mode (V2-33); its label is the plugins folder's own.
+              props.mode === "folder"
+              ? folderPickerAriaLabel()
+              : "Command palette"
       }
       className={cn("overflow-hidden p-0", props.mode === "content" && "h-105")}
       data-command-palette="true"
@@ -548,6 +570,9 @@ function CommandPaletteDialog(props: {
     >
       {props.mode === "files" ? (
         <ProjectFilePicker setOpen={props.setOpen} />
+      ) : props.mode === "folder" ? (
+        // ru-code: plugins — the host-owned folder picker a plugin asked for (V2-33).
+        <FolderPickerPalette setOpen={props.setOpen} />
       ) : props.mode === "content" ? (
         <ProjectContentSearchDialog onOpenChange={props.setOpen} />
       ) : (

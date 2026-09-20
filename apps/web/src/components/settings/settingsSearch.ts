@@ -1,3 +1,6 @@
+// ru-code: plugins — the Plugins section label is bilingual (S38 step 11)
+import { L } from "@ru-code/localization";
+
 import { isElectron } from "~/env";
 
 export type SettingsPath =
@@ -10,6 +13,8 @@ export type SettingsPath =
   | "/settings/connections"
   // ru-code: auto-update settings section
   | "/settings/auto-update"
+  // ru-code: plugins — the Plugins settings section (V2-43)
+  | "/settings/plugins"
   | "/settings/archived";
 
 export interface SettingsSearchItem {
@@ -36,6 +41,9 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/connections": "Connections",
   // ru-code: auto-update settings section
   "/settings/auto-update": "Auto-update",
+  // ru-code: plugins — the Plugins settings section (V2-43); the label is localized by the zone's
+  // own `L()` because the section's Russian name is «Расширения», not a translation of "Plugins"
+  "/settings/plugins": L("Plugins", "Расширения"),
   "/settings/archived": "Archive",
 };
 

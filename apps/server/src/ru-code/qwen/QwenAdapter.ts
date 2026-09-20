@@ -216,7 +216,12 @@ import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.
 // injecting a system-reminder when the user text contains `agent:name`.
 // ru-code: strips the delimited chip fences (`skill:⟦name⟧` → `skill:name`) AND injects the right
 // system-reminder (single skill/agent, or a CHAIN reminder for 2+ chips) in one step.
-import { buildComposerReminder } from "@smart-tools/qwen-cli-skill-manager/contracts";
+// ru-code (A25, owner decision O5): the composer reminder is CLI wire protocol, not catalog
+// management — a pure string function that strips the chip fences and prepends the
+// `<system-reminder>`. S54 moved it to its real owner, `qwen-cli-common`: catalog-core is the
+// catalog ENGINE and is `private`, while this is the app's own send-path vocabulary. No catalog
+// package of any kind survives in `apps/server` now.
+import { buildComposerReminder } from "@smart-tools/qwen-cli-common/composer-reminder";
 // ru-code: classifier for cli-side errors — routes recognized
 // failures to the right UI surface.
 import {

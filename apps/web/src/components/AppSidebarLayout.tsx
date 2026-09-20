@@ -14,7 +14,6 @@ import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalSt
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn, isMacPlatform } from "../lib/utils";
 import { RightGlobalPanelHost } from "../ru-code/skills-agents/rightGlobalPanel";
-import { CatalogAutoResync } from "../ru-code/skills-agents/catalog/CatalogAutoResync"; // ru-code: catalog auto-resync host
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import LegacyThreadSidebar from "./LegacySidebar";
@@ -241,14 +240,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       {children}
-      {/* ru-code: global right panel (skills/agents). A flex sibling of {children} in this
+      {/* ru-code: global right panel. A flex sibling of {children} in this
           SidebarProvider row: on desktop it is an inline push column that shrinks the chat,
           on narrow viewports a sheet overlay. Persists across routes. */}
       <RightGlobalPanelHost />
-      {/* ru-code: catalog auto-resync — the single owner of automatic skill/agent/command
-          rescans (boot reconcile + project-set changes), gated on connection readiness.
-          Render-nothing; see ru-code/skills-agents/catalog/CatalogAutoResync.tsx. */}
-      <CatalogAutoResync />
       <SidebarControl />
     </SidebarProvider>
   );

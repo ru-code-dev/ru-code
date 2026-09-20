@@ -9,7 +9,7 @@ import {
   parseCatalogTokenSegments,
   buildCatalogToken,
   formatCatalogItemDisplayName,
-} from "@smart-tools/qwen-cli-catalog-core/contracts";
+} from "@smart-tools/qwen-cli-common/catalog-token";
 import {
   CHAT_INLINE_CHIP_CLASS_NAME,
   CHAT_INLINE_CHIP_LABEL_CLASS_NAME,

@@ -16,6 +16,8 @@ import {
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
+  // ru-code: plugins — the Plugins settings section nav icon (V2-43)
+  PuzzleIcon,
   // ru-code: auto-update nav icon
   RefreshCwIcon,
   SearchIcon,
@@ -57,6 +59,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/connections": Link2Icon,
   // ru-code: auto-update settings section
   "/settings/auto-update": RefreshCwIcon,
+  // ru-code: plugins — the Plugins settings section (V2-43)
+  "/settings/plugins": PuzzleIcon,
   "/settings/archived": ArchiveIcon,
 };
 

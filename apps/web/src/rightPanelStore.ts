@@ -23,6 +23,10 @@ export const RIGHT_PANEL_KINDS = [
   "terminal",
   "pull-request",
   "agents",
+  // ru-code: plugins — a tab-mounted plugin panel (V2-27). Listed so `RightPanelKind` covers every
+  // surface a tab can be, and EXCLUDED from `open`/`toggle`/`singletonSurface` below: a plugin tab
+  // is named by (pluginId, panelId), so it has its own opener.
+  "plugin",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -63,7 +67,11 @@ export type RightPanelSurface =
       repository: string;
       number: number;
     }
-  | { id: "agents"; kind: "agents" };
+  | { id: "agents"; kind: "agents" }
+  // ru-code: plugins — a panel a dropped-in plugin asked to mount as a TAB (V2-27). The id carries
+  // both halves, so it is singleton per (plugin, panel) and the surface can be rebuilt from it
+  // alone; the host learns nothing else about the plugin.
+  | { id: `plugin:${string}`; kind: "plugin"; pluginId: string; panelId: string };
 
 const RIGHT_PANEL_STORAGE_KEY = `${APP_SCOPE}:right-panel-state:v2`;
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
@@ -87,7 +95,7 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "plugin">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
@@ -96,6 +104,29 @@ interface RightPanelStoreState {
     target: { environmentId?: string; projectId: string; repository: string; number: number },
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
+  // ru-code: plugins — open (or focus) a plugin's tab-mounted panel on this thread (V2-27).
+  openPluginPanel: (ref: ScopedThreadRef, pluginId: string, panelId: string) => void;
+  /**
+   * ru-code: plugins — drop the tabs whose panel is no longer contributed (V2-27).
+   *
+   * A plugin that is installed and loaded can stop returning a panel, or flip it to the global
+   * slot — and the surface is PERSISTED, so without this the thread keeps a tab whose body nothing
+   * can render. Same shape as `reconcileBrowserSurfaces` / `reconcileFileSurfaces`: the caller
+   * passes what exists now.
+   *
+   * TWO lists, not one (S15 A2). `availableSurfaceIds` is what is contributed as a tab right now;
+   * `authoritativePluginIds` is the plugins whose answer this pass can be BELIEVED — present,
+   * loaded, and their `panels` seam did not fault. A tab belonging to any other plugin is KEPT: a
+   * plugin that is uninstalled, disabled, still loading, failed, timed out or threw has not said
+   * its panel is gone, and the host must not delete a user's tab on its silence. It renders as an
+   * empty surface until the plugin comes back — the same degraded posture the global slot takes
+   * (architecture §6) — and the user closes it themselves if they want it gone.
+   */
+  reconcilePluginSurfaces: (
+    ref: ScopedThreadRef,
+    availableSurfaceIds: readonly string[],
+    authoritativePluginIds: readonly string[],
+  ) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -116,7 +147,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "plugin">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -128,7 +159,7 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "plugin">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -194,6 +225,21 @@ export function pullRequestSurface(target: {
     repository: target.repository,
     number: target.number,
   };
+}
+
+// ru-code: plugins — the tab-mounted plugin panel's id and its surface (V2-27). Kept beside the
+// other builders because the STORE owns surface ids: the plugins folder composes one to open, to
+// close and to reconcile, and nothing else needs to know the shape.
+
+export type PluginPanelSurface = Extract<RightPanelSurface, { kind: "plugin" }>;
+
+/** `plugin:<pluginId>:<panelId>` — the same two slugs the global panel slot uses for a panel. */
+export function pluginPanelSurfaceId(pluginId: string, panelId: string): PluginPanelSurface["id"] {
+  return `plugin:${pluginId}:${panelId}`;
+}
+
+export function pluginPanelSurface(pluginId: string, panelId: string): PluginPanelSurface {
+  return { id: pluginPanelSurfaceId(pluginId, panelId), kind: "plugin", pluginId, panelId };
 }
 
 /**
@@ -280,6 +326,24 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           ? surface.revealRequestId
                           : 0;
                       return [{ ...surface, revealLine, revealRequestId }];
+                    }
+                    // ru-code: plugins — a tab-mounted plugin panel (V2-27). Validated like the
+                    // pull-request rows below: the surface is PERSISTED, so a hand-edited or
+                    // truncated entry would otherwise come back as a tab whose body cannot be
+                    // resolved. (A well-formed row for a plugin that is no longer installed is a
+                    // different case and a legitimate one: it is dropped at runtime by
+                    // `reconcilePluginSurfaces`, once the host knows what is contributed.)
+                    if (surface.kind === "plugin") {
+                      if (
+                        typeof surface.pluginId !== "string" ||
+                        typeof surface.panelId !== "string" ||
+                        surface.pluginId === "" ||
+                        surface.panelId === "" ||
+                        surface.id !== pluginPanelSurfaceId(surface.pluginId, surface.panelId)
+                      ) {
+                        return [];
+                      }
+                      return [pluginPanelSurface(surface.pluginId, surface.panelId)];
                     }
                     if (surface.kind === "pull-request") {
                       if (
@@ -586,6 +650,42 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               activeSurfaceId: activeStillExists
                 ? current.activeSurfaceId
                 : (fallbackBrowser?.id ?? surfaces[0]?.id ?? null),
+            };
+          }),
+        })),
+      // ru-code: plugins — open or FOCUS a plugin's tab (V2-27). `upsertSurface` is the singleton
+      // rule the built-in tabs use: a second open of the same panel activates the tab that exists.
+      openPluginPanel: (ref, pluginId, panelId) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, pluginPanelSurface(pluginId, panelId)),
+          ),
+        })),
+      // ru-code: plugins — close the tabs whose panel no longer exists (V2-27), shaped exactly like
+      // `reconcileFileSurfaces` below: drop, then keep the active tab if it survived. The
+      // authority gate is S15 A2 — see the declaration above for why silence is not a deletion.
+      reconcilePluginSurfaces: (ref, availableSurfaceIds, authoritativePluginIds) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const available = new Set(availableSurfaceIds);
+            const authoritative = new Set(authoritativePluginIds);
+            const surfaces = current.surfaces.filter(
+              (surface) =>
+                surface.kind !== "plugin" ||
+                !authoritative.has(surface.pluginId) ||
+                available.has(surface.id),
+            );
+            if (surfaces.length === current.surfaces.length) return current;
+            const activeStillExists = surfaces.some(
+              (surface) => surface.id === current.activeSurfaceId,
+            );
+            return {
+              ...current,
+              isOpen: surfaces.length > 0 ? current.isOpen : false,
+              surfaces,
+              activeSurfaceId: activeStillExists
+                ? current.activeSurfaceId
+                : (surfaces.at(-1)?.id ?? null),
             };
           }),
         })),

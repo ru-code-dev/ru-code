@@ -19,10 +19,10 @@
  * EXCEPTION — catalog custom commands: qwen ALSO runs the user's own commands
  * deployed under `<cwd>/.qwen/commands/`. Those are dynamic (the Commands panel
  * adds/removes/connects them per project), so the guard cannot list them here.
- * The caller passes the LIVE effective set (from the catalog snapshot atom, via
- * `useCatalogCommandSlugs`) into the guard as `catalogCommandSlugs`; because the
- * set is recomputed from the atom, the allowlist recalculates whenever the
- * command list changes.
+ * The caller passes the LIVE effective set into the guard as `catalogCommandSlugs`;
+ * since A25 it comes from the catalogs PLUGIN's `command` composer provider, via
+ * `usePluginCommandSlugs`, so the allowlist recalculates whenever the command list
+ * changes — and is empty (every `/command` unknown) when no such plugin is installed.
  *
  * @module ru-code/slash-commands/qwenSlashCommands
  */
@@ -90,6 +90,36 @@ export const KNOWN_QWEN_SLASH_COMMAND_SLUGS: ReadonlySet<string> = new Set([
 
 const LEADING_SLASH_COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/;
 
+/** The leading `/command` of a line: its lower-cased slug, and whatever the user typed after it. */
+export interface LeadingSlashCommand {
+  /** Lower-cased, because every allowlist this is matched against is lowercase. */
+  readonly slug: string;
+  /** The rest of the line, trimmed; `""` when the command was bare. */
+  readonly rest: string;
+}
+
+/**
+ * THE reader of a leading `/command`, and the only one.
+ *
+ * A NAME IS ANYTHING WITHOUT WHITESPACE — qwen's own rule, not a charset of ours: it derives a
+ * command's name from its file path (`command-factory.ts`) and splits the typed line on
+ * `/\s+/u` (`slashCommandProcessor.ts`), so `/сборка`, `/deploy.prod` and `/fs:ls` are all names
+ * it runs. Trims first, so leading whitespace cannot smuggle a command past the check.
+ *
+ * It is exported because the composer's plugin allowlist (`plugins/composerRows.ts`
+ * `pluginCommandSlugs`) has to derive a slug from what a row would PASTE, and it must be the SAME
+ * slug this guard will look up at submit. A second regex there disagreed with this one on every
+ * name outside `[A-Za-z0-9_:-]` — a Cyrillic name in the app's own Russian locale produced no
+ * allowlist entry at all, a dotted one a truncated entry — so the menu offered a command that the
+ * submit then refused as unknown (S40 F4, the S11 defect by another route). One reader cannot
+ * disagree with itself.
+ */
+export function readLeadingSlashCommand(text: string): LeadingSlashCommand | null {
+  const match = LEADING_SLASH_COMMAND.exec(text.trim());
+  if (!match?.[1]) return null;
+  return { slug: match[1].toLowerCase(), rest: match[2]?.trim() ?? "" };
+}
+
 /**
  * Submit-time guard for qwen-kind threads. Three outcomes:
  *   - no leading `/command`, or a known slug → the input passes verbatim;
@@ -101,19 +131,19 @@ const LEADING_SLASH_COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/;
  * live catalog custom command (`catalogCommandSlugs`, deployed under .qwen/commands).
  * Both are matched case-insensitively (pass lowercase slugs in `catalogCommandSlugs`).
  *
- * Trims first so leading whitespace can't smuggle a command past the check.
+ * The line is read by {@link readLeadingSlashCommand}, which is also what builds the plugin
+ * allowlist passed in here — so the two cannot disagree about what the command's name IS.
  */
 export function stripUnknownLeadingSlashCommand(
   text: string,
   catalogCommandSlugs?: ReadonlySet<string>,
 ): string | null {
-  const trimmed = text.trim();
-  const match = LEADING_SLASH_COMMAND.exec(trimmed);
-  if (!match?.[1]) return text;
-  const slug = match[1].toLowerCase();
-  if (KNOWN_QWEN_SLASH_COMMAND_SLUGS.has(slug) || catalogCommandSlugs?.has(slug)) return text;
-  const trailingText = match[2]?.trim() ?? "";
-  return trailingText === "" ? null : trailingText;
+  const command = readLeadingSlashCommand(text);
+  if (command === null) return text;
+  if (KNOWN_QWEN_SLASH_COMMAND_SLUGS.has(command.slug) || catalogCommandSlugs?.has(command.slug)) {
+    return text;
+  }
+  return command.rest === "" ? null : command.rest;
 }
 
 export type QwenSubmitPromptDecision =

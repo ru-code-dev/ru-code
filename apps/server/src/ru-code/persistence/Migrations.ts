@@ -9,7 +9,6 @@
 //
 // Append-only: new fork migrations take the next id. NEVER renumber a shipped entry.
 
-import { analyticsMigration } from "@smart-tools/qwen-cli-analytics/server";
 import { mcpMigration } from "@smart-tools/qwen-cli-mcp-manager/server";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
@@ -24,12 +23,16 @@ export const ruCodeMigrationEntries = [
   [1, "Mcp", mcpMigration],
   // Per-thread chat-view choice column (extended-chat feature).
   [2, "ProjectionThreadsChatViewMode", projectionThreadsChatViewMode],
-  // Analytics transcript cache (DDL lives with the feature package). Named "QwenUsage",
-  // not "Analytics": upstream already owns an unrelated telemetry/AnalyticsService.ts, and
-  // a recorded migration name is append-only once shipped. The migrator keys on ID, so an
-  // install that already recorded "3_Analytics" simply never re-runs id 3 — the rename
-  // affects what NEW installs record, nothing else.
-  [3, "QwenUsage", analyticsMigration],
+  // ru-code (A19): id 3 was "QwenUsage" — the analytics transcript cache. Analytics is now a
+  // dropped-in plugin that owns its own `analytics_file_cache` in its own `data.sqlite`, so the
+  // app no longer registers that migration. The entry is REMOVED rather than parked: the effect
+  // Migrator only compares each loaded id against the MAX recorded id (Migrator.js `run`: skip
+  // when `currentId <= latestMigrationId`) and only rejects DUPLICATE ids — it has no
+  // contiguity/id-space check, so a gap is a no-op on both paths. Existing installs recorded
+  // 1..4 and run nothing; fresh installs record 1, 2, 4. The already-created
+  // `analytics_file_cache` table is deliberately LEFT IN PLACE on existing installs (dropping
+  // user data is a separate owner decision — phase-2 plan §4.2 / O4). **Id 3 is burned: never
+  // reuse it.** Append-only still holds — the next fork migration takes id 5.
   // Mid-turn delivery mark column (pending | delivered | not-delivered).
   [4, "ProjectionThreadMessagesDeliveryState", projectionThreadMessagesDeliveryState],
 ] as const;

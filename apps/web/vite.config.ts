@@ -7,6 +7,8 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
 import { brandingAssetsPlugin } from "@ru-code/theme/vite";
 import { serviceWorkerPlugin } from "./src/ru-code/sw/swBuildPlugin";
+// ru-code: plugins — the shared-runtime import map written into the built index.html.
+import { sharedModulesPlugin } from "./src/ru-code/plugins/sharedModulesVitePlugin";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
@@ -175,15 +177,16 @@ export default defineConfig(() => {
       brandingAssetsPlugin(),
       // ru-code: emits the unhashed root-scoped /sw.js the PWA registers (see sw/swBuildPlugin.ts).
       serviceWorkerPlugin(),
+      sharedModulesPlugin(), // ru-code: plugins — one virtual entry per shared package + the importmap
     ],
     optimizeDeps: {
       include: [
         "@clerk/clerk-js",
         "@clerk/react/internal",
         "@pierre/diffs",
-        // ru-code: dnd-kit keeps its drag state in a React CONTEXT — two copies means the
-        // pixso gallery's sortable items register with a different provider than the one
-        // that renders, and every drag silently no-ops (H-L13).
+        // ru-code: dnd-kit keeps its drag state in a React CONTEXT — two copies means a
+        // sortable list's items register with a different provider than the one that renders,
+        // and every drag silently no-ops (H-L13).
         "@dnd-kit/core",
         "@dnd-kit/sortable",
         "@dnd-kit/utilities",

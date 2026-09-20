@@ -1,6 +1,6 @@
 // ru-code: "which project is the user looking at right now" — resolved from the ROUTE (an open thread
 // or a draft dialog), independent of any component's props. Returns the project's `ProjectId`, the SAME
-// identity the catalog now keys by (see catalogLayers.ts) and the runtime carries (`thread.projectId`),
+// identity the catalogs key by and the runtime carries (`thread.projectId`),
 // so the composer's effective-set filter matches project bindings with zero translation.
 //
 // The pure `resolveActiveProjectId` holds the decision (route kind → which project id); the hook is thin

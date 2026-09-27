@@ -67,8 +67,12 @@ const LINES = Number(process.env["RU_CODE_S37_LINES"] ?? 2);
 
 // ── the corpus: the S10 fixture shape, plus the one field that fills `agentUsage` ─────────────
 
+// The seeded day is counted from YESTERDAY (UTC): `setUTCHours` pins the hour on the chosen UTC
+// day, so a «0 days ago» session stamped at 09:00 UTC lies in the FUTURE for any run between
+// 00:00 and 09:00 UTC, and the board does not count it (measured: 380 of 400 on a run at
+// 00:17 UTC — exactly the 400 / 20 sessions of day 0). From yesterday, every seeded instant is past.
 const isoAt = (daysAgo: number, hour: number): string => {
-  const at = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+  const at = new Date(Date.now() - (daysAgo + 1) * 24 * 60 * 60 * 1000);
   at.setUTCHours(hour, 0, 0, 0);
   return at.toISOString();
 };

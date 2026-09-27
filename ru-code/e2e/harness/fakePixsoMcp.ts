@@ -32,3 +32,24 @@ export const FAKE_PIXSO_ENTRY_PATH = NodePath.join(
   import.meta.dirname,
   "../../../ru-code-packages/packages/pixso-core/dev/fake-mcp/fakePixsoMcp.ts",
 );
+
+import { remoteItemCaptures } from "../../../ru-code-packages/packages/pixso-core/dev/fake-mcp/fakePixsoMcp.ts";
+
+/**
+ * THE REAL FRAMES, BY KEY — every `debug-N` frame of the corpus as the remote route addresses
+ * it (`remoteItemCaptures()`: frame order, keyed by each frame's `summary.json` target guid).
+ * The app specs prove real frames per route end to end — the local route lands each keyed
+ * selection as a card, the remote route scans by key; the loop over EVERY dump by key, on
+ * both routes, with every assertion, lives in the package's lane (`dev/fake-mcp/*.test.ts`,
+ * `tests/fakeCycleRealFrames.corpus.test.ts`). Empty only when the corpus holds no frame —
+ * the boot's corpus precondition (`bootApp.ts` `assertPixsoCorpus`) stops the run first.
+ */
+export const REAL_FRAMES_BY_KEY: ReadonlyArray<{ readonly frame: string; readonly key: string }> =
+  Object.entries(remoteItemCaptures()).map(([key, entry]) => ({
+    frame: entry.set.split("/")[0] ?? entry.set,
+    key,
+  }));
+
+/** The corpus's FIRST frame by key — the ONE real frame the local-route spec proves. */
+export const FIRST_REAL_FRAME: { readonly frame: string; readonly key: string } | null =
+  REAL_FRAMES_BY_KEY[0] ?? null;

@@ -26,8 +26,8 @@
 //     by itemId (`harness/fakeRemotePixsoMcp.ts`'s `REMOTE_ITEM_CAPTURES`). That reopens
 //     the SAME collision on purpose: `pixsoAssistant.e2e.test.ts`'s own "real Pixso
 //     captures" section (this file's neighbor, guaranteed to run FIRST — see FILE NAME
-//     below) already imports both `debug-3` and `debug-4` through the LOCAL fake
-//     before this file's first test ever runs. A remote scan of either capture is
+//     below) already imports the corpus's first real frame (`FIRST_REAL_FRAME`) through
+//     the LOCAL fake before this file's first test ever runs. A remote scan of that frame is
 //     therefore a PROVABLE reimport of that same card, every time the corpus is present —
 //     not a defect, and not dodged here: the first case below asserts the reimport
 //     explicitly (owner instruction: fix collisions at the TEST layer, never by mangling
@@ -43,12 +43,18 @@
 //     message every settle used to get regardless of outcome — see each case's own
 //     re-pin comment below.
 
-import { REAL_CAPTURE_SETS } from "../harness/fakePixsoMcp.ts";
 import {
-  frameHasRemoteSource,
+  CORPUS_DIR,
+  FIRST_REAL_FRAME,
+  servedCopyTextsOf,
+  servedNodeGuidsOf,
+} from "../harness/fakePixsoMcp.ts";
+import {
+  componentUsageNamesOf,
   loadRealCapture,
   rootLayerNameOf,
   rootSizeLabelOf,
+  topLevelRootsOf,
 } from "../harness/pixsoExpectations.ts";
 import type { HarnessState } from "../scripts/bootApp.ts";
 import { expect, readHarnessState, test, type Page } from "../tests-core/fixtures.ts";
@@ -58,18 +64,16 @@ interface FakeRemoteCalls {
   readonly authorizations: ReadonlyArray<string | null>;
 }
 
-/** `harness/fakePixsoMcp.ts`'s own `REMOTE_ITEM_CAPTURES`, restated here so this
- *  file names its design URLs by the REAL capture they resolve to, not by an opaque id
- *  copied out of a dump.
- *  PIN REWRITE (test-standards #9, remote-parity T6, analysis §6.2 point 3): `3035:121084`
- *  now serves the REAL remote wire capture (`debug-3/remote`, `{kind:"remote-wire"}`),
- *  never the local plugin's `debug-3` bytes over the remote route — every test below
- *  that uses it is affected only where it asserted specific debug-3 CONTENT (none do:
- *  the auth-lifecycle and full-probe tests only assert reachability/settle-title, which
- *  hold under EITHER payload). `1886:185986` is unchanged (`{kind:"local-capture"}`, still
- *  `debug-4` — owner decision, no synthetic remote Modal, DS). */
-const CAPTURE_ONE_ITEM_ID = "3035:121084"; // → debug-3/remote (REAL remote wire, ~2 MB — "action sheet")
-const CAPTURE_TWO_ITEM_ID = "1886:185986"; // → debug-4  (17 MB — used for the full round trip)
+/** RE-POINT (contract 2, chain 1 e2e seat): every real-frame case below dials the corpus's
+ *  FIRST frame by its key (`FIRST_REAL_FRAME`, read off the fake's own `remoteItemCaptures()`
+ *  — frame order, keyed by the frame's `summary.json` target guid). The legacy literals
+ *  (`3035:121084` → debug-3/remote, `1886:185986` → debug-4) named contract-1 frames absent
+ *  from `current-dsl/dumps`. ONE real frame per route; the all-dumps loop by key is the
+ *  package lane's. Its local twin — the same frame's keyed selection — was imported by
+ *  `pixsoAssistant.e2e.test.ts`'s cycle walk, so a remote scan of this key is a provable
+ *  reimport (the first case asserts it). */
+const FIRST_FRAME = FIRST_REAL_FRAME?.frame ?? "";
+const FIRST_FRAME_ITEM_ID = FIRST_REAL_FRAME?.key ?? "";
 // T5/T6 (remote-parity wave §5.5, decisions 456): the reserved access-denied case, in the
 // SAME private `9000:*` range the S9/S10 suites already use — never collides with a real id.
 const ACCESS_DENIED_ITEM_ID = "9000:000014";
@@ -103,35 +107,18 @@ async function openPixsoPanel(page: Page): Promise<void> {
 
 test.describe.configure({ mode: "serial" });
 
-// Both remote tests below dial real captures by itemId (`harness/fakePixsoMcp.ts`'s
-// `REMOTE_ITEM_CAPTURES`) — honest, same discipline `pixsoAssistant.e2e.test.ts`'s own
-// "real Pixso captures" section already uses, rather than a silent failure on a machine
-// with no corpus. T7 (remote-parity wave §11.4, decisions 456 PHASE-2b item 1): the guard
-// now ALSO requires `debug-3/remote` — `3035:121084` serves it now, not `debug-3`, and
-// `debug-3/remote` is deliberately excluded from `REAL_CAPTURE_SETS`/`realCaptureSets()`
-// (T6: it is a raw-JSON-RPC-shaped set, never mixed into the local route's dump-tool-shaped
-// cycle), so its presence is checked directly against the file the harness actually reads.
-// W0 (universality wave): the canonical corpus layout — the wire capture lives at
-// debug-3/remote/raw/, and the two local sets are the debug-3/debug-4 frames.
-// ru-code: the manifest states which frames carry a remote source, so this no longer
-// reaches into the corpus (which lives with the package now, decisions 510/511).
-const PIXSO_REMOTE_WIRE_PRESENT = frameHasRemoteSource("debug-3");
-test.skip(
-  !REAL_CAPTURE_SETS.includes("debug-3") ||
-    !REAL_CAPTURE_SETS.includes("debug-4") ||
-    !PIXSO_REMOTE_WIRE_PRESENT,
-  "need debug-3 (local+remote) AND debug-4 in the package's corpus — link ru-code-packages " +
-    "and run 'pnpm pixso:expectations'",
-);
+// No route-keyed skip: an absent corpus stops the boot (`bootApp.ts` `assertPixsoCorpus`),
+// and a corpus with no frame fails the first case below by name.
 
 test("remote path: token wizard → verify → save → URL → scan → REIMPORT of the local suite's own real-capture card", async ({
   page,
 }) => {
-  // The 17 MB debug-4 capture (CAPTURE_TWO_ITEM_ID below) parses through one more
+  // The first frame's capture (FIRST_FRAME_ITEM_ID below) parses through one more
   // network hop than the local path (this fake, over real MCP-over-HTTP) — same D-A2
   // budget discipline `pixsoAssistant.e2e.test.ts`'s real-capture section uses, scaled
   // down: no seven-tab render here, just the round trip + one gallery count.
   test.setTimeout(180_000);
+  expect(FIRST_REAL_FRAME, `no debug-N frame under ${CORPUS_DIR}`).not.toBeNull();
 
   const state = readHarnessState();
   const before = await fetchRemoteCalls(state);
@@ -140,20 +127,20 @@ test("remote path: token wizard → verify → save → URL → scan → REIMPOR
 
   // ── BASELINE, before this test touches anything ───────────────────────────
   // `pixsoAssistant.e2e.test.ts`'s "real Pixso captures" section (this file's neighbor,
-  // guaranteed to finish FIRST — see FILE NAME above) already imported `debug-4`
+  // guaranteed to finish FIRST — see FILE NAME above) already imported FIRST_FRAME
   // through the LOCAL fake. One card for it must already be sitting in the shared
   // gallery — the precondition the reimport assertion below depends on.
-  const capture = loadRealCapture("debug-4");
+  const capture = loadRealCapture(FIRST_FRAME);
   const rootName = rootLayerNameOf(capture) ?? "";
   const rootSize = rootSizeLabelOf(capture) ?? "";
-  expect(rootName, "debug-4 has no root layer name to identify its card by").not.toBe("");
-  expect(rootSize, "debug-4 has no root size to identify its card by").not.toBe("");
+  expect(rootName, `${FIRST_FRAME} has no root layer name to identify its card by`).not.toBe("");
+  expect(rootSize, `${FIRST_FRAME} has no root size to identify its card by`).not.toBe("");
   const matchingCards = () =>
     galleryCards(page).filter({ hasText: rootName }).filter({ hasText: rootSize });
   await page.getByRole("tab", { name: "Галерея" }).click();
   await expect(
     matchingCards(),
-    "precondition failed: the local suite's own real-capture card for debug-4 is not in the gallery",
+    `precondition failed: the local suite's own real-capture card for ${FIRST_FRAME} is not in the gallery`,
   ).toHaveCount(1, { timeout: 10_000 });
   await page.getByRole("tab", { name: "Импорт" }).click();
 
@@ -195,7 +182,7 @@ test("remote path: token wizard → verify → save → URL → scan → REIMPOR
 
   // ── the per-scan URL step ───────────────────────────────────────────────────
   await expect(page.getByTestId("pixso-remote-url-step")).toBeVisible();
-  await page.getByTestId("pixso-design-url-input").fill(designUrlFor(CAPTURE_TWO_ITEM_ID));
+  await page.getByTestId("pixso-design-url-input").fill(designUrlFor(FIRST_FRAME_ITEM_ID));
   await expect(page.getByTestId("pixso-url-parsed")).toBeVisible();
 
   const scanButton = page.getByTestId("pixso-remote-scan-button");
@@ -225,14 +212,14 @@ test("remote path: token wizard → verify → save → URL → scan → REIMPOR
 
   // ── the fake-remote's OWN call log (the authoritative proof, task 18/G2-13) ──
   // Proves the REMOTE round trip actually happened — the fake really answered THIS
-  // request with the real debug-4 bytes — independent of what the reimport
+  // request with FIRST_FRAME's real bytes — independent of what the reimport
   // dedupe below does with the result.
   const after = await fetchRemoteCalls(state);
   const newCalls = after.calledTools.slice(before.calledTools.length);
   // SUPERSEDED PIN (resolve wave A1, decisions 465 — test-standards #9, rewritten in the
   // same change that supersedes it): «exactly ONE get_node_dsl» dies — the recursive
   // nested-node resolve now makes 1 root call + one TARGETED call per DISTINCT
-  // nested-instance guid (debug-4's expansion carries ~24), ALL through the same
+  // nested-instance guid (as many as FIRST_FRAME's expansion carries), ALL through the same
   // consumed tool. The consumed-tool law is UNCHANGED (the wave spec's own words: "same
   // tool, more calls") — what this pin still proves, and what a regression would break,
   // is that NO OTHER tool is ever dialed on the remote scan path.
@@ -260,7 +247,7 @@ test("remote path: token wizard → verify → save → URL → scan → REIMPOR
   await page.getByRole("tab", { name: "Галерея" }).click();
   await expect(
     matchingCards(),
-    "the remote scan must REIMPORT the local suite's existing debug-4 card, not duplicate it",
+    `the remote scan must REIMPORT the local suite's existing ${FIRST_FRAME} card, not duplicate it`,
   ).toHaveCount(1, { timeout: 10_000 });
 });
 
@@ -273,18 +260,37 @@ test("remote path: token wizard → verify → save → URL → scan → REIMPOR
 // a glance) — this is the pin analysis §11.4 named and no earlier test in this file
 // actually wrote (every other case here asserts settle text or reachability, never the
 // card's own identity). Also covers: the five REAL component names render (not
-// axis-reconstructed placeholders, not raw guids) and no guid-shaped string leaks into any
-// visible text on the card (std 3: the negative half of "names, not addresses").
-test("remote path: scanning 3035:121084 opens a card rooted on THAT guid, titled «action sheet», with its five real component names — never a guid chip", async ({
+// axis-reconstructed placeholders, not raw guids) and no node guid of the served capture
+// leaks into any visible text on the card (std 3: the negative half of "names, not addresses").
+test(`remote path: scanning the first frame's key (${FIRST_FRAME_ITEM_ID}) opens a card rooted on THAT guid, titled by its root, with its real component names — never a guid chip`, async ({
   page,
 }) => {
+  // RE-POINT (contract 2): the legacy literals of this case («action sheet», `3035:121084`,
+  // `19:39374`, five names out of debug-3/remote) are now read at run time for the corpus's
+  // first frame: its keyed root's name and size, its key, the OTHER top-level roots its wire
+  // carries (`topLevelRootsOf`, wire order), and its component usage names — the same facts,
+  // never a string committed out of a dump.
+  const capture = loadRealCapture(FIRST_FRAME);
+  const rootName = rootLayerNameOf(capture) ?? "";
+  const rootSize = rootSizeLabelOf(capture) ?? "";
+  expect(rootName, `${FIRST_FRAME} has no root layer name to identify its card by`).not.toBe("");
+  expect(rootSize, `${FIRST_FRAME} has no root size to identify its card by`).not.toBe("");
+  const otherRoots = topLevelRootsOf(FIRST_FRAME).filter((guid) => guid !== FIRST_FRAME_ITEM_ID);
+  // The negative pin below needs a root to NOT land on: the frame's wire must carry one.
+  expect(
+    otherRoots.length,
+    `${FIRST_FRAME} (key ${FIRST_FRAME_ITEM_ID}) carries no top-level root besides its key — the C-1 negative pin would be vacuous`,
+  ).toBeGreaterThan(0);
+  const usageNames = componentUsageNamesOf(capture);
+  expect(usageNames, `${FIRST_FRAME} lands no card to list components for`).not.toBeNull();
+
   await openPixsoPanel(page);
 
   // The prior test already saved a real, valid token into this run's shared server-side
   // storage — the Import tab opens straight to the per-scan URL step.
   await expect(page.getByTestId("pixso-remote-url-step")).toBeVisible();
 
-  await page.getByTestId("pixso-design-url-input").fill(designUrlFor(CAPTURE_ONE_ITEM_ID));
+  await page.getByTestId("pixso-design-url-input").fill(designUrlFor(FIRST_FRAME_ITEM_ID));
   await expect(page.getByTestId("pixso-url-parsed")).toBeVisible();
   await page.getByTestId("pixso-remote-scan-button").click();
 
@@ -292,13 +298,16 @@ test("remote path: scanning 3035:121084 opens a card rooted on THAT guid, titled
   // («Карточка добавлена в галерею») because the remote wire bytes hash differently
   // from the local capture's. W5's semantic identity (root guid + compatible file key,
   // CROSS-SOURCE only) now recognizes this scan as the SAME FRAME the local suite
-  // already imported (debug-3, root 3035:121084) arriving via the other transport —
+  // already imported (FIRST_FRAME, root FIRST_FRAME_ITEM_ID) arriving via the other transport —
   // classified DUPLICATE-ENRICHED: the reimport surface renders, no second card is
   // created, and the existing card becomes the field-level union. That recognition is
   // exactly the wave's contract (`cardProvenanceUnion.test.ts` pins it at the store
   // level, both directions); asserting it here proves it reaches the real UI.
   await expect(page.getByText("Скан завершён")).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText("action sheet уже есть в галерее")).toBeVisible();
+  // F1 GUARD (chain 1 DISPATCH 1): the first case already scanned THIS key remotely, so this
+  // is the SECOND identical remote scan of a card that holds both provenances — it must still
+  // settle as a reimport of that one card, never land a new one.
+  await expect(page.getByText(`${rootName} уже есть в галерее`)).toBeVisible();
   // Negative (std 3): the PLAIN fresh-import message must NOT appear on the reimport.
   await expect(page.getByText("Карточка добавлена в галерею")).toHaveCount(0);
 
@@ -314,11 +323,6 @@ test("remote path: scanning 3035:121084 opens a card rooted on THAT guid, titled
   // over-matches; name+size pins the real card. The count-1 proof is intact under the
   // size filter: a broken W5 branch would create a SECOND card with the same name and
   // the same 393×900 root, so this still fails on a dedupe regression.
-  const capture = loadRealCapture("debug-3");
-  const rootName = rootLayerNameOf(capture) ?? "";
-  const rootSize = rootSizeLabelOf(capture) ?? "";
-  expect(rootName, "debug-3 has no root layer name to identify its card by").not.toBe("");
-  expect(rootSize, "debug-3 has no root size to identify its card by").not.toBe("");
   const actionSheetCards = galleryCards(page)
     .filter({ hasText: rootName })
     .filter({ hasText: rootSize });
@@ -330,30 +334,58 @@ test("remote path: scanning 3035:121084 opens a card rooted on THAT guid, titled
   // ── the headline pin: title + root guid ─────────────────────────────────────
   const header = page.getByTestId("pixso-detail-header");
   await expect(header).toBeVisible();
-  await expect(header).toContainText("action sheet");
+  await expect(header).toContainText(rootName);
 
   await page.getByRole("tab", { name: "Структура" }).click();
   const structure = page.getByTestId("pixso-tab-structure");
   const rootRow = structure.locator("[data-node-id]").first();
-  await expect(rootRow).toHaveAttribute("data-node-id", "3035:121084");
+  await expect(rootRow).toHaveAttribute("data-node-id", FIRST_FRAME_ITEM_ID);
   // THE RED CLAIM this pin exists for (std 3, negative pin): if the card ever roots back
   // on the raw file's first-listed node instead of the requested one, this must fail.
-  await expect(rootRow).not.toHaveAttribute("data-node-id", "19:39374");
+  for (const other of otherRoots) {
+    await expect(rootRow).not.toHaveAttribute("data-node-id", other);
+  }
 
-  // A guid-shaped string (`\d+:\d+`) rendered as visible TEXT is a leaked address, not a
-  // name — distinct from `data-node-id` itself, an ATTRIBUTE `innerText()` never reads.
-  const GUID_SHAPED = /\b\d{1,7}:\d{1,7}\b/;
-  expect(await structure.innerText()).not.toMatch(GUID_SHAPED);
+  // AN ADDRESS OF THE SERVED CAPTURE rendered as visible TEXT is a leak, not a name — distinct
+  // from `data-node-id` itself, an ATTRIBUTE `innerText()` never reads. The claim is the old one
+  // (no `a:b` address-shaped string in the visible panels) MINUS THE DESIGN'S OWN COPY: a token
+  // the served capture states as copy (`nodeText` / `characters`: debug-2001's «12.03.2025,
+  // 15:02», «13:24») is the design's words. A token is a whole `a:b` run — not a piece of a
+  // longer `a:b:c` clock. Every other address the capture carries (`guid`, `overrideKey`,
+  // `publishID`, `componentId`, `pathString`, `inherit*StyleID`) is bookkeeping and must not show.
+  const servedGuids = servedNodeGuidsOf(FIRST_FRAME_ITEM_ID);
+  expect(
+    servedGuids.has(FIRST_FRAME_ITEM_ID),
+    `the served capture's guids were not read: its keyed root ${FIRST_FRAME_ITEM_ID} is absent`,
+  ).toBe(true);
+  const addressToken = /(?<![\d:])\d{1,7}:\d{1,7}(?![\d:])/g;
+  const copyTokens = new Set(
+    servedCopyTextsOf(FIRST_FRAME_ITEM_ID).flatMap((text) =>
+      [...text.matchAll(addressToken)].map((match) => match[0]),
+    ),
+  );
+  const leakedGuids = (text: string): readonly string[] =>
+    [...text.matchAll(addressToken)]
+      .map((match) => match[0])
+      .filter((token) => !copyTokens.has(token));
+  expect(leakedGuids(await structure.innerText()), "address-shaped strings shown as text").toEqual(
+    [],
+  );
 
-  // ── the five real component names, resolved (not axis-reconstructed, not a guid) ──
+  // ── the frame's real component names, resolved (not axis-reconstructed, not a guid) ──
   await page.getByRole("tab", { name: "Компоненты" }).click();
   const components = page.getByTestId("pixso-tab-components");
   const usages = components.getByTestId("pixso-component-usage");
-  await expect(usages).toHaveCount(5);
-  for (const name of ["input_2.0", "switcher_2.0", "info panel", "moblie header", "select_2.0"]) {
-    await expect(usages.filter({ hasText: name })).toHaveCount(1);
-  }
-  expect(await components.innerText()).not.toMatch(GUID_SHAPED);
+  await expect(usages).toHaveCount(usageNames?.length ?? 0);
+  // Each row's NAME is its first `span.truncate` (`ComponentsUsedBlock.tsx`); compared as a
+  // multiset — a name may repeat (two components can share one display name).
+  const renderedNames = await usages.evaluateAll((rows) =>
+    rows.map((row) => row.querySelector("span.truncate")?.textContent ?? ""),
+  );
+  expect(renderedNames.toSorted()).toEqual([...(usageNames ?? [])].toSorted());
+  expect(leakedGuids(await components.innerText()), "address-shaped strings shown as text").toEqual(
+    [],
+  );
 });
 
 // ROUND-3 (review round 3, capture-seat finding): S17/S18/S24/S25 — the whole auth-death
@@ -398,10 +430,10 @@ test("remote path: a DEAD token reaches auth-death UI, survives a recheck, and o
   await page.getByTestId("pixso-settings-view").getByRole("button", { name: "Назад" }).click();
   await expect(page.getByTestId("pixso-remote-url-step")).toBeVisible();
 
-  // debug-3/remote (the REAL remote wire capture, ~2 MB, CAPTURE_ONE_ITEM_ID) — this test is
+  // the first frame's REAL remote wire (FIRST_FRAME_ITEM_ID) — this test is
   // about the auth lifecycle, not the round-tripped content, so it uses the SMALLER of the
   // two real captures.
-  const designUrl = designUrlFor(CAPTURE_ONE_ITEM_ID);
+  const designUrl = designUrlFor(FIRST_FRAME_ITEM_ID);
 
   // ── first scan: the fake's dead-token rule 200s exactly once ──────────────────
   await page.getByTestId("pixso-design-url-input").fill(designUrl);
@@ -536,7 +568,7 @@ test("remote path (debug wrench): block 3's live tools/list actually lists the 5
   // its own runtime validator fails a real spec, not just a unit test against a
   // synthetic fixture. Block 7 "borrows the block-5 probe link" (DiagnosticsView.tsx's
   // own comment) — same URL field, testid `pixso-probe-url-input`.
-  await page.getByTestId("pixso-probe-url-input").fill(designUrlFor(CAPTURE_ONE_ITEM_ID));
+  await page.getByTestId("pixso-probe-url-input").fill(designUrlFor(FIRST_FRAME_ITEM_ID));
   const fullProbeButton = page.getByTestId("pixso-debug-remote-full-probe");
   await expect(fullProbeButton).toBeEnabled();
   await fullProbeButton.click();

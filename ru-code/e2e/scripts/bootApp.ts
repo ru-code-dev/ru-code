@@ -27,6 +27,7 @@ import { PIXSO_MCP_ENDPOINT } from "@smart-tools/t3-code-pixso-mcp-assistant-plu
 // folded into `harness/fakePixsoMcp.ts` (one file/process/port, two routes). Its
 // endpoint/calls-URL constants now come from that ONE module.
 import {
+  CORPUS_DIR,
   FAKE_PIXSO_ENTRY_PATH,
   FAKE_REMOTE_PIXSO_CALLS_URL,
   FAKE_REMOTE_PIXSO_ENDPOINT,
@@ -508,6 +509,7 @@ async function reserveFreePort(): Promise<number> {
  *    surface four cases later as an inexplicable assertion mismatch.
  */
 async function startFakePixso(tmpRoot: string): Promise<FakePixsoHarness> {
+  assertPixsoCorpus(CORPUS_DIR);
   const controlFile = NodePath.join(tmpRoot, "pixso-control.json");
   NodeFS.writeFileSync(controlFile, JSON.stringify({ mode: "normal" }));
   const logPath = NodePath.join(ARTIFACTS_DIR, "fake-pixso.log");
@@ -588,6 +590,22 @@ async function startFakePixso(tmpRoot: string): Promise<FakePixsoHarness> {
 
   child.unref();
   return { controlFile, pid: child.pid ?? -1 };
+}
+
+/**
+ * THE CORPUS PRECONDITION. The pixso suite loops the real frames of the assets-root corpus
+ * (the engine constant `CORPUS_DIR`, re-exported by the fake) on both routes; without it
+ * the fake would serve the synthetic payloads alone and every real-frame spec would have
+ * nothing to find. So an absent corpus stops the boot HERE, naming the path — never a skip,
+ * never a quiet synthetic-only run.
+ */
+export function assertPixsoCorpus(dir: string): void {
+  if (!NodeFS.existsSync(dir)) {
+    throw new Error(
+      `pixso e2e precondition failed: the capture corpus ${dir} is absent — the pixso suite ` +
+        `serves every dump in it on both routes and does not run without it`,
+    );
+  }
 }
 
 // T10 (reorg wave, decisions 438/442): the fake REMOTE Pixso MCP no longer has its own

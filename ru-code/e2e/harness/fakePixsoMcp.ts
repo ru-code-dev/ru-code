@@ -32,3 +32,81 @@ export const FAKE_PIXSO_ENTRY_PATH = NodePath.join(
   import.meta.dirname,
   "../../../ru-code-packages/packages/pixso-core/dev/fake-mcp/fakePixsoMcp.ts",
 );
+
+import { realFrameKeys } from "../../../ru-code-packages/packages/pixso-core/dev/fake-mcp/fakePixsoMcp.ts";
+import {
+  loadRealCapture as loadServedCapture,
+  remoteItemCaptures as servedItemCaptures,
+} from "../../../ru-code-packages/packages/pixso-core/dev/fake-mcp/realCaptures.ts";
+
+/**
+ * Every node guid of the DSL the fake SERVES for `key` — read from the SAME bytes its remote
+ * route answers `get_node_dsl` with (`remoteItemCaptures()[key]` → `loadRealCapture(set).dslText`,
+ * `fakePixsoMcp.ts`), each record's own `guid`. A spec that says «no node guid is shown» asks
+ * this set, never a digits-colon-digits shape: a design's own «15:02» or «01:30:12» is copy.
+ */
+export function servedNodeGuidsOf(key: string): ReadonlySet<string> {
+  const entry = servedItemCaptures()[key];
+  if (entry === undefined) throw new Error(`the fake serves no capture for key ${key}`);
+  const guids = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    for (const [field, inner] of Object.entries(value as Record<string, unknown>)) {
+      if (field === "guid" && typeof inner === "string") guids.add(inner);
+      else walk(inner);
+    }
+  };
+  walk(JSON.parse(loadServedCapture(entry.set).dslText) as unknown);
+  return guids;
+}
+
+/**
+ * Every COPY string of the DSL the fake serves for `key` — the design's own words, which are
+ * allowed to look like an address («15:02», «13:24»). A copy string is the value of a `nodeText`
+ * or `characters` field of the SAME bytes `servedNodeGuidsOf` reads. Everything else the capture
+ * states (`overrideKey`, `publishID`, `componentId`, `inherit*StyleID`, `pathString`, …) is
+ * bookkeeping, never copy.
+ */
+export function servedCopyTextsOf(key: string): readonly string[] {
+  const entry = servedItemCaptures()[key];
+  if (entry === undefined) throw new Error(`the fake serves no capture for key ${key}`);
+  const texts: string[] = [];
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    for (const [field, inner] of Object.entries(value as Record<string, unknown>)) {
+      if ((field === "nodeText" || field === "characters") && typeof inner === "string") {
+        texts.push(inner);
+      } else walk(inner);
+    }
+  };
+  walk(JSON.parse(loadServedCapture(entry.set).dslText) as unknown);
+  return texts;
+}
+
+/**
+ * THE REAL FRAMES, BY KEY — every `debug-N` set of the corpus as the remote route addresses it
+ * (`realFrameKeys()`: frame order). A set's key is its BARE guid when that resolves to it (the
+ * real protocol's own addressing) and its ALIAS `<guid>@<id12>` when a newer capture of the same
+ * address owns the bare guid (a superseded set is reachable only by alias — the fake serves by
+ * SET, never «last wins»). Every entry therefore reaches exactly its own bytes, so a superseded
+ * frame is no longer silently the same card as its successor. The app specs prove real frames per
+ * route end to end — the local route lands each keyed selection as a card, the remote route scans
+ * by key; the loop over EVERY dump by key, on both routes, with every assertion, lives in the
+ * package's lane (`dev/fake-mcp/*.test.ts`, `tests/fakeCycleRealFrames.corpus.test.ts`). Empty
+ * only when the corpus holds no frame — the boot's corpus precondition (`bootApp.ts`
+ * `assertPixsoCorpus`) stops the run first.
+ */
+export const REAL_FRAMES_BY_KEY: ReadonlyArray<{ readonly frame: string; readonly key: string }> =
+  realFrameKeys().map((row) => ({ frame: row.frame, key: row.key }));
+
+/** The corpus's FIRST frame by key — the ONE real frame the local-route spec proves. */
+export const FIRST_REAL_FRAME: { readonly frame: string; readonly key: string } | null =
+  REAL_FRAMES_BY_KEY[0] ?? null;

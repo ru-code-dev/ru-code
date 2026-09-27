@@ -26,9 +26,12 @@
 import {
   catalogComponentCount,
   CATALOG_ENTRY_COUNT,
+  CORPUS_DIR,
   DSL_CYCLE_LENGTH,
+  FIRST_REAL_FRAME,
   FORCED_DSL_ERROR,
   REAL_CAPTURE_SETS,
+  RESERVED_ERROR_CASES,
 } from "../harness/fakePixsoMcp.ts";
 import {
   expectedAxisSetName,
@@ -514,7 +517,9 @@ test("an early-mounted panel recovers both boot tiers — subscription and galle
   await page.getByRole("tab", { name: "Импорт" }).click();
 
   // The fake's DSL cycle is `DSL_CYCLE_LENGTH` payloads long — example1→2→3, the two
-  // hand-built cards, then one entry per REAL capture set this machine holds — and only the
+  // hand-built cards, then one entry per REAL frame of the corpus (each served as its keyed
+  // selection), then the reserved ERROR cases (`RESERVED_ERROR_CASES`: each settles as its
+  // own user-visible error, the hang after the client's call deadline) — and only the
   // first three were ever consumed (the "three scans" case, above; every later scan in this
   // file forced a failure, which never advances the cursor). Burn the rest of the cycle,
   // each a genuinely NEW distinct selection: `success`, not `reimport` — that renders no
@@ -564,7 +569,8 @@ test("an early-mounted panel recovers both boot tiers — subscription and galle
     if (seenGuids.has(guid)) duplicateGuidCount += 1;
     else seenGuids.add(guid);
   }
-  const expectedDistinctCards = DSL_CYCLE_LENGTH - duplicateGuidCount;
+  // The error tier lands no card by construction — each of its scans settles an error.
+  const expectedDistinctCards = DSL_CYCLE_LENGTH - RESERVED_ERROR_CASES.length - duplicateGuidCount;
   await openGallery(page);
   await expect(galleryCards(page)).toHaveCount(expectedDistinctCards, { timeout: 30_000 });
 });
@@ -582,8 +588,11 @@ test("an early-mounted panel recovers both boot tiers — subscription and galle
 // at run time. A literal copied out of a dump would leak raw evidence into the repository
 // (ratified: it stays out) and would rot the moment the owner drops in a third capture.
 //
-// Absent corpus ⇒ the fake serves five payloads, `REAL_CAPTURE_SETS` is empty, and these
-// cases skip with their reason named — never silently pass.
+// ONE real frame, the corpus's FIRST by key (`FIRST_REAL_FRAME`): its keyed selection was
+// served on the local route by the walk above and must stand in the gallery as a card that
+// renders its own data. The loop over EVERY dump by key, on both routes, is the package
+// lane's (`dev/fake-mcp/*.test.ts`). No route-keyed skip: an absent corpus stops the boot
+// (`assertPixsoCorpus`), and a corpus with no frame fails the case below by name.
 
 /** A 40-hex component key. It is an ADDRESS, and it must never reach a human-readable
  *  surface — the four leak sites this phase closed all put one where a NAME belongs. */
@@ -630,274 +639,265 @@ function collectConsoleErrors(page: Page): () => readonly string[] {
 }
 
 test.describe("real Pixso captures", () => {
-  test.skip(
-    REAL_CAPTURE_SETS.length === 0,
-    "no Pixso captures on this machine — link ru-code-packages and run 'pnpm pixso:expectations'",
-  );
+  const set = FIRST_REAL_FRAME?.frame ?? "";
+  test(`the card for the real capture «${set}» (the corpus's first frame) renders its own data`, async ({
+    page,
+  }) => {
+    // Seven tabs derived from a payload up to 10 MB — see the D-A2 note on the budget.
+    test.setTimeout(300_000);
+    expect(FIRST_REAL_FRAME, `no debug-N frame under ${CORPUS_DIR}`).not.toBeNull();
+    const consoleErrors = collectConsoleErrors(page);
+    const capture = loadRealCapture(set);
+    const rootName = rootLayerNameOf(capture);
+    const rootGuid = rootGuidOf(capture);
+    const rootSize = rootSizeLabelOf(capture);
+    const expectedTexts = expectedTextsOf(capture, 3);
+    expect(rootName, `${set} has no root layer name`).not.toBeNull();
+    expect(rootGuid, `${set} has no root guid to identify its card by`).not.toBeNull();
+    expect(rootSize, `${set} has no root size to identify its card by`).not.toBeNull();
 
-  for (const set of REAL_CAPTURE_SETS) {
-    test(`the card for the real capture «${set}» renders its own data`, async ({ page }) => {
-      // Seven tabs derived from a payload up to 10 MB — see the D-A2 note on the budget.
-      test.setTimeout(300_000);
-      const consoleErrors = collectConsoleErrors(page);
-      const capture = loadRealCapture(set);
-      const rootName = rootLayerNameOf(capture);
-      const rootGuid = rootGuidOf(capture);
-      const rootSize = rootSizeLabelOf(capture);
-      const expectedTexts = expectedTextsOf(capture, 3);
-      expect(rootName, `${set} has no root layer name`).not.toBeNull();
-      expect(rootGuid, `${set} has no root guid to identify its card by`).not.toBeNull();
-      expect(rootSize, `${set} has no root size to identify its card by`).not.toBeNull();
+    await openPixsoPanel(page);
+    await openGallery(page);
 
-      await openPixsoPanel(page);
-      await openGallery(page);
+    // FIND THE CARD BY ITS NAME **AND ITS SIZE**, then PROVE it by its root guid.
+    //
+    // Neither the name nor the guid alone selects it. The synthesized payloads are
+    // generated from contract tables extracted from THESE captures, so a synthetic card
+    // is genuinely called «action sheet» and genuinely carries this capture's root guid on
+    // its root node — selecting on either silently asserted everything about the wrong
+    // card. The one thing the generator does not reproduce is the real geometry (sizes
+    // come from the table's numeric ranges), so name + size is the discriminator, and the
+    // guid is then re-checked as a post-condition: a wrong card fails here, loudly.
+    const candidates = galleryCards(page)
+      .filter({ hasText: rootName ?? "" })
+      .filter({ hasText: rootSize ?? "" });
+    await expect(
+      candidates.first(),
+      `no gallery card «${rootName ?? ""}» at ${rootSize ?? ""} — the real capture produced no card`,
+    ).toBeVisible();
+    // The gallery card's own name is a NAME, not an address.
+    expect(await candidates.first().innerText()).not.toMatch(HASH_ANYWHERE);
 
-      // FIND THE CARD BY ITS NAME **AND ITS SIZE**, then PROVE it by its root guid.
-      //
-      // Neither the name nor the guid alone selects it. The synthesized payloads are
-      // generated from contract tables extracted from THESE captures, so a synthetic card
-      // is genuinely called «action sheet» and genuinely carries this capture's root guid on
-      // its root node — selecting on either silently asserted everything about the wrong
-      // card. The one thing the generator does not reproduce is the real geometry (sizes
-      // come from the table's numeric ranges), so name + size is the discriminator, and the
-      // guid is then re-checked as a post-condition: a wrong card fails here, loudly.
-      const candidates = galleryCards(page)
-        .filter({ hasText: rootName ?? "" })
-        .filter({ hasText: rootSize ?? "" });
+    // Gallery-TILE PNG (G7a, e2e gap ii): distinct from the OverviewTab's own PNG/SVG
+    // toggle asserted below — this is `NodeCard.tsx`'s thumbnail, BEFORE the card is even
+    // opened. `card.imageAvailable` drives it (`preview-image.tsx`'s `data:image/png`
+    // branch); this capture set records a `get_image` blob (`realCaptureImage`), so the
+    // tile must show the screenshot, not the SVG/skeleton fallback.
+    const captureImage = realCaptureImage(set);
+    if (captureImage !== null) {
+      const tilePng = candidates.first().locator('img[src^="data:image/png;base64,"]');
       await expect(
-        candidates.first(),
-        `no gallery card «${rootName ?? ""}» at ${rootSize ?? ""} — the real capture produced no card`,
+        tilePng,
+        `${set} records a get_image blob — the gallery tile must show it, not the SVG fallback`,
+      ).toBeVisible({ timeout: 30_000 });
+      expect((await tilePng.getAttribute("src")) ?? "").toMatch(/^data:image\/png;base64,.{500,}$/);
+    }
+
+    await candidates.first().click();
+    await expect(page.getByTestId("pixso-tab-overview")).toBeVisible();
+    await page.getByRole("tab", { name: "Структура" }).click();
+    await expect(
+      page.getByTestId("pixso-tab-structure").locator("[data-node-id]").first(),
+    ).toHaveAttribute("data-node-id", rootGuid ?? "");
+
+    // 1 — the preview. This capture's scan ran `get_image` in parallel with the catalogue
+    // fetch and the fake answered with a PNG at the dimensions the dump records, so the
+    // card DEFAULTS to that screenshot and offers a toggle back to our own render. Both
+    // sides are asserted: a default that never switches and a toggle that shows the same
+    // picture twice are both failures.
+    //
+    // The data URI is the selector on purpose — `getByRole("img")` is also satisfied by
+    // the lucide icon of the «image unavailable» branch, i.e. by the preview having FAILED.
+    await page.getByRole("tab", { name: "Обзор" }).click();
+    const overview = page.getByTestId("pixso-tab-overview");
+    await expect(overview).toBeVisible();
+
+    // `captureImage` computed above (hoisted for the gallery-tile PNG assertion).
+    if (captureImage !== null) {
+      const toggle = overview.getByTestId("pixso-preview-source");
+      await expect(
+        toggle,
+        `${set} records a get_image blob, so its card must offer the screenshot toggle`,
       ).toBeVisible();
-      // The gallery card's own name is a NAME, not an address.
-      expect(await candidates.first().innerText()).not.toMatch(HASH_ANYWHERE);
+      // DEFAULT: the screenshot.
+      const png = overview.locator('img[src^="data:image/png;base64,"]').first();
+      await expect(png).toBeVisible({ timeout: 30_000 });
+      expect((await png.getAttribute("src")) ?? "").toMatch(/^data:image\/png;base64,.{500,}$/);
+      const pngSource = (await png.getAttribute("src")) ?? "";
+      // …the toggle really switches to OUR render, not to the same bytes again…
+      await overview.getByTestId("pixso-preview-source-svg").click();
+      await expect(overview.locator('img[src^="data:image/png"]')).toHaveCount(0);
+      await expect(overview.locator('img[src^="data:image/svg+xml"]').first()).toBeVisible();
+      // …AND BACK: the screenshot returns, byte-identical, with no refetch to wait on.
+      await overview.getByTestId("pixso-preview-source-png").click();
+      await expect(overview.locator('img[src^="data:image/png;base64,"]').first()).toHaveAttribute(
+        "src",
+        pngSource,
+      );
+      await expect(overview.locator('img[src^="data:image/svg+xml"]')).toHaveCount(0);
+      // Leave it on the render for the assertions below.
+      await overview.getByTestId("pixso-preview-source-svg").click();
+    } else {
+      await expect(overview.getByTestId("pixso-preview-source")).toHaveCount(0);
+    }
 
-      // Gallery-TILE PNG (G7a, e2e gap ii): distinct from the OverviewTab's own PNG/SVG
-      // toggle asserted below — this is `NodeCard.tsx`'s thumbnail, BEFORE the card is even
-      // opened. `card.imageAvailable` drives it (`preview-image.tsx`'s `data:image/png`
-      // branch); this capture set records a `get_image` blob (`realCaptureImage`), so the
-      // tile must show the screenshot, not the SVG/skeleton fallback.
-      const captureImage = realCaptureImage(set);
-      if (captureImage !== null) {
-        const tilePng = candidates.first().locator('img[src^="data:image/png;base64,"]');
-        await expect(
-          tilePng,
-          `${set} records a get_image blob — the gallery tile must show it, not the SVG fallback`,
-        ).toBeVisible({ timeout: 30_000 });
-        expect((await tilePng.getAttribute("src")) ?? "").toMatch(
-          /^data:image\/png;base64,.{500,}$/,
-        );
+    // Whichever branch ran, the algorithmic render is on screen now — the SVG half is
+    // still the one that proves what the PARSER understood, so it is asserted either way.
+    const preview = overview.locator('img[src^="data:image/svg+xml"]').first();
+    await expect(preview).toBeVisible();
+    const source = await preview.getAttribute("src");
+    expect(source ?? "").not.toBe("");
+    expect((source ?? "").length).toBeGreaterThan("data:image/svg+xml,".length + 100);
+
+    // 2 — the layers tree carries this capture's own COPY, read out of the capture file
+    // at run time. How MUCH is asserted follows what the file proves (see
+    // `ExpectedTexts`): a selection with copy of its own must show ALL of it, while a
+    // selection made only of instances can only be held to "at least one string from the
+    // masters it names" — which is nonetheless false unless the expansion join ran.
+    await page.getByRole("tab", { name: "Структура" }).click();
+    const structure = page.getByTestId("pixso-tab-structure");
+    await expect(structure).toBeVisible();
+    expect(expectedTexts.texts.length, `${set} carries no copy to assert`).toBeGreaterThan(0);
+    if (expectedTexts.origin === "selection") {
+      for (const text of expectedTexts.texts) {
+        await expect(structure.getByText(text, { exact: false }).first()).toBeVisible();
       }
+    } else {
+      const tree = await structure.innerText();
+      const present = expectedTexts.texts.filter((text) => tree.includes(text));
+      expect(
+        present.length,
+        `none of the component masters' copy reached the card — the instance-expansion join produced nothing readable (looked for: ${expectedTexts.texts.join(" | ")})`,
+      ).toBeGreaterThan(0);
+    }
+    // …and no row anywhere in the tree shows a 40-hex address.
+    expect(await structure.innerText()).not.toMatch(HASH_ANYWHERE);
 
-      await candidates.first().click();
-      await expect(page.getByTestId("pixso-tab-overview")).toBeVisible();
-      await page.getByRole("tab", { name: "Структура" }).click();
+    // The Phase-3 row markers, on real data. Every one of these fields has been on the
+    // wire since Phase 2 and rendered nowhere, so their presence here is the whole point:
+    // both captures carry all three (86/62 named components, 43/31 expanded instances,
+    // 31/15 vector placeholders in the two wire trees).
+    await expect(structure.getByTestId("pixso-layer-component").first()).toBeVisible();
+    await expect(structure.getByTestId("pixso-layer-expansion").first()).toBeVisible();
+    // The component chips are NAMES — the surface the 40-hex key used to leak into.
+    const componentChips = structure.getByTestId("pixso-layer-component");
+    expect(await componentChips.count()).toBeGreaterThan(0);
+    for (const chip of await componentChips.all()) {
+      expect(await chip.innerText()).not.toMatch(HASH_ANYWHERE);
+    }
+
+    // 3 — the component rows carry HUMAN names. Both halves: at least one row exists (a
+    // real selection is built from components), and not one of them is a hash.
+    await page.getByRole("tab", { name: "Компоненты" }).click();
+    const components = page.getByTestId("pixso-tab-components");
+    await expect(components).toBeVisible();
+    const usages = components.getByTestId("pixso-component-usage");
+    const usageCount = await usages.count();
+    expect(usageCount, `${set} produced no component rows`).toBeGreaterThan(0);
+    for (let index = 0; index < usageCount; index += 1) {
+      const name = (await usages.nth(index).innerText()).split("\n")[0] ?? "";
+      expect(name.length, "a component row with no name at all").toBeGreaterThan(0);
+      expect(name, "a 40-hex component key leaked where a name belongs").not.toMatch(HASH_ANYWHERE);
+      expect(name).not.toMatch(/^[0-9a-f]{40}$/i);
+    }
+
+    // Axis block on a REAL capture (e2e gap i, wave-f-review.md F-5): `pixso-catalog-set-axis`
+    // is `CatalogAxisRow`'s only emitter, mounted exclusively by `CatalogPanel` inside THIS
+    // (detail) Components tab's «Каталог» view, and only inside an EXPANDED multi-variant
+    // set's body — never in the gallery. Default CI synthetic names carry no `Prop=Value`
+    // suffix, so the axis block only ever proves itself against a real capture's own names.
+    //
+    // `expectedAxisSetName` reads the capture's OWN catalog at run time for a state-group
+    // shared by ≥2 entries (a real SET, same discipline as `expectedTextsOf`: never a
+    // literal out of the dump) — both real captures have one (`realCaptures.ts`, corpus-
+    // measured: pixso-debug's catalog alone has 147 such groups). Searching for it directly
+    // sidesteps the windowed grid (E-W8) entirely instead of guessing at scroll positions.
+    const axisSetName = expectedAxisSetName(capture);
+    const catalogToggle = components.getByTestId("pixso-components-view-catalog");
+    if (axisSetName !== null && (await catalogToggle.count()) > 0) {
+      await catalogToggle.click();
+      const catalogPanel = components; // same tab container, view swapped in place
+      await expect(catalogPanel.getByTestId("pixso-catalog-measured-row").first()).toBeVisible({
+        timeout: 30_000,
+      });
+      await catalogPanel.getByPlaceholder("Поиск по компонентам…").fill(axisSetName);
+      const setHeaders = catalogPanel.getByTestId("pixso-catalog-set-header").filter({
+        hasText: axisSetName,
+      });
       await expect(
-        page.getByTestId("pixso-tab-structure").locator("[data-node-id]").first(),
-      ).toHaveAttribute("data-node-id", rootGuid ?? "");
-
-      // 1 — the preview. This capture's scan ran `get_image` in parallel with the catalogue
-      // fetch and the fake answered with a PNG at the dimensions the dump records, so the
-      // card DEFAULTS to that screenshot and offers a toggle back to our own render. Both
-      // sides are asserted: a default that never switches and a toggle that shows the same
-      // picture twice are both failures.
-      //
-      // The data URI is the selector on purpose — `getByRole("img")` is also satisfied by
-      // the lucide icon of the «image unavailable» branch, i.e. by the preview having FAILED.
-      await page.getByRole("tab", { name: "Обзор" }).click();
-      const overview = page.getByTestId("pixso-tab-overview");
-      await expect(overview).toBeVisible();
-
-      // `captureImage` computed above (hoisted for the gallery-tile PNG assertion).
-      if (captureImage !== null) {
-        const toggle = overview.getByTestId("pixso-preview-source");
-        await expect(
-          toggle,
-          `${set} records a get_image blob, so its card must offer the screenshot toggle`,
-        ).toBeVisible();
-        // DEFAULT: the screenshot.
-        const png = overview.locator('img[src^="data:image/png;base64,"]').first();
-        await expect(png).toBeVisible({ timeout: 30_000 });
-        expect((await png.getAttribute("src")) ?? "").toMatch(/^data:image\/png;base64,.{500,}$/);
-        const pngSource = (await png.getAttribute("src")) ?? "";
-        // …the toggle really switches to OUR render, not to the same bytes again…
-        await overview.getByTestId("pixso-preview-source-svg").click();
-        await expect(overview.locator('img[src^="data:image/png"]')).toHaveCount(0);
-        await expect(overview.locator('img[src^="data:image/svg+xml"]').first()).toBeVisible();
-        // …AND BACK: the screenshot returns, byte-identical, with no refetch to wait on.
-        await overview.getByTestId("pixso-preview-source-png").click();
-        await expect(
-          overview.locator('img[src^="data:image/png;base64,"]').first(),
-        ).toHaveAttribute("src", pngSource);
-        await expect(overview.locator('img[src^="data:image/svg+xml"]')).toHaveCount(0);
-        // Leave it on the render for the assertions below.
-        await overview.getByTestId("pixso-preview-source-svg").click();
-      } else {
-        await expect(overview.getByTestId("pixso-preview-source")).toHaveCount(0);
-      }
-
-      // Whichever branch ran, the algorithmic render is on screen now — the SVG half is
-      // still the one that proves what the PARSER understood, so it is asserted either way.
-      const preview = overview.locator('img[src^="data:image/svg+xml"]').first();
-      await expect(preview).toBeVisible();
-      const source = await preview.getAttribute("src");
-      expect(source ?? "").not.toBe("");
-      expect((source ?? "").length).toBeGreaterThan("data:image/svg+xml,".length + 100);
-
-      // 2 — the layers tree carries this capture's own COPY, read out of the capture file
-      // at run time. How MUCH is asserted follows what the file proves (see
-      // `ExpectedTexts`): a selection with copy of its own must show ALL of it, while a
-      // selection made only of instances can only be held to "at least one string from the
-      // masters it names" — which is nonetheless false unless the expansion join ran.
-      await page.getByRole("tab", { name: "Структура" }).click();
-      const structure = page.getByTestId("pixso-tab-structure");
-      await expect(structure).toBeVisible();
-      expect(expectedTexts.texts.length, `${set} carries no copy to assert`).toBeGreaterThan(0);
-      if (expectedTexts.origin === "selection") {
-        for (const text of expectedTexts.texts) {
-          await expect(structure.getByText(text, { exact: false }).first()).toBeVisible();
-        }
-      } else {
-        const tree = await structure.innerText();
-        const present = expectedTexts.texts.filter((text) => tree.includes(text));
-        expect(
-          present.length,
-          `none of the component masters' copy reached the card — the instance-expansion join produced nothing readable (looked for: ${expectedTexts.texts.join(" | ")})`,
-        ).toBeGreaterThan(0);
-      }
-      // …and no row anywhere in the tree shows a 40-hex address.
-      expect(await structure.innerText()).not.toMatch(HASH_ANYWHERE);
-
-      // The Phase-3 row markers, on real data. Every one of these fields has been on the
-      // wire since Phase 2 and rendered nowhere, so their presence here is the whole point:
-      // both captures carry all three (86/62 named components, 43/31 expanded instances,
-      // 31/15 vector placeholders in the two wire trees).
-      await expect(structure.getByTestId("pixso-layer-component").first()).toBeVisible();
-      await expect(structure.getByTestId("pixso-layer-expansion").first()).toBeVisible();
-      // The component chips are NAMES — the surface the 40-hex key used to leak into.
-      const componentChips = structure.getByTestId("pixso-layer-component");
-      expect(await componentChips.count()).toBeGreaterThan(0);
-      for (const chip of await componentChips.all()) {
-        expect(await chip.innerText()).not.toMatch(HASH_ANYWHERE);
-      }
-
-      // 3 — the component rows carry HUMAN names. Both halves: at least one row exists (a
-      // real selection is built from components), and not one of them is a hash.
-      await page.getByRole("tab", { name: "Компоненты" }).click();
-      const components = page.getByTestId("pixso-tab-components");
-      await expect(components).toBeVisible();
-      const usages = components.getByTestId("pixso-component-usage");
-      const usageCount = await usages.count();
-      expect(usageCount, `${set} produced no component rows`).toBeGreaterThan(0);
-      for (let index = 0; index < usageCount; index += 1) {
-        const name = (await usages.nth(index).innerText()).split("\n")[0] ?? "";
-        expect(name.length, "a component row with no name at all").toBeGreaterThan(0);
-        expect(name, "a 40-hex component key leaked where a name belongs").not.toMatch(
-          HASH_ANYWHERE,
-        );
-        expect(name).not.toMatch(/^[0-9a-f]{40}$/i);
-      }
-
-      // Axis block on a REAL capture (e2e gap i, wave-f-review.md F-5): `pixso-catalog-set-axis`
-      // is `CatalogAxisRow`'s only emitter, mounted exclusively by `CatalogPanel` inside THIS
-      // (detail) Components tab's «Каталог» view, and only inside an EXPANDED multi-variant
-      // set's body — never in the gallery. Default CI synthetic names carry no `Prop=Value`
-      // suffix, so the axis block only ever proves itself against a real capture's own names.
-      //
-      // `expectedAxisSetName` reads the capture's OWN catalog at run time for a state-group
-      // shared by ≥2 entries (a real SET, same discipline as `expectedTextsOf`: never a
-      // literal out of the dump) — both real captures have one (`realCaptures.ts`, corpus-
-      // measured: pixso-debug's catalog alone has 147 such groups). Searching for it directly
-      // sidesteps the windowed grid (E-W8) entirely instead of guessing at scroll positions.
-      const axisSetName = expectedAxisSetName(capture);
-      const catalogToggle = components.getByTestId("pixso-components-view-catalog");
-      if (axisSetName !== null && (await catalogToggle.count()) > 0) {
-        await catalogToggle.click();
-        const catalogPanel = components; // same tab container, view swapped in place
-        await expect(catalogPanel.getByTestId("pixso-catalog-measured-row").first()).toBeVisible({
-          timeout: 30_000,
-        });
-        await catalogPanel.getByPlaceholder("Поиск по компонентам…").fill(axisSetName);
-        const setHeaders = catalogPanel.getByTestId("pixso-catalog-set-header").filter({
-          hasText: axisSetName,
-        });
-        await expect(
-          setHeaders.first(),
-          `${set}: searching «${axisSetName}» (a real multi-entry state group from this capture's own catalog) surfaces no set card`,
-        ).toBeVisible({ timeout: 15_000 });
-        await setHeaders.first().click(); // expand
-        const axisRows = catalogPanel.getByTestId("pixso-catalog-set-axis");
-        await expect(
-          axisRows.first(),
-          `${set}: the «${axisSetName}» set expands but renders no axis row (only \`pixso-catalog-set-axes-empty\`) — e2e gap (i) is NOT demonstrated`,
-        ).toBeVisible();
-        const label = await axisRows
-          .first()
-          .getByTestId("pixso-catalog-set-axis-label")
-          .innerText();
-        expect(label.trim().length, `${set}'s axis row has no name`).toBeGreaterThan(0);
-        expect(label, "a 40-hex address leaked as an axis name").not.toMatch(HASH_ANYWHERE);
-        const options = axisRows.first().getByTestId("pixso-catalog-set-axis-option");
-        expect(
-          await options.count(),
-          `${set}'s axis «${label}» renders no option chips`,
-        ).toBeGreaterThan(0);
-        await catalogPanel.getByPlaceholder("Поиск по компонентам…").fill("");
-        await components.getByTestId("pixso-components-view-used").click(); // leave as found
-      }
-
-      // 4 — every remaining tab mounts over this payload without throwing. Each assertion
-      // is about DATA the tab derived, never about its chrome: a title renders with zero
-      // rows behind it, which is the vacuity this file exists to avoid.
-      await page.getByRole("tab", { name: "Стили" }).click();
-      await expect(page.getByTestId("pixso-tab-styles")).toBeVisible();
+        setHeaders.first(),
+        `${set}: searching «${axisSetName}» (a real multi-entry state group from this capture's own catalog) surfaces no set card`,
+      ).toBeVisible({ timeout: 15_000 });
+      await setHeaders.first().click(); // expand
+      const axisRows = catalogPanel.getByTestId("pixso-catalog-set-axis");
       await expect(
-        page.getByTestId("pixso-tab-styles").getByTestId("pixso-style-color").first(),
+        axisRows.first(),
+        `${set}: the «${axisSetName}» set expands but renders no axis row (only \`pixso-catalog-set-axes-empty\`) — e2e gap (i) is NOT demonstrated`,
       ).toBeVisible();
+      const label = await axisRows.first().getByTestId("pixso-catalog-set-axis-label").innerText();
+      expect(label.trim().length, `${set}'s axis row has no name`).toBeGreaterThan(0);
+      expect(label, "a 40-hex address leaked as an axis name").not.toMatch(HASH_ANYWHERE);
+      const options = axisRows.first().getByTestId("pixso-catalog-set-axis-option");
+      expect(
+        await options.count(),
+        `${set}'s axis «${label}» renders no option chips`,
+      ).toBeGreaterThan(0);
+      await catalogPanel.getByPlaceholder("Поиск по компонентам…").fill("");
+      await components.getByTestId("pixso-components-view-used").click(); // leave as found
+    }
 
-      await page.getByRole("tab", { name: "QA" }).click();
-      await expect(page.getByTestId("pixso-tab-qa")).toBeVisible();
-      await expect(
-        page.getByTestId("pixso-tab-qa").getByTestId("pixso-qa-case").first(),
-      ).toBeVisible();
+    // 4 — every remaining tab mounts over this payload without throwing. Each assertion
+    // is about DATA the tab derived, never about its chrome: a title renders with zero
+    // rows behind it, which is the vacuity this file exists to avoid.
+    await page.getByRole("tab", { name: "Стили" }).click();
+    await expect(page.getByTestId("pixso-tab-styles")).toBeVisible();
+    await expect(
+      page.getByTestId("pixso-tab-styles").getByTestId("pixso-style-color").first(),
+    ).toBeVisible();
 
-      await page.getByRole("tab", { name: "Аналитика" }).click();
-      const analytics = page.getByTestId("pixso-tab-analytics");
-      await expect(analytics).toBeVisible();
-      await analytics.getByText("Слои по видам").click();
-      await expect(analytics.getByTestId("pixso-analytics-kind").first()).toBeVisible();
+    await page.getByRole("tab", { name: "QA" }).click();
+    await expect(page.getByTestId("pixso-tab-qa")).toBeVisible();
+    await expect(
+      page.getByTestId("pixso-tab-qa").getByTestId("pixso-qa-case").first(),
+    ).toBeVisible();
 
-      await page.getByRole("tab", { name: "Промпт" }).click();
-      const prompt = page.getByTestId("pixso-tab-prompt");
-      await expect(prompt).toBeVisible();
-      // The payload the model would receive carries the capture's own copy too, and — the
-      // point of the whole naming chain — no address anywhere in it.
-      //
-      // How much is asserted follows the SAME rule the structure assertion above follows,
-      // and for the same reason. A selection with copy of its own must show it. A selection
-      // made only of INSTANCES has none, and every string in the masters it names may be
-      // overridden per instance — this capture's four instances override all three — so the
-      // strings the raw file offers are exactly the ones the drawn design does NOT say. What
-      // the prompt must state is THIS card's rendered copy, enumerated and counted, which is
-      // what the `## TEXT` section is: one row per visible text node, closed with its own
-      // total. (The structure view is about the FILE and still shows the masters' copy; the
-      // prompt is about the DESIGN, and a spec that listed text the design hides is the
-      // defect `prompt-eval.md` recorded as M29.)
-      const promptText = await prompt.innerText();
-      if (expectedTexts.origin === "selection") {
-        expect(promptText).toContain(expectedTexts.texts[0] ?? "");
-      } else {
-        expect(
-          promptText,
-          "the prompt states no copy at all — the TEXT section is missing or empty",
-        ).toMatch(/Строк: [1-9]\d*\./);
-      }
-      expect(promptText).not.toMatch(HASH_ANYWHERE);
+    await page.getByRole("tab", { name: "Аналитика" }).click();
+    const analytics = page.getByTestId("pixso-tab-analytics");
+    await expect(analytics).toBeVisible();
+    await analytics.getByText("Слои по видам").click();
+    await expect(analytics.getByTestId("pixso-analytics-kind").first()).toBeVisible();
 
-      // 5 — the JS console stayed clean while all seven tabs mounted. A React render error
-      // does not fail a locator assertion; it fails here.
-      expect(consoleErrors()).toEqual([]);
-    });
-  }
+    await page.getByRole("tab", { name: "Промпт" }).click();
+    const prompt = page.getByTestId("pixso-tab-prompt");
+    await expect(prompt).toBeVisible();
+    // The payload the model would receive carries the capture's own copy too, and — the
+    // point of the whole naming chain — no address anywhere in it.
+    //
+    // How much is asserted follows the SAME rule the structure assertion above follows,
+    // and for the same reason. A selection with copy of its own must show it. A selection
+    // made only of INSTANCES has none, and every string in the masters it names may be
+    // overridden per instance — this capture's four instances override all three — so the
+    // strings the raw file offers are exactly the ones the drawn design does NOT say. What
+    // the prompt must state is THIS card's rendered copy, enumerated and counted, which is
+    // what the `## TEXT` section is: one row per visible text node, closed with its own
+    // total. (The structure view is about the FILE and still shows the masters' copy; the
+    // prompt is about the DESIGN, and a spec that listed text the design hides is the
+    // defect `prompt-eval.md` recorded as M29.)
+    const promptText = await prompt.innerText();
+    if (expectedTexts.origin === "selection") {
+      expect(promptText).toContain(expectedTexts.texts[0] ?? "");
+    } else {
+      expect(
+        promptText,
+        "the prompt states no copy at all — the TEXT section is missing or empty",
+      ).toMatch(/Строк: [1-9]\d*\./);
+    }
+    expect(promptText).not.toMatch(HASH_ANYWHERE);
+
+    // 5 — the JS console stayed clean while all seven tabs mounted. A React render error
+    // does not fail a locator assertion; it fails here.
+    expect(consoleErrors()).toEqual([]);
+  });
 });
 
 /**

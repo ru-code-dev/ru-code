@@ -8,17 +8,20 @@
 // generator calls the very functions the specs used to call (verified byte-for-byte against
 // a pre-move snapshot, decisions 510/511).
 //
-// Reached through the gitignored `ru-code-packages` symlink, like the fake server beside it.
-// No symlink or no manifest ⇒ a NAMED throw, never a skip: these specs are dev-machine tests
+// Read at the assets root (`pnpm pixso:expectations` writes it there).
+// No manifest ⇒ a NAMED throw, never a skip: these specs are dev-machine tests
 // and a silent pass would mean a run that exercised nothing (owner ruling, 2026-08-21).
 
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-const MANIFEST = NodePath.join(
-  import.meta.dirname,
-  "../../../ru-code-packages/packages/pixso-core/pixso_dumps/expectations.json",
-);
+import { CORPUS_DIR } from "./fakePixsoMcp.ts";
+
+// Contract 2 (2026-09-26): the corpus lives at the assets root, `<PIXSO_ASSETS>/current-dsl/dumps`
+// — read off the engine's ONE constant (`CORPUS_DIR`, `src/io/captures.ts`, re-exported by the
+// harness exactly as `scripts/bootApp.ts` reads it), never a second literal of the same path.
+// `pnpm pixso:expectations` writes the manifest there (`scripts/expectations.ts`).
+const MANIFEST = NodePath.join(CORPUS_DIR, "expectations.json");
 
 export interface CaptureImage {
   readonly width: number;
@@ -40,6 +43,8 @@ interface SetExpectation {
   readonly rootSizeLabel: string | null;
   readonly expectedTexts: ExpectedTexts;
   readonly expectedAxisSetName: string | null;
+  /** The names the card's «Компоненты» tab lists, in the card's order (null: no card). */
+  readonly componentUsageNames: readonly string[] | null;
   readonly image: CaptureImage | null;
 }
 
@@ -52,6 +57,8 @@ interface Manifest {
     readonly fileKey: string | null;
     readonly hasTruthSvg: boolean;
     readonly hasTruthPng: boolean;
+    /** The frame's served DSL top-level roots, in wire order. */
+    readonly topLevelRoots: readonly string[];
   }[];
   readonly expectations: Readonly<Record<string, SetExpectation>>;
 }
@@ -59,9 +66,9 @@ interface Manifest {
 function readManifest(): Manifest {
   if (!NodeFS.existsSync(MANIFEST)) {
     throw new Error(
-      `pixso expectations manifest not found at ${MANIFEST} — link the packages checkout ` +
-        `(the gitignored 'ru-code-packages' symlink at the repo root) and run ` +
-        `'pnpm pixso:expectations' in the pixso package. These specs are dev-machine tests ` +
+      `pixso expectations manifest not found at ${MANIFEST} — run ` +
+        `'pnpm pixso:expectations' in the pixso package (it writes the assets-root corpus ` +
+        `manifest). These specs are dev-machine tests ` +
         `and do not run without the capture corpus.`,
     );
   }
@@ -97,6 +104,18 @@ export const rootSizeLabelOf = (c: RealCapture): string | null =>
 export const expectedAxisSetName = (c: RealCapture): string | null =>
   expectationOf(c.set).expectedAxisSetName;
 export const realCaptureImage = (set: string): CaptureImage | null => expectationOf(set).image;
+export const componentUsageNamesOf = (c: RealCapture): readonly string[] | null =>
+  expectationOf(c.set).componentUsageNames;
+
+/** The top-level roots a frame's served DSL carries, in wire order (the keyed root among
+ *  them). A frame the manifest does not know is a regenerate-the-manifest error, never []. */
+export function topLevelRootsOf(frame: string): readonly string[] {
+  const found = manifest.frames.find((f) => f.frame === frame);
+  if (found === undefined) {
+    throw new Error(`no frame "${frame}" in the manifest — regenerate it`);
+  }
+  return found.topLevelRoots;
+}
 
 /**
  * The manifest stores exactly what the package's `expectedTextsOf(capture)` returned, which
@@ -113,9 +132,4 @@ export function expectedTextsOf(c: RealCapture, limit = MANIFEST_TEXT_LIMIT): Ex
     );
   }
   return expectationOf(c.set).expectedTexts;
-}
-
-/** Does a frame carry a REMOTE source? Replaces the old direct corpus file probe. */
-export function frameHasRemoteSource(frame: string): boolean {
-  return manifest.frames.find((f) => f.frame === frame)?.sources.includes("remote") ?? false;
 }

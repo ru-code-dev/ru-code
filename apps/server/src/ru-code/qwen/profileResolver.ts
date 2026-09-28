@@ -64,7 +64,12 @@ export const resolveCliProfileSettings = (
  */
 export const buildCliEnv = (
   baseEnv: NodeJS.ProcessEnv,
-  runtime: { readonly homeDir: string; readonly settingsOverlayPath?: string },
+  runtime: {
+    readonly homeDir: string;
+    readonly settingsOverlayPath?: string;
+    /** ru-code (S99): the blocking-discovery row — an `--acp` spawn with its switch on only. */
+    readonly legacyMcpBlocking?: boolean;
+  },
 ): NodeJS.ProcessEnv => {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   // ru-code: identity is re-read at every spawn (CLI_PASS_IDENTITY, preflight identity.ts) so an
@@ -72,6 +77,7 @@ export const buildCliEnv = (
   const assignments = cliEnvAssignments({
     HOME: expandHomePath(runtime.homeDir),
     ...(runtime.settingsOverlayPath ? { SYSTEM_SETTINGS_PATH: runtime.settingsOverlayPath } : {}),
+    ...(runtime.legacyMcpBlocking === true ? { LEGACY_MCP_BLOCKING: "1" } : {}),
     ...identityEnvRuntime(),
   });
   for (const [name, value] of assignments) env[name] = value;

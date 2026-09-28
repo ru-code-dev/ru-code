@@ -24,7 +24,8 @@
 //     add `KEY: { names: ["THE_NAME"], value: null }`, then supply it through the runtime argument
 //     of `cliEnvAssignments`. A runtime row with no value supplied that spawn is simply omitted —
 //     which is how SYSTEM_SETTINGS_PATH stays absent everywhere except an ACP spawn with an
-//     overlay, rather than being written as an empty variable.
+//     overlay, and LEGACY_MCP_BLOCKING everywhere except an ACP spawn with its switch on, rather
+//     than being written as an empty variable.
 
 /**
  * IDENTITY_KEY — the ONE name of the package-identity variable: it is both the key hunted inside
@@ -62,6 +63,15 @@ export const CLI_ENV = {
    * disagree.
    */
   PACKAGE_IDENTITY: { names: [IDENTITY_KEY], value: null },
+  /**
+   * The CLI's blocking MCP discovery: with it (value "1", qwen 0.21.1 core/src/config/config.ts:2811)
+   * `session/new` answers only after every MCP server has connected or failed, so the first turn
+   * already carries the tools. Runtime-supplied AND genuinely optional: only an `--acp` spawn
+   * (cold or warm slot) supplies it, and only while the S99 gate switch MCP_INJECT_BLOCKING_ENV is
+   * on — never `-p`, the `--version` probes or the installer warm-up, which would otherwise wait
+   * on the user's servers too. With no MCP server configured it costs nothing (S94 P-90/P-91).
+   */
+  LEGACY_MCP_BLOCKING: { names: ["QWEN_CODE_LEGACY_MCP_BLOCKING"], value: null },
   /**
    * The deployment's CLI identity FILE path for the running platform (CLI_IDENTITY_PATHS, resolved
    * by preflight/common/identity.ts `resolveIdentityPath` at every spawn — never baked at build

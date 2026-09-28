@@ -21,6 +21,8 @@ export interface CliEnvRuntime {
   readonly SYSTEM_SETTINGS_PATH?: string | undefined;
   /** The package identity value. Supplied only when resolveCliIdentity produced one. */
   readonly PACKAGE_IDENTITY?: string | undefined;
+  /** Blocking MCP discovery ("1"). Only an `--acp` spawn with the switch on supplies it. */
+  readonly LEGACY_MCP_BLOCKING?: string | undefined;
   /** The CLI identity file path for this platform. Supplied only when one is configured. */
   readonly CLI?: string | undefined;
 }

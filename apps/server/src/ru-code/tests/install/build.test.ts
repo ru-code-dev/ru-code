@@ -71,6 +71,10 @@ describe("installer build (drift guard)", () => {
     }
     // …and the shared flags, so a warm-up never waits on the user's MCP servers.
     expect(warmLine).toContain(cliArgAssignments().join(" "));
+    // ru-code (S99): nor on blocking MCP discovery — an `--acp`-only runtime row.
+    for (const name of CLI_ENV.LEGACY_MCP_BLOCKING.names) {
+      expect(committed).not.toContain(name);
+    }
   });
 
   it("contains no bash-4+ syntax (bash 3.2 portability, §1a)", () => {

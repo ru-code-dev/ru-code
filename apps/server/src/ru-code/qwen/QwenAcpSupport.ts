@@ -18,6 +18,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import { allowedMcpServerArgs, resolveCliProfile } from "@ru-code/branding";
 import { ACP_SERVER_NO_SSL, MCP_ENGINE_USE_OVERLAY } from "@ru-code/qwen/constants";
 import { buildCliSpawn } from "@ru-code/qwen/spawn";
+import { MCP_INJECT_BLOCKING_ENV } from "./acpSwitches.ts";
 import { buildCliEnv, resolveDefaultAuthMethod } from "./profileResolver.ts";
 import {
   QwenAcpSessionRuntime,
@@ -85,11 +86,15 @@ export function buildQwenAcpSpawnInput(
   // the relaunch guard, the profile dir and, when present, the settings overlay. The overlay is
   // gated on MCP_ENGINE_USE_OVERLAY so the documented kill-switch actually disables overlay
   // injection (and the server allowlist below) when off.
+  // ru-code (S99): blocking MCP discovery rides on THIS site only — every `--acp` spawn, cold and
+  // warm slot alike (both build here), with or without an overlay — while its gate switch is on;
+  // under the same kill-switch, since without the allowlist it would wait on the user's servers.
   const env = buildCliEnv(environment ?? {}, {
     homeDir,
     ...(MCP_ENGINE_USE_OVERLAY && settingsOverlay?.settingsOverlayPath
       ? { settingsOverlayPath: settingsOverlay.settingsOverlayPath }
       : {}),
+    ...(MCP_ENGINE_USE_OVERLAY && MCP_INJECT_BLOCKING_ENV ? { legacyMcpBlocking: true } : {}),
   });
   if (ACP_SERVER_NO_SSL) {
     env.NODE_TLS_REJECT_UNAUTHORIZED = "0";

@@ -17,8 +17,9 @@ import {
 } from "@smart-tools/qwen-cli-mcp-manager/server";
 import { describe, expect, it } from "vite-plus/test";
 
-// The exact field set qwen 0.13.1 accepts on an mcpServers entry (MCPServerConfig,
-// sdk-typescript/src/types/protocol.ts:287-306). buildServerEntry must stay a subset of this.
+// The exact field set qwen 0.21.1 accepts on an mcpServers entry (MCPServerConfig constructor,
+// qwen-code @ 41b4ee8373 packages/core/src/config/config.ts:773-823; S99 — 0.13.1 is retired).
+// buildServerEntry must stay a subset of this.
 const QWEN_MCP_SERVER_KEYS = new Set<string>([
   "command",
   "args",
@@ -38,6 +39,10 @@ const QWEN_MCP_SERVER_KEYS = new Set<string>([
   "authProviderType",
   "targetAudience",
   "targetServiceAccount",
+  "type",
+  "discoveryTimeoutMs",
+  "scope",
+  "alwaysLoadTools",
 ]);
 
 const stdioResolved: ResolvedServerConfig = {
@@ -64,7 +69,7 @@ const entry = (
 
 describe("branch-3 guard — overlay ↔ qwen schema conformance", () => {
   it("stdio entry uses only keys qwen accepts + emits trust (#6)", () => {
-    const entry = buildServerEntry(stdioResolved, DEFAULT_TOOL_POLICY, true);
+    const entry = buildServerEntry(stdioResolved, DEFAULT_TOOL_POLICY, true, false);
     for (const key of Object.keys(entry)) {
       expect(QWEN_MCP_SERVER_KEYS.has(key)).toBe(true);
     }
@@ -72,12 +77,34 @@ describe("branch-3 guard — overlay ↔ qwen schema conformance", () => {
   });
 
   it("http entry (with tool filter) uses only keys qwen accepts + emits trust=false (#6)", () => {
-    const entry = buildServerEntry(httpResolved, denyPolicy, false);
+    const entry = buildServerEntry(httpResolved, denyPolicy, false, false);
     for (const key of Object.keys(entry)) {
       expect(QWEN_MCP_SERVER_KEYS.has(key)).toBe(true);
     }
     expect(entry).toHaveProperty("includeTools");
     expect(entry.trust).toBe(false);
+  });
+
+  // S99: the MCP_ALWAYS_LOAD_TOOLS switch (acpSwitches.ts → McpManagerConfig.alwaysLoadTools).
+  it("alwaysLoadTools on ⇒ both entry shapes carry qwen's own `alwaysLoadTools: true`", () => {
+    for (const entry of [
+      buildServerEntry(stdioResolved, DEFAULT_TOOL_POLICY, true, true),
+      buildServerEntry(httpResolved, denyPolicy, false, true),
+    ]) {
+      expect(entry["alwaysLoadTools"]).toBe(true);
+      for (const key of Object.keys(entry)) {
+        expect(QWEN_MCP_SERVER_KEYS.has(key)).toBe(true);
+      }
+    }
+  });
+
+  it("alwaysLoadTools off ⇒ the entries carry no such key (today's bytes)", () => {
+    for (const entry of [
+      buildServerEntry(stdioResolved, DEFAULT_TOOL_POLICY, true, false),
+      buildServerEntry(httpResolved, denyPolicy, false, false),
+    ]) {
+      expect(entry).not.toHaveProperty("alwaysLoadTools");
+    }
   });
 });
 

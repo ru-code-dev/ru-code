@@ -164,6 +164,18 @@ describe("the shipped registry's output (literal snapshot)", () => {
     }
   });
 
+  // ru-code (S99): blocking MCP discovery — runtime row, supplied only by an `--acp` spawn with
+  // its gate switch on (QwenAcpSupport.ts); absent from every spawn that does not supply it.
+  it("adds QWEN_CODE_LEGACY_MCP_BLOCKING from the runtime, absent otherwise", () => {
+    expect(cliEnvAssignments({ LEGACY_MCP_BLOCKING: "1" })).toEqual([
+      ["QWEN_CODE_NO_RELAUNCH", "true"],
+      ["QWEN_CODE_LEGACY_MCP_BLOCKING", "1"],
+    ]);
+    expect(namesOf(cliEnvAssignments({ HOME: "/home/me/.qwen" }))).not.toContain(
+      "QWEN_CODE_LEGACY_MCP_BLOCKING",
+    );
+  });
+
   it("emits the MCP-off flag pair on every spawn", () => {
     expect(cliArgAssignments()).toEqual(["--allowed-mcp-server-names", "__none__"]);
   });

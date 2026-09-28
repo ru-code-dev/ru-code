@@ -58,6 +58,14 @@ describe("applyCliProbeEnv", () => {
     }
   });
 
+  // ru-code (S99): the install-time `--version` probe never blocks on MCP discovery.
+  it("never writes the blocking-discovery row", () => {
+    applyCliProbeEnv(CONFIG_DIR);
+    for (const name of CLI_ENV.LEGACY_MCP_BLOCKING.names) {
+      expect(process.env[name], `${name} absent`).toBeUndefined();
+    }
+  });
+
   it("writes nothing for an empty/blank config dir", () => {
     applyCliProbeEnv("");
     applyCliProbeEnv("   ");

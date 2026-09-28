@@ -10,6 +10,7 @@ import {
   McpServerId,
   McpSessionOverlay,
   McpSessionOverlayLive,
+  qwenServerKey,
 } from "@smart-tools/qwen-cli-mcp-manager/server";
 import { CommandId, ProjectId, type OrchestrationCommand } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -130,7 +131,8 @@ describe("overlay spawn lifecycle — write ⇔ spawn AND ≥1 enabled server (r
             const fields = yield* turn1.overlayFieldsForSpawn("fresh-spawn");
             assert.ok("settingsOverlayPath" in fields, "spawn carries the overlay");
             writtenPath = fields.settingsOverlayPath;
-            assert.deepStrictEqual(fields.allowedMcpServers, ["srv"]);
+            // qwen's name for server `srv` (S99 — the readable key, never the catalog id)
+            assert.deepStrictEqual(fields.allowedMcpServers, [qwenServerKey("srv", "srv")]);
             assert.strictEqual(
               yield* fileSystem.exists(writtenPath),
               true,

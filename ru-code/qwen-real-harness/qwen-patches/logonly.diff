@@ -1,0 +1,41 @@
+--- a/packages/cli/src/acp-integration/acpAgent.ts
++++ b/packages/cli/src/acp-integration/acpAgent.ts
+@@ -171,6 +171,7 @@
+ import { createGunzip } from 'node:zlib';
+ import type { LoadedSettings } from '../config/settings.js';
+ import {
++  getSettingsWarnings,
+   loadSettings,
+   reloadEnvironment,
+   SettingScope,
+@@ -10769,6 +10770,30 @@
+       buildDisabledSkillNamesProvider(settings),
+       sessionMcpServers,
+     );
++    // S94-PROBE (LOG-ONLY): the settings this session was built from, per scope, merged, and
++    // effective (after the allowlist), plus qwen's own warnings about the files.
++    debugLogger.debug(
++      `[S94-PROBE] session-config ${JSON.stringify({
++        cwd,
++        scopes: {
++          system: { path: settings.system.path, settings: settings.system.settings },
++          systemDefaults: { path: settings.systemDefaults.path, settings: settings.systemDefaults.settings },
++          user: { path: settings.user.path, settings: settings.user.settings },
++          workspace: { path: settings.workspace.path, settings: settings.workspace.settings },
++        },
++        merged: {
++          mcpServers: mergedSettings.mcpServers ?? null,
++          mcp: mergedSettings.mcp ?? null,
++          security: mergedSettings.security ?? null,
++          tools: mergedSettings.tools ?? null,
++        },
++        effectiveMcpServers: config.getMcpServers() ?? null,
++        trustedFolder: config.isTrustedFolder(),
++        approvalMode: config.getApprovalMode(),
++        settingsWarnings: getSettingsWarnings(settings),
++        migrationWarnings: settings.migrationWarnings,
++      })}`,
++    );
+     if (chatRecording !== false) {
+       this.initializingConfigs.add(config);
+     }

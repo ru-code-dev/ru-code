@@ -14,7 +14,7 @@
 //
 // GATED. Nothing here runs without a built bundle:
 //
-//   RU_CODE_QWEN_CLI_JS=<qwen build>/dist/cli.js pnpm --filter @t3tools/server test:real-qwen
+//   pnpm test:e2e:real-qwen          (sets RU_CODE_QWEN_CLI_JS from the bundle constant)
 //
 // The build ritual (an isolated COPY of the qwen tree, never in place) is in
 // ru-code/qwen-real-harness/README.md. Without the variable every case below is

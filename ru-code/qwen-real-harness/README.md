@@ -15,32 +15,58 @@ transcription; the capture is qwen. Fix `qwen021Frames.ts` (and the DSL in
 
 ## Running it
 
-Nothing here runs without a built bundle. The gate is one variable:
+Nothing here runs without a built bundle, and nothing here runs from `vp run -r test`: every
+real-qwen case is gated by env switches that only the run script turns on.
 
 ```bash
-export RU_CODE_QWEN_CLI_JS=<qwen build>/dist/cli.js
-pnpm --filter @t3tools/server test:real-qwen
+pnpm build                                   # the MCP probe drives the BUILT app server
+pnpm test:e2e:real-qwen                      # the whole real-qwen suite
+pnpm test:e2e:real-qwen "P-01-baseline"      # one case (a vitest -t pattern)
 ```
 
-Without it every case in
-`apps/server/src/ru-code/tests/qwen/real-acp/qwenRealCompressionWire.e2e.test.ts`
-is **skipped**, so `vp run -r test` never needs a qwen binary.
+`test:e2e:real-qwen` → this package's `test:e2e` → `scripts/real-qwen-run.sh` → apps/server
+`test:real-qwen` (`vp test run src/ru-code/tests/qwen/real-acp`). The script:
 
-## Building a bundle (never in place)
+- reads the bundle paths from ONE constant, `src/qwenAssets.ts` (`QWEN_CODE_ASSETS`, and
+  `QWEN_CLI_JS` / `QWEN_LOGPATCH_CLI_JS` under it), and fills the gates from it:
+  `RU_CODE_QWEN_CLI_JS` (every real-acp case), `RU_CODE_MCP_PROBE=1` (the MCP probe),
+  `RU_CODE_MCP_PROBE_LOGPATCH_CLI_JS` (its log-patched cases), `RU_CODE_MCP_PROBE_PLAYWRIGHT=1`
+  (its real `@playwright/mcp` cases, network);
+- takes the machine's e2e mutex `<repo>/WORKFLOW/logs/.e2e-lock` (exit 90 when held), checks for
+  another worktree's e2e processes before and after, and for a rig process left behind;
+- appends command · exit · duration · HEAD · those checks to `$REAL_QWEN_OUT/runs.log`
+  (default `<repo>/WORKFLOW/logs/real-qwen`); each MCP probe case writes its evidence to
+  `$REAL_QWEN_OUT/<case>/`.
 
-The qwen-code checkout is READ-ONLY. Build in a copy:
+The gates stay env switches on purpose: the root `pnpm test` (`vp run -r test`) runs
+`apps/server`'s whole vitest tree, `real-acp` included, and there every case is **skipped**
+because no switch is set. The constant is only ever read by the script.
+
+## Building the bundles (never in place)
+
+The qwen-code checkout is READ-ONLY. Bundles are built in a COPY and kept in
+`QWEN_CODE_ASSETS` (`…/t3-ru-code/qwen-code-assets`, beside the checkouts):
 
 ```bash
-QWEN_SRC=/path/to/qwen-code            # the read-only v0.21.1 checkout
-BUILD=$SCRATCH/qwen-build              # anywhere outside it
+QWEN_SRC=/mnt/mac/Users/user/WORKSPACE/Projects/experements/t3-ru-code/qwen-code   # v0.21.1
+ASSETS=/mnt/mac/Users/user/WORKSPACE/Projects/experements/t3-ru-code/qwen-code-assets
 
-mkdir -p "$BUILD"
-( cd "$QWEN_SRC" && tar --exclude=.git --exclude=node_modules --exclude=dist \
-    --exclude=bundle -cf - . ) | ( cd "$BUILD" && tar -xf - )
+copy() {   # $1 = target dir
+  mkdir -p "$1"
+  ( cd "$QWEN_SRC" && tar --exclude=.git --exclude=node_modules --exclude=dist \
+      --exclude=bundle -cf - . ) | ( cd "$1" && tar -xf - )
+}
 
-cd "$BUILD"
-npm ci                                  # its postinstall also runs the bundle
-node dist/cli.js --version              # must print 0.21.1
+copy "$ASSETS/qwen-build"
+( cd "$ASSETS/qwen-build" && npm ci )          # its postinstall also runs the bundle
+
+copy "$ASSETS/qwen-build-logpatch"
+( cd "$ASSETS/qwen-build-logpatch" \
+  && patch -p1 < <repo>/ru-code/qwen-real-harness/qwen-patches/logonly.diff \
+  && npm ci )
+
+node "$ASSETS/qwen-build/dist/cli.js" --version             # must print 0.21.1
+sha256sum "$ASSETS"/qwen-build*/dist/cli.js                 # record them in the run's log
 ```
 
 `npm ci` is what makes the bundle possible: the read-only checkout has only a partial
@@ -48,6 +74,13 @@ install (its root `node_modules` carries devDependencies, the workspace packages
 deps are not linked), so `node esbuild.config.js` cannot resolve `jsonc-parser` or
 `esbuild-plugin-wasm` there. The copy pays a full install once and then bundles as part
 of the same postinstall.
+
+`qwen-patches/logonly.diff` adds ONE `debugLogger.debug` line per session (the per-scope,
+merged and effective settings, and qwen's settings warnings) — no logic. Only the MCP probe's
+FORMAT and OWN-SERVER cases use that bundle.
+
+The bundles in `qwen-code-assets` today are the S94 builds, copied: plain `dist/cli.js` sha256
+`9949c266…`, log-patched `47834a0f…` (checkout `41b4ee8373`).
 
 ## What it captures
 
@@ -92,6 +125,71 @@ absent from those settings — it is read once at session creation
 (`config.ts:1893`, `:2173`) and the auto-compaction scenario is about qwen's DEFAULT
 ladder. `QWEN_CODE_NO_RELAUNCH=true` stops the CLI re-spawning itself, which would
 otherwise put a wrapper process between the harness and the agent.
+
+## The MCP probe — the REAL app in front of the REAL qwen
+
+`apps/server/src/ru-code/tests/qwen/real-acp/mcpProbe/` (`mcpProbeRig.ts` = the driver,
+`mcpProbe.e2e.test.ts` = the cases and their assertions) with its fakes in `src/mcpProbe/`.
+Where the capture above talks to qwen directly, the probe goes through ALL of the app: one case
+boots `apps/server/dist/bin.mjs` in a sandbox HOME, configures MCP servers over `/ws` with the
+web's own `orchestration.dispatchCommand` payloads, starts turns, and lets the app's decider →
+SQLite → overlay writer → spawn builder → (warm pool) → qwen path run untouched. What the rig
+owns:
+
+| piece           | file                            | what it is                                                                                                                                |
+| --------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI proxy       | `src/mcpProbe/cliProxy.mjs`     | the app's `RU_CODE_CLI_JS`: runs the real bundle with the app's argv/env/cwd, records everything, and applies a knob's explicit transform |
+| fake MCP, stdio | `src/mcpProbe/fakeMcpStdio.mjs` | n tools, start delay, crash, name length, call delay; logs every message with its parent process                                          |
+| fake MCP, http  | `src/mcpProbe/fakeMcpHttp.mjs`  | the same over streamable HTTP; logs headers                                                                                               |
+| fake model      | `src/fakeOpenAiServer.ts`       | records every request body; a knob can script tool calls per turn                                                                         |
+| clock shift     | `src/mcpProbe/clockShift.cjs`   | `Date.now()` + N in the app server only (the 30-min TTL case)                                                                             |
+
+**The four angles of every case** (under `<out>/<case>/`):
+
+1. **what we wrote** — `cli/proc-*/meta.json` (argv, env, cwd), `settings.jsonl` (the overlay's
+   bytes, sha, mode, inode at exec, at `session/new|load`, before the app hears each answer, and on
+   every change), `wire.jsonl` (the ACP wire both ways);
+2. **what qwen reports** — `probes.jsonl` (`qwen/status/workspace/mcp`, `…/mcp/tools`,
+   `…/session/context_usage {detail:true}`, asked by the proxy with its own ids — never seen by
+   the app), `stderr.log` (first 4 MiB), `stderr-bytes.jsonl` (per chunk: bytes qwen wrote so
+   far, and `pending` — bytes the APP has not read yet, held by the proxy's own
+   `process.stderr`: on POSIX Node queues an unread pipe in the writer and does not block; on
+   Windows Node makes a pipe stderr blocking — not measured here, the rig runs on Linux),
+   `qwen-debug/*.txt` (qwen's debug log);
+3. **what each MCP server received** — `mcp-local.jsonl`, `mcp-remote.jsonl`, … (every message,
+   and whether qwen or the app's own monitor sent it);
+4. **what the model got** — `model-requests.jsonl` (every request body).
+
+`summary.json` reduces them to facts; `run-meta.json` holds the knobs, the app HEAD, the bundle,
+the commands sent, the server keys qwen got (`serverKeys`), a reinstall's app catalog before and
+after (`mcpSnapshots`) and the teardown (strays killed by PID).
+
+**Knobs.** A case is `ProbeKnobs` (`mcpProbeRig.ts`): one change against the baseline (LOCAL
+50 tools answering after 25 s, REMOTE 50 after 4 s, cold spawn, prompt held 35 s). Every knob is
+explicit and recorded; a case that sets none gets exactly what a user gets. To add one: add the
+field to `ProbeKnobs`, apply it in `runProbe` (app side: a `dispatch` payload the web sends;
+qwen side: a `PROBE_TRANSFORM` key handled in `cliProxy.mjs`, which logs before/after in
+`transforms.jsonl`), then write the case with `knob(name, purpose, delta)` and its `CHECKS`
+entry. To add a fake behaviour: add an argv flag to the fake (the argv is what a user types
+into the app's form, so it travels the app's whole path) and a `FakeServerKnobs` field.
+
+The rig never assumes how the app keys a server for qwen: the proxy finds each server in the
+overlay by a string only its entry holds (`PROBE_SERVER_ROLES`), records the key the app wrote
+(`cli/proc-*/roles.json`, `summary.serverKeys`), and fills `serverKeyToken(role)` in a knob's
+transform with it; model scripts are built from those observed keys. `appEnv` sets env on the
+APP SERVER (how a case turns on the app's `QG_` switches, `apps/server/src/ru-code/qwen/acpSwitches.ts`,
+importing their names).
+
+S99 knobs for real conditions the app meets: `answerChunks` (the fake model streams every answer
+in N chunks, as a real model streams a long one), `killQwenOnTurn` (qwen is SIGKILLed while that
+turn's model request is in flight — a crash / OOM kill; the proxy then dies the way qwen died, so
+the app sees what it would see), `previousRelease` (the run starts on an OLDER RELEASE — a copy
+of the built server with another shipped built-in list — which is configured, stopped, and
+replaced by the real build on the same data: a reinstall).
+
+The S94 cases (P-01 … P-108) are diagnostics of qwen itself: each sets its levers through its
+own explicit knobs (a transform, a child env), never through app settings — they mean the same
+whatever the app's defaults are.
 
 ## What it is NOT
 

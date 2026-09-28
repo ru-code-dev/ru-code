@@ -258,7 +258,12 @@ import {
 } from "@ru-code/qwen/errors/requestLogFormat";
 // ru-code: live token feed — pull qwen's running promptTokenCount off each
 // agent_message_chunk's _meta so the context meter updates mid-turn.
-import { extractQwenInputTokens } from "./usage.ts";
+import {
+  extractQwenInputTokens,
+  QWEN_SESSION_CONTEXT_USAGE_METHOD,
+  readQwenAvailableToolNames,
+} from "./usage.ts";
+import { ACP_LOG_AVAILABLE_TOOLS } from "./acpSwitches.ts";
 // ru-code (qwen-compression wave): the app-side auto-compaction capability. One
 // registry decides it for the adapter AND for the settings row.
 import { providerAppAutoCompaction } from "@ru-code/provider-capabilities";
@@ -5140,6 +5145,12 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
             stopReason: result.stopReason ?? null,
           });
 
+          // ru-code (S99): ACP_LOG_AVAILABLE_TOOLS — what the model is offered, after every turn,
+          // into the debug log. Forked like the checks below: never delays the turn.
+          if (ACP_LOG_AVAILABLE_TOOLS) {
+            yield* logAvailableTools(ctx).pipe(Effect.forkIn(layerScope));
+          }
+
           // ru-code: auto-compact check AFTER the turn settled — forked onto the
           // adapter layer scope so it survives this request fiber and never
           // delays the turn result. Cancelled turns skip it (the user is
@@ -5580,6 +5591,35 @@ export function makeQwenAdapter(qwenSettings: QwenSettings, options?: QwenAdapte
         //   yield* abortSession(ctx, COMPACTION_RESTART_METHOD);
         // }
       });
+
+    /**
+     * ru-code (S99): the tools the model can use in this session — qwen's `context_usage`
+     * {detail: true} — as one debug line (gate switch ACP_LOG_AVAILABLE_TOOLS). Debugging only:
+     * an odd answer is logged as `unreadable`; a failed request gets the standard
+     * `[cli-acp.request.failed]` line of the runtime's shared request logger (as every ACP request)
+     * plus one `available tools not read` debug line, and nothing else.
+     */
+    const logAvailableTools = (ctx: QwenSessionContext) =>
+      Effect.gen(function* () {
+        const sessionId = acpSessionIdOf(ctx);
+        if (sessionId === undefined) return;
+        const answer = yield* ctx.acp.request(QWEN_SESSION_CONTEXT_USAGE_METHOD, {
+          sessionId,
+          detail: true,
+        });
+        yield* Effect.logDebug("[cli-acp] available tools", {
+          threadId: ctx.threadId,
+          sessionId,
+          ...(readQwenAvailableToolNames(answer) ?? { unreadable: answer }),
+        });
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logDebug("[cli-acp] available tools not read", {
+            threadId: ctx.threadId,
+            error: String(error),
+          }),
+        ),
+      );
 
     // Auto-compact trigger — evaluated at the END of each successful turn
     // (sendTurn forks it AFTER finalize so the turn's own result is never

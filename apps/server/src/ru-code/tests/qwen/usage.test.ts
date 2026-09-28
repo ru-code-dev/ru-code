@@ -5,7 +5,7 @@
 // coverage of the happy path and every reject branch.
 import { describe, expect, it } from "vite-plus/test";
 
-import { extractQwenInputTokens } from "../../qwen/usage.ts";
+import { extractQwenInputTokens, readQwenAvailableToolNames } from "../../qwen/usage.ts";
 
 // A well-formed raw SessionNotification params object carrying `inputTokens`.
 const withUsage = (usage: unknown): unknown => ({
@@ -51,5 +51,40 @@ describe("extractQwenInputTokens", () => {
     expect(extractQwenInputTokens([1, 2, 3])).toBeNull(); // array is not a record
     expect(extractQwenInputTokens({ sessionId: "s", update: [] })).toBeNull();
     expect(extractQwenInputTokens({ sessionId: "s", update: { _meta: { usage: 5 } } })).toBeNull();
+  });
+});
+
+// ru-code (S99): the tool names of a `context_usage {detail: true}` answer (ACP_LOG_AVAILABLE_TOOLS).
+describe("readQwenAvailableToolNames", () => {
+  it("reads the built-in and MCP tool names of qwen's answer", () => {
+    expect(
+      readQwenAvailableToolNames({
+        v: 1,
+        sessionId: "s",
+        usage: {
+          builtinTools: [
+            { name: "read_file", tokens: 585 },
+            { name: "tool_search", tokens: 375 },
+          ],
+          mcpTools: [{ name: "github_ab12__list_issues", tokens: 62 }],
+        },
+      }),
+    ).toEqual({
+      builtinTools: ["read_file", "tool_search"],
+      mcpTools: ["github_ab12__list_issues"],
+    });
+  });
+
+  it("gives empty lists when qwen omits them (no `detail`) and skips nameless entries", () => {
+    expect(readQwenAvailableToolNames({ usage: { mcpTools: [{ tokens: 1 }, "x"] } })).toEqual({
+      builtinTools: [],
+      mcpTools: [],
+    });
+  });
+
+  it("is null for an answer that is not a context report", () => {
+    expect(readQwenAvailableToolNames(null)).toBeNull();
+    expect(readQwenAvailableToolNames({ usage: [] })).toBeNull();
+    expect(readQwenAvailableToolNames("nope")).toBeNull();
   });
 });

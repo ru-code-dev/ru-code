@@ -4,7 +4,8 @@
 // session-overlay gate / SQL repos) and declares five ports — the ONLY host couplings.
 // This module implements them from the ambient host graph:
 //   - McpManagerConfig      — overlay/probe dirs derived from ServerConfig.stateDir +
-//                             the MCP_ENGINE_USE_OVERLAY kill-switch (@ru-code/qwen)
+//                             the MCP_ENGINE_USE_OVERLAY kill-switch (@ru-code/qwen) + the
+//                             MCP_ALWAYS_LOAD_TOOLS gate switch (../qwen/acpSwitches.ts)
 //   - McpManagerSecretStore — over auth/ServerSecretStore (opaque bytes; the at-rest cipher
 //                             lives in the PACKAGE above this port — McpSecrets.write/readMcpSecret)
 //                             + pruneByPrefix over the on-disk layout
@@ -36,6 +37,7 @@ import {
 } from "@smart-tools/qwen-cli-mcp-manager/server";
 
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
+import { MCP_ALWAYS_LOAD_TOOLS } from "../qwen/acpSwitches.ts";
 import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
@@ -43,7 +45,8 @@ import { ProjectionProjectRepository } from "../../persistence/Services/Projecti
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 /** Overlay/probe dirs live under `<stateDir>/mcp/…` (created here, owner-only parents come
- * from the atomic writes). The kill-switch is the same constant the qwen spawn env reads. */
+ * from the atomic writes). The kill-switch is the same constant the qwen spawn env reads;
+ * `alwaysLoadTools` is the S99 gate switch, handed to the package as a plain value. */
 export const mcpConfigLayer = Layer.effect(
   McpManagerConfig,
   Effect.gen(function* () {
@@ -54,7 +57,12 @@ export const mcpConfigLayer = Layer.effect(
     const probeCwd = path.join(config.stateDir, "mcp", "probe-cwd");
     yield* Effect.orDie(fileSystem.makeDirectory(overlayDir, { recursive: true }));
     yield* Effect.orDie(fileSystem.makeDirectory(probeCwd, { recursive: true }));
-    return McpManagerConfig.of({ overlayDir, probeCwd, useOverlay: MCP_ENGINE_USE_OVERLAY });
+    return McpManagerConfig.of({
+      overlayDir,
+      probeCwd,
+      useOverlay: MCP_ENGINE_USE_OVERLAY,
+      alwaysLoadTools: MCP_ALWAYS_LOAD_TOOLS,
+    });
   }),
 );
 

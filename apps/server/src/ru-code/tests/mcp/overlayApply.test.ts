@@ -10,6 +10,7 @@ import {
   McpOverlay,
   McpOverlayLive,
   McpServerId,
+  qwenServerKey,
   type McpServerVarDraft,
   type McpToolPolicy,
 } from "@smart-tools/qwen-cli-mcp-manager/server";
@@ -129,6 +130,7 @@ function bind(
 }
 
 interface OverlayJson {
+  readonly $version: number;
   readonly security: { readonly folderTrust: { readonly enabled: boolean } };
   readonly mcpServers: Record<string, Record<string, unknown>>;
 }
@@ -229,10 +231,12 @@ describe("McpOverlay.writeOverlay — the qwen settings file", () => {
     await system.dispatch(bind("p1", "s-fs", {}, "bind:fs"));
 
     const result = await system.writeOverlay("p1");
-    expect(result.allowedServerNames).toEqual(["s-fs"]);
+    expect(result.allowedServerNames).toEqual([qwenServerKey("fs", "s-fs")]);
     const json = await system.readOverlay(result.overlayPath);
     expect(json.security.folderTrust.enabled).toBe(false);
-    const entry = json.mcpServers["s-fs"]!;
+    // S99: qwen 0.21.1's settings version — without it qwen rewrites the file (0600 → 0644)
+    expect(json.$version).toBe(4);
+    const entry = json.mcpServers[qwenServerKey("fs", "s-fs")]!;
     expect(entry).toMatchObject({
       command: "uvx",
       args: ["--root", "/work/p1"], // ${PROJECT_CWD} expanded
@@ -255,10 +259,9 @@ describe("McpOverlay.writeOverlay — the qwen settings file", () => {
     await system.dispatch(bind("p2", "s-sec", { varValues: { TOKEN: "s3cr3t" } }, "bind:sec"));
 
     const result = await system.writeOverlay("p2");
-    const env = (await system.readOverlay(result.overlayPath)).mcpServers["s-sec"]!.env as Record<
-      string,
-      string
-    >;
+    const env = (await system.readOverlay(result.overlayPath)).mcpServers[
+      qwenServerKey("sec", "s-sec")
+    ]!.env as Record<string, string>;
     expect(env.TOKEN).toBe("s3cr3t"); // ref → plaintext, isolated in this entry
   });
 
@@ -288,9 +291,9 @@ describe("McpOverlay.writeOverlay — the qwen settings file", () => {
     await system.dispatch(bind("p3", "s-ok", {}, "bind:ok"));
 
     const result = await system.writeOverlay("p3");
-    expect(result.allowedServerNames).toEqual(["s-ok"]);
+    expect(result.allowedServerNames).toEqual([qwenServerKey("ok", "s-ok")]);
     const json = await system.readOverlay(result.overlayPath);
-    expect(Object.keys(json.mcpServers)).toEqual(["s-ok"]);
+    expect(Object.keys(json.mcpServers)).toEqual([qwenServerKey("ok", "s-ok")]);
   });
 
   it("writes an http binding as httpUrl/headers with ${VAR} expanded", async () => {
@@ -317,7 +320,9 @@ describe("McpOverlay.writeOverlay — the qwen settings file", () => {
     await system.dispatch(bind("p4", "s-http", { varValues: { TOKEN: "abc" } }, "bind:http"));
 
     const result = await system.writeOverlay("p4");
-    const entry = (await system.readOverlay(result.overlayPath)).mcpServers["s-http"]!;
+    const entry = (await system.readOverlay(result.overlayPath)).mcpServers[
+      qwenServerKey("http", "s-http")
+    ]!;
     expect(entry.httpUrl).toBe("https://api.example.com/mcp");
     expect(entry.headers).toEqual({ Authorization: "Bearer abc" });
     expect("env" in entry).toBe(false);
@@ -346,12 +351,35 @@ describe("McpOverlay.writeOverlay — the qwen settings file", () => {
     );
 
     const json = await system.readOverlay((await system.writeOverlay("p5")).overlayPath);
-    expect(json.mcpServers["s-deny"]!.includeTools).toEqual(["read"]);
-    expect(json.mcpServers["s-deny"]!.excludeTools).toBeUndefined();
-    expect(json.mcpServers["s-allow"]!.excludeTools).toEqual(["danger"]);
-    expect(json.mcpServers["s-allow"]!.includeTools).toBeUndefined();
+    const deny = json.mcpServers[qwenServerKey("deny", "s-deny")]!;
+    const allow = json.mcpServers[qwenServerKey("allow", "s-allow")]!;
+    expect(deny.includeTools).toEqual(["read"]);
+    expect(deny.excludeTools).toBeUndefined();
+    expect(allow.excludeTools).toEqual(["danger"]);
+    expect(allow.includeTools).toBeUndefined();
     // ru-code #6: every server entry carries qwen's `trust` flag (default true).
-    expect(json.mcpServers["s-deny"]!.trust).toBe(true);
+    expect(deny.trust).toBe(true);
+  });
+
+  // ru-code (S99): qwen's name for a server is `qwenServerKey(name, serverId)` — the SAME string
+  // as the file key and the allowlist token (one variable, McpOverlay.ts); never the catalog id.
+  it("keys every server by its readable qwen name, identical in the file and the allowlist", async () => {
+    await system.dispatch(projectCreate("p6", "/work/p6", "pc:6"));
+    await system.dispatch(addStdio("s-pw", "Плейрайт", ["pw"], [], "add:pw"));
+    await system.dispatch(bind("p6", "s-pw", {}, "bind:pw"));
+    await system.dispatch(addStdio("s-gh", "GitHub Tools", ["gh"], [], "add:gh"));
+    await system.dispatch(bind("p6", "s-gh", {}, "bind:gh"));
+
+    const result = await system.writeOverlay("p6");
+    const json = await system.readOverlay(result.overlayPath);
+    expect(result.allowedServerNames).toEqual(Object.keys(json.mcpServers));
+    expect(result.allowedServerNames).toEqual([
+      qwenServerKey("Плейрайт", "s-pw"),
+      qwenServerKey("GitHub Tools", "s-gh"),
+    ]);
+    expect(result.allowedServerNames[0]).toMatch(/^pleirait_[0-9a-z]{4}$/);
+    expect(result.allowedServerNames[1]).toMatch(/^github_tools_[0-9a-z]{4}$/);
+    expect(result.allowlistKey).not.toContain("s-pw");
   });
 
   it("a project with no shell (no cwd) writes an empty mcpServers overlay", async () => {

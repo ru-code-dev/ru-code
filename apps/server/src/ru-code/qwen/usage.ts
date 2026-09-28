@@ -30,3 +30,29 @@ export function extractQwenInputTokens(rawPayload: unknown): number | null {
   if (inputTokens < 0) return null;
   return inputTokens;
 }
+
+/**
+ * ru-code (S99): qwen's per-session context report (qwen acp-bridge/src/status.ts:108). With
+ * `detail: true` (the parameter qwen reads, acp-integration/acpAgent.ts:7440-7441 — `showDetails`
+ * is ignored) it lists the tools the model is offered, each `{name, tokens}`. Until every MCP
+ * server has loaded it can list tools the next request does not carry yet (S94 P-80): debugging
+ * only.
+ */
+export const QWEN_SESSION_CONTEXT_USAGE_METHOD = "qwen/status/session/context_usage";
+
+/** The tool names in a `context_usage {detail: true}` answer; null when the shape is not it. */
+export function readQwenAvailableToolNames(answer: unknown): {
+  readonly builtinTools: ReadonlyArray<string>;
+  readonly mcpTools: ReadonlyArray<string>;
+} | null {
+  const usage = asRecord(asRecord(answer)?.["usage"]);
+  if (usage === null) return null;
+  const names = (list: unknown): ReadonlyArray<string> =>
+    Array.isArray(list)
+      ? list.flatMap((entry) => {
+          const name = asRecord(entry)?.["name"];
+          return typeof name === "string" ? [name] : [];
+        })
+      : [];
+  return { builtinTools: names(usage["builtinTools"]), mcpTools: names(usage["mcpTools"]) };
+}

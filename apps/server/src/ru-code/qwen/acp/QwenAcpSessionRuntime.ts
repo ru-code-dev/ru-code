@@ -44,6 +44,7 @@ import type { AcpSessionEventStreamBarrier } from "../../../provider/acp/AcpSess
 // spawn-scheduler client — the permit is taken one level up, around the whole session start —
 // but it is where the AUTH WINDOW closes, so it is where the permit is handed back.
 import { markAuthOk, releaseCliSpawnPermitEarly } from "../../cli-reload/cliSpawnScheduler.ts";
+import { ACP_LOG_STDERR } from "../acpSwitches.ts";
 import { registerLiveCliChild } from "../../cli-reload/liveCliChildren.ts";
 // ru-code (sub-agents): the sub-agent `_meta` reader, shared with the adapter so
 // the gate below and `classifyQwenToolCallFrame` agree on what an agent frame is.
@@ -417,6 +418,34 @@ const makeAcpSessionRuntime = (
       forceKill: Effect.ignore(child.kill({ killSignal: "SIGKILL" })),
       waitForExit: Effect.ignore(child.exitCode),
     }).pipe(Effect.provideService(Scope.Scope, runtimeScope));
+
+    // ru-code (S99, V2-68a): qwen's stderr → the server debug log, ONLY while the ACP_LOG_STDERR
+    // gate switch is on. Today nothing reads it: the spawn passes no stdio option
+    // (`ChildProcess.make` above), so the platform pipes stderr (@effect/platform-node-shared
+    // NodeChildProcessSpawner.js:72-77, :110-111) into a PassThrough exposed as `child.stderr`
+    // (:218-224) that effect-acp never touches (effect-acp _internal/stdio.ts:13-22 wires stdout
+    // and stdin; makeTerminationError :52-63 awaits exitCode only). Switch off ⇒ that path, as is.
+    // Switch on ⇒ every line is observed and logged, nothing else: the reader lives in the runtime
+    // scope and ends with the process; its own failure is one debug line; it is linked to nothing
+    // the session or the exit path awaits.
+    if (ACP_LOG_STDERR) {
+      const pid = Number(child.pid);
+      yield* child.stderr.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.runForEach((line) => Effect.logDebug("[cli-acp] stderr", { pid, line })),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logDebug("[cli-acp] stderr reader failed", {
+                pid,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+        Effect.ensuring(Effect.logDebug("[cli-acp] stderr reader ended", { pid })),
+        Effect.forkIn(runtimeScope),
+      );
+    }
 
     const acpContext = yield* Layer.build(
       EffectAcpClient.layerChildProcess(child, {

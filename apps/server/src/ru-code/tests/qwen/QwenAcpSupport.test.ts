@@ -121,6 +121,23 @@ describe("buildQwenAcpSpawnInput", () => {
     }
   });
 
+  // ru-code (S99): MCP_INJECT_BLOCKING_ENV is off unless QG_MCP_INJECT_BLOCKING_ENV=1 (never in a
+  // unit run) — then NO ACP spawn carries the blocking row, overlay or not. The switch-on half
+  // lives in qwenBlockingEnvSwitchOn.test.ts (a module constant, flipped by vi.mock).
+  it("emits NO blocking-discovery alias while its switch is off", () => {
+    for (const spawn of [
+      buildQwenAcpSpawnInput("/opt/cli.js", HOME_DIR, null, "/work"),
+      buildQwenAcpSpawnInput("/opt/cli.js", HOME_DIR, null, "/work", undefined, {
+        settingsOverlayPath: OVERLAY,
+        allowedMcpServers: ["alpha"],
+      }),
+    ]) {
+      for (const name of CLI_ENV.LEGACY_MCP_BLOCKING.names) {
+        expect(spawn.env?.[name], `${name} absent`).toBeUndefined();
+      }
+    }
+  });
+
   // ru-code: the CLI decides by the PRESENCE of the flag — without it there is no filter and it
   // connects (and awaits) every configured MCP server during startup, which is what starved warm
   // slots of their warmup budget. "No MCP" must therefore be an allowlist nothing can match.

@@ -31,23 +31,6 @@ export const MAX_BACKGROUND_PER_PLUGIN = 2;
  */
 export const MAX_PARKED_INVOKES_PER_PLUGIN = 16;
 
-/**
- * HOW a plugin's live values reach this tab (S69, V2-58) — the ONE switch between the state seam's
- * two engine transports. Plugins cannot see it and cannot pick: `ctx.state(name)` is the same
- * `Signal` with the same rules either way (the SDK's `@smart-tools/plugin-sdk/state`), and the server
- * serves both at once (`apps/server/src/ru-code/plugins/state.ts`), so this constant is the whole of
- * the choice and nothing needs a build flag.
- *
- *   · `"stream"` — `plugin.state`: the server PUSHES the value. A snapshot of every current value
- *     when the stream opens (and re-opens, on every reconnect), then each change, latest-wins.
- *   · `"notify"` — `plugin.notifications` carries the NAME, and this tab reads the value through
- *     `plugin.state.read`, one read in flight per name; on every edge back into `ready`, every name
- *     is read once.
- *
- * Both stay in production until the owner has compared them; the loser is removed then, not before.
- */
-export const PLUGIN_STATE_TRANSPORT: "stream" | "notify" = "stream";
-
 /** Longest title/label a plugin surface may carry, so a runaway string cannot break a layout. */
 export const MAX_LABEL_LENGTH = 64;
 

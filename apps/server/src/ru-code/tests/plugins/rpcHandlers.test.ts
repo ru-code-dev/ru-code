@@ -93,8 +93,7 @@ export default {
     "boom": async () => {
       throw new Error("handler exploded");
     },
-    // S69 (V2-58): a handler that PUBLISHES — the path from a plugin's own call to a tab's stream
-    // and to the notify transport's read.
+    // S69 (V2-58): a handler that PUBLISHES — the path from a plugin's own call to a tab's stream.
     "publish": async (payload, ctx) => {
       ctx.publish("rows", payload);
       return null;
@@ -204,21 +203,16 @@ describe("plugin RPC contract (no host needed)", () => {
     // S38 (V2-43) added the Settings ▸ Plugins pair. Still ONE generic invoke door: these two are
     // about which plugins RUN, which is the host's own question and not any plugin's.
     //
-    // S53 (V2-54) added `plugin.notifications`, the one STREAM — and it is generic for the same
-    // reason plus one more: a tab hosts every plugin, so it subscribes once and the frame says
-    // which plugin a name belongs to. Still no method per plugin, and there never will be one.
-    //
-    // S69 (V2-58) added the state seam's two transports: `plugin.state` (the value stream) and
-    // `plugin.state.read` (the notify transport's read). Engine RPCs over the host's own store —
-    // still no method per plugin.
+    // S69 (V2-58) added `plugin.state`, the one STREAM — and it is generic for the same reason
+    // plus one more: a tab hosts every plugin, so it subscribes once and the frame says which
+    // plugin a value belongs to. Still no method per plugin, and there never will be one. (V2-75
+    // removed the notify transport's `plugin.notifications` and `plugin.state.read`.)
     expect(declared).toEqual([
       "plugin.invoke",
       "plugin.list",
-      "plugin.notifications",
       "plugin.setEnabled",
       "plugin.settings",
       "plugin.state",
-      "plugin.state.read",
     ]);
     expect(Object.keys(PLUGIN_RPC_SCOPES).sort()).toEqual(declared);
   });
@@ -304,7 +298,8 @@ it.layer(NodeServices.layer)("plugin RPC handlers", (it) => {
         method: "echo",
         payload: { a: 1, nested: { b: [1, 2, 3] } },
       });
-      expect(result).toEqual({ echoed: { a: 1, nested: { b: [1, 2, 3] } }, id: "good" });
+      // S104 (V2-73): the answer is the handler's value in an envelope with the hub's position.
+      expect(result.value).toEqual({ echoed: { a: 1, nested: { b: [1, 2, 3] } }, id: "good" });
       // `Schema.Unknown` on the success side must not flatten the object on the way
       // out — this is the whole reason a plugin can define its own contract.
       const encoded = yield* encodeUnknown(result);
@@ -406,11 +401,11 @@ it.layer(NodeServices.layer)("plugin RPC handlers", (it) => {
 
       expect(yield* operator[PLUGIN_METHODS.pluginList]({})).toHaveLength(1);
       expect(
-        yield* operator[PLUGIN_METHODS.pluginInvoke]({
+        (yield* operator[PLUGIN_METHODS.pluginInvoke]({
           pluginId: "good",
           method: "echo",
           payload: { a: 1 },
-        }),
+        })).value,
       ).toEqual({ echoed: { a: 1 }, id: "good" });
     }),
   );
@@ -459,18 +454,61 @@ export default {
 
       expect(yield* reasonOf(touch(readOnly))).toBe("unauthorized");
       // First row written by the FIRST authorized call ⇒ the rejected one never ran.
-      expect(yield* touch(operator)).toBe(1);
+      expect((yield* touch(operator)).value).toBe(1);
     }),
   );
 });
 
-// ── S53 (V2-54): the notification, from a plugin's handler to a subscriber ───
+// ── S69 (V2-58): a published value, from a plugin's handler to every tab ───
 
-it.layer(NodeServices.layer)("plugin.notifications", (it) => {
-  // S69 (V2-58): the stream is the state seam's NOTIFY transport — the names on it are state values
-  // that changed, and nothing a plugin can send by itself.
+it.layer(NodeServices.layer)("plugin.state", (it) => {
+  it.effect("a handler's publish reaches every tab's stream ONCE per change", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* makeBaseDir({ good: echoPlugin("good") });
+      const host = yield* startHost(baseDir);
+      const handlers = buildPluginRpcHandlers({
+        pluginHost: host,
+        observePluginRpc: passThroughObserve,
+        observePluginRpcStream: passThroughObserveStream,
+      });
+      const settle = Effect.yieldNow.pipe(Effect.replicateEffect(20), Effect.asVoid);
+      const publish = (payload: unknown) =>
+        handlers[PLUGIN_METHODS.pluginInvoke]({ pluginId: "good", method: "publish", payload });
+
+      yield* publish({ n: 1 });
+      const tabs = [[], []] as [Array<unknown>, Array<unknown>];
+      for (const into of tabs) {
+        yield* Stream.runForEach(handlers[PLUGIN_METHODS.pluginState]({}), (frame) =>
+          Effect.sync(() => {
+            into.push(frame);
+          }),
+        ).pipe(Effect.forkScoped);
+      }
+      yield* settle;
+
+      yield* publish({ n: 1 }); // equal — nothing moves
+      yield* publish({ n: 2 });
+      yield* settle;
+
+      for (const seen of tabs) {
+        expect(seen).toEqual([
+          {
+            _tag: "snapshot",
+            values: [{ pluginId: "good", name: "rows", value: { n: 1 } }],
+            boot: expect.any(String),
+            seq: 1,
+          },
+          { _tag: "value", pluginId: "good", name: "rows", value: { n: 2 }, floor: 2 },
+        ]);
+      }
+    }),
+  );
+
+  // S104 (V2-73, option 1): the answer carries the hub's position when the handler RETURNED, so the
+  // web host can hold the call until the tab holds every value published before it — here the
+  // handler's own publish, the frame that used to lose the race to the answer.
   it.effect(
-    "carries the NAME of a state value a plugin's own handler changed, to every subscriber",
+    "an invoke answer carries the hub's position, past every publish its handler made",
     () =>
       Effect.gen(function* () {
         const baseDir = yield* makeBaseDir({ good: echoPlugin("good") });
@@ -480,30 +518,23 @@ it.layer(NodeServices.layer)("plugin.notifications", (it) => {
           observePluginRpc: passThroughObserve,
           observePluginRpcStream: passThroughObserveStream,
         });
+        const first = yield* Stream.runHead(handlers[PLUGIN_METHODS.pluginState]({}));
+        const at = first._tag === "Some" && first.value._tag === "snapshot" ? first.value : null;
+        expect(at, "the snapshot names its position").not.toBeNull();
 
-        // TWO subscribers, because that is the claim: one notification, every tab.
-        const seenOne: Array<string> = [];
-        const seenTwo: Array<string> = [];
-        const collect = (into: Array<string>) =>
-          Stream.runForEach(handlers[PLUGIN_METHODS.pluginNotifications]({}), (notification) =>
-            Effect.sync(() => {
-              into.push(`${notification.pluginId}:${notification.name}`);
-            }),
-          ).pipe(Effect.forkScoped);
-        yield* collect(seenOne);
-        yield* collect(seenTwo);
-        const settle = Effect.yieldNow.pipe(Effect.replicateEffect(20), Effect.asVoid);
-        yield* settle;
-
-        yield* handlers[PLUGIN_METHODS.pluginInvoke]({
+        const answer = yield* handlers[PLUGIN_METHODS.pluginInvoke]({
           pluginId: "good",
           method: "publish",
           payload: { n: 1 },
         });
-        yield* settle;
-
-        expect(seenOne).toEqual(["good:rows"]);
-        expect(seenTwo).toEqual(["good:rows"]);
+        expect(answer).toEqual({ value: null, boot: at?.boot, seq: (at?.seq ?? 0) + 1 });
+        // An equal publish is not a change: the position does not move.
+        const again = yield* handlers[PLUGIN_METHODS.pluginInvoke]({
+          pluginId: "good",
+          method: "publish",
+          payload: { n: 1 },
+        });
+        expect(again).toEqual(answer);
       }),
   );
 
@@ -523,73 +554,15 @@ it.layer(NodeServices.layer)("plugin.notifications", (it) => {
               )
             : stream,
       });
-      const exit = yield* Effect.exit(
-        Stream.runCollect(denied[PLUGIN_METHODS.pluginNotifications]({})),
-      );
+      const exit = yield* Effect.exit(Stream.runCollect(denied[PLUGIN_METHODS.pluginState]({})));
       expect(Exit.isFailure(exit)).toBe(true);
       // A tab without the scope must see a PLUGIN error it can switch on, not a transport shape.
       const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
       expect((failure as { readonly reason?: string } | null)?.reason).toBe("unauthorized");
     }),
   );
-});
 
-// ── S69 (V2-58): a published value, from a plugin's handler to both transports ───
-
-it.layer(NodeServices.layer)("plugin.state / plugin.state.read", (it) => {
-  it.effect(
-    "a handler's publish reaches every tab's stream ONCE per change, and the read answers it",
-    () =>
-      Effect.gen(function* () {
-        const baseDir = yield* makeBaseDir({ good: echoPlugin("good") });
-        const host = yield* startHost(baseDir);
-        const handlers = buildPluginRpcHandlers({
-          pluginHost: host,
-          observePluginRpc: passThroughObserve,
-          observePluginRpcStream: passThroughObserveStream,
-        });
-        const settle = Effect.yieldNow.pipe(Effect.replicateEffect(20), Effect.asVoid);
-        const publish = (payload: unknown) =>
-          handlers[PLUGIN_METHODS.pluginInvoke]({ pluginId: "good", method: "publish", payload });
-
-        yield* publish({ n: 1 });
-        const tabs = [[], []] as [Array<unknown>, Array<unknown>];
-        for (const into of tabs) {
-          yield* Stream.runForEach(handlers[PLUGIN_METHODS.pluginState]({}), (frame) =>
-            Effect.sync(() => {
-              into.push(frame);
-            }),
-          ).pipe(Effect.forkScoped);
-        }
-        const names: Array<string> = [];
-        yield* Stream.runForEach(handlers[PLUGIN_METHODS.pluginNotifications]({}), (notification) =>
-          Effect.sync(() => {
-            names.push(notification.name);
-          }),
-        ).pipe(Effect.forkScoped);
-        yield* settle;
-
-        yield* publish({ n: 1 }); // equal — nothing moves on either transport
-        yield* publish({ n: 2 });
-        yield* settle;
-
-        for (const seen of tabs) {
-          expect(seen).toEqual([
-            { _tag: "snapshot", values: [{ pluginId: "good", name: "rows", value: { n: 1 } }] },
-            { _tag: "value", pluginId: "good", name: "rows", value: { n: 2 } },
-          ]);
-        }
-        expect(names).toEqual(["rows"]);
-        expect(
-          yield* handlers[PLUGIN_METHODS.pluginStateRead]({ pluginId: "good", name: "rows" }),
-        ).toEqual({ value: { n: 2 } });
-        expect(
-          yield* handlers[PLUGIN_METHODS.pluginStateRead]({ pluginId: "good", name: "none" }),
-        ).toEqual({});
-      }),
-  );
-
-  it.effect("both round-trip the Rpc codec: the tagged frames and an ABSENT value", () =>
+  it.effect("round-trips the Rpc codec: the tagged frames", () =>
     Effect.gen(function* () {
       const baseDir = yield* makeBaseDir({ good: echoPlugin("good") });
       const host = yield* startHost(baseDir);
@@ -610,12 +583,9 @@ it.layer(NodeServices.layer)("plugin.state / plugin.state.read", (it) => {
       expect(first._tag === "Some" ? first.value : null).toEqual({
         _tag: "snapshot",
         values: [{ pluginId: "good", name: "rows", value: { deep: [1, { two: null }] } }],
+        boot: expect.any(String),
+        seq: 1,
       });
-      const absent = yield* client[PLUGIN_METHODS.pluginStateRead]({
-        pluginId: PluginId.make("good"),
-        name: "none",
-      });
-      expect(Object.hasOwn(absent, "value"), "no value is an ABSENT key, not `null`").toBe(false);
     }),
   );
 });
@@ -658,7 +628,11 @@ it.layer(NodeServices.layer)("plugin RPCs over the Rpc transport", (it) => {
         method: "echo",
         payload: { a: 1, deep: { b: "two" } },
       });
-      expect(echoed).toEqual({ echoed: { a: 1, deep: { b: "two" } }, id: "good" });
+      expect(echoed).toEqual({
+        value: { echoed: { a: 1, deep: { b: "two" } }, id: "good" },
+        boot: expect.any(String),
+        seq: 0,
+      });
 
       // A no-argument call: the web port omits the key entirely when the plugin passed nothing,
       // and the plugin's handler must see `undefined`.
@@ -666,8 +640,10 @@ it.layer(NodeServices.layer)("plugin RPCs over the Rpc transport", (it) => {
         pluginId: PluginId.make("good"),
         method: "echo",
       });
-      expect(bare).toEqual({ id: "good" });
-      expect(Object.hasOwn(bare as object, "echoed"), "the optional key is ABSENT").toBe(false);
+      expect(bare.value).toEqual({ id: "good" });
+      expect(Object.hasOwn(bare.value as object, "echoed"), "the optional key is ABSENT").toBe(
+        false,
+      );
 
       // S37, and the reason this assertion is HERE rather than in a unit file: until S37 this case
       // read `{ echoed: undefined, id: "good" }` and passed, because `RpcTest.makeClient` drives

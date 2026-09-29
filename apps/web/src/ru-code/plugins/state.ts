@@ -2,57 +2,54 @@
 //
 // WHAT A PLUGIN SEES. A `Signal<Json | undefined>` per name: `undefined` until the server half has
 // published, then the server's current value, set only when it differs structurally from the value
-// held. That is the whole contract, and it is the same on both transports.
+// held. That is the whole contract.
 //
 // WHAT THIS FILE OWNS. One CELL per `(plugin, name)` (the SDK's `makeStateCell` — the compare and
 // the per-listener throw isolation live there, written once), the per-plugin checks (name, names
-// cap), and the transport `PLUGIN_STATE_TRANSPORT` selects (`caps.ts`):
-//
-//   · STREAM — one `plugin.state` subscription for the whole page, opened by the first
-//     `ctx.state` call. Its first frame is a snapshot of every plugin's current values; every name
-//     this tab holds takes its value from it, or `undefined` when the server holds none (a restarted
-//     server). Then one frame per change. The client runtime re-opens the stream on every new
-//     session (`SubscriptionRef.changes(supervisor.session)` + `switchMap`), so a reconnect IS a
-//     resubscribe, and the snapshot it starts with is the current value. No timer, no re-read.
-//   · NOTIFY — the page's one `plugin.notifications` stream (`notifications.ts`) carries a NAME; the
-//     name's READER (the SDK's `makeStateReader`: one read in flight, one more round for any number
-//     of names that arrive meanwhile) reads the value through `plugin.state.read`. A reader reads
-//     once when its cell is created with the connection up, and every reader reads once on each
-//     edge back into `ready` — a name the server sent while this tab's socket was down was never
-//     delivered, and the value is the only thing that could say what it was.
+// cap), and the one transport (V2-75: the notify transport is gone): one `plugin.state`
+// subscription for the whole page, opened by the first `ctx.state` call. Its first frame is a
+// snapshot of every plugin's current values; every name this tab holds takes its value from it, or
+// `undefined` when the server holds none (a restarted server). Then one frame per change. The client
+// runtime re-opens the stream on every new session (`SubscriptionRef.changes(supervisor.session)` +
+// `switchMap`), so a reconnect IS a resubscribe, and the snapshot it starts with is the current
+// value. No timer, no re-read.
 //
 // NOTHING HERE IS PER PLUGIN. A plugin's cells are keyed by the id its ctx was built with, so it
 // can read only its own names, and a frame for a plugin this tab did not load changes nothing.
+//
+// AN ANSWER NEVER OVERTAKES THE STATE IT FOLLOWS (S104, V2-73). The server numbers every change its
+// hub accepts; an invoke answer carries the hub's position when the handler returned, a snapshot the
+// position it was taken at, a `value` frame its floor (`packages/contracts/.../rpc.ts`
+// `PluginStatePosition`). `awaitPluginState` — what `rpcPort.ts` awaits before it resolves a
+// command — ends when this tab's stream has REACHED the answer's position, so `ctx.state` already
+// holds every value published before the answer. What ends each wait, and nothing else does (rule
+// 38 — no timer):
+//   · a frame whose floor reaches it — the frames the hub owed this tab when it answered, or a
+//     latest-wins replacement of one of them, on the same socket;
+//   · the next session's snapshot (a reconnect) — at or past it, or from ANOTHER server process
+//     (a restart: the process that answered is gone, and its count with it);
+//   · the end of the stream it was waiting on (it failed, or its environment went away);
+//   · no stream at all in this page — nothing to wait for, resolved at once.
 
 import type { Json, Signal } from "@smart-tools/plugin-sdk/host";
 import {
   MAX_STATE_NAMES_PER_PLUGIN,
   isStateName,
   makeStateCell,
-  makeStateReader,
   type StateCell,
-  type StateReader,
 } from "@smart-tools/plugin-sdk/state";
 import { L } from "@ru-code/localization";
-import type { EnvironmentId, PluginStateFrame } from "@t3tools/contracts";
+import type { PluginStateFrame, PluginStatePosition } from "@t3tools/contracts";
 import { PLUGIN_METHODS } from "@t3tools/contracts";
-import { request } from "@t3tools/client-runtime/rpc";
-import {
-  createEnvironmentCommand,
-  createEnvironmentRpcSubscriptionAtomFamily,
-} from "@t3tools/client-runtime/state/runtime";
-import { PluginId } from "@smart-tools/plugin-sdk/contracts";
+import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
+import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
-import { PLUGIN_STATE_TRANSPORT } from "./caps";
-import { pluginConnectionSignal } from "./connectionAtom";
-import { startPluginNotifications } from "./notifications";
 import { reportPluginProblem } from "./problems";
 
 // --------------------------------------------------------------------------
@@ -108,14 +105,12 @@ const reportListenerThrew = (pluginId: string, name: string, error: unknown): vo
 };
 
 // --------------------------------------------------------------------------
-// The registry: `pluginId` → `name` → cell (+ the notify transport's reader)
+// The registry: `pluginId` → `name` → cell
 // --------------------------------------------------------------------------
 
-type Entry = { readonly cell: StateCell; readonly reader: StateReader | null };
+const entries = new Map<string, Map<string, StateCell>>();
 
-const entries = new Map<string, Map<string, Entry>>();
-
-/** What the stream transport has delivered on the CURRENT subscription, per `pluginId\0name`. */
+/** What the stream has delivered on the CURRENT subscription, per `pluginId\0name`. */
 let streamed = new Map<string, Json>();
 
 const keyOf = (pluginId: string, name: string): string => `${pluginId}\u0000${name}`;
@@ -123,20 +118,12 @@ const keyOf = (pluginId: string, name: string): string => `${pluginId}\u0000${na
 /** The one signal a refused name gets: `undefined` for ever, and it never notifies. */
 const INERT: Signal<Json | undefined> = makeStateCell({ onListenerThrew: () => {} }).signal;
 
-/** Which transport THIS page uses — `PLUGIN_STATE_TRANSPORT`, or what a unit test chose. */
-let transport: "stream" | "notify" = PLUGIN_STATE_TRANSPORT;
-
-/** Test seam: the unit suites run every case against BOTH transports. `null` restores the constant. */
-export function setPluginStateTransportForTests(next: "stream" | "notify" | null): void {
-  transport = next ?? PLUGIN_STATE_TRANSPORT;
-}
-
 /** The `state` member of one plugin's ctx — bound to its id, like everything else there. */
 export function makePluginState(pluginId: string): (name: string) => Signal<Json | undefined> {
   return (name: string) => {
-    const byName = entries.get(pluginId) ?? new Map<string, Entry>();
+    const byName = entries.get(pluginId) ?? new Map<string, StateCell>();
     const held = byName.get(name);
-    if (held !== undefined) return held.cell.signal;
+    if (held !== undefined) return held.signal;
     // The argument arrives from plain JavaScript (`web/index.mjs` ships without its types).
     if (!isStateName(name)) {
       reportInvalidName(pluginId, name);
@@ -147,45 +134,57 @@ export function makePluginState(pluginId: string): (name: string) => Signal<Json
       return INERT;
     }
     const cell = makeStateCell({
-      initial: transport === "stream" ? streamed.get(keyOf(pluginId, name)) : undefined,
+      initial: streamed.get(keyOf(pluginId, name)),
       onListenerThrew: (error) => {
         reportListenerThrew(pluginId, name, error);
       },
     });
-    const reader =
-      transport === "notify"
-        ? makeStateReader({
-            read: () => readState(pluginId, name),
-            apply: (value) => {
-              cell.apply(value);
-            },
-            // A failed read is the transport's, not the plugin's: nothing is reported, the cell
-            // keeps its value, and the next name or the next edge back into `ready` reads again.
-            onReadFailed: () => {},
-          })
-        : null;
-    byName.set(name, { cell, reader });
+    byName.set(name, cell);
     entries.set(pluginId, byName);
-    if (reader === null) {
-      startPluginStateStream();
-    } else {
-      startPluginNotifications();
-      watchReadyEdges();
-      if (readConnection() === "ready") void reader.request();
-    }
+    startPluginStateStream();
     return cell.signal;
   };
 }
 
 // --------------------------------------------------------------------------
-// STREAM transport
+// The stream
 // --------------------------------------------------------------------------
 
 /**
- * Apply one `plugin.state` frame. Exported because it IS the delivery — the subscription's
- * `transform` calls it, and a unit test drives it directly.
+ * One `plugin.state` stream as this page follows it: the server process (`boot`) its last snapshot
+ * came from — `null` before its first snapshot and after its end. `value` frames carry no process of
+ * their own — they are that snapshot's process's. Every run of the stream starts with its snapshot
+ * (`apps/server/.../plugins/state.ts` `frames`: the snapshot, then the changes — per session), so a
+ * `value` frame never meets a `null` boot in the app; the transform holds one source per stream.
  */
-export function deliverPluginStateFrame(frame: PluginStateFrame): void {
+export type PluginStateSource = { boot: string | null };
+
+/**
+ * Per server process (`boot`): how far its frames have reached this tab — a snapshot's `seq`, then
+ * each frame's `floor`. Keyed by the source's boot as it stands, so a frame is always recorded; no
+ * wait carries a `null` boot, so nothing is released on one.
+ */
+const reached = new Map<string | null, number>();
+/** Server processes whose stream in this page has ENDED: nothing will ever move them again. */
+const ended = new Set<string>();
+
+type StateWait = PluginStatePosition & { readonly release: () => void };
+/** The commands answered and not yet caught up with — each resolved by the event that ends it. */
+const waits = new Set<StateWait>();
+
+const releaseWhere = (done: (wait: StateWait) => boolean): void => {
+  for (const wait of Array.from(waits)) {
+    if (!done(wait)) continue;
+    waits.delete(wait);
+    wait.release();
+  }
+};
+
+/**
+ * Apply one `plugin.state` frame. Exported because it IS the delivery — the subscription's
+ * `transform` calls it with its own stream's source, and a unit test drives it directly.
+ */
+export function deliverPluginStateFrame(frame: PluginStateFrame, source: PluginStateSource): void {
   if (frame._tag === "snapshot") {
     // THE CURRENT VALUE, whole: a name this tab holds that the snapshot leaves out has NO value on
     // the server any more (it restarted), and the cell says so.
@@ -193,31 +192,86 @@ export function deliverPluginStateFrame(frame: PluginStateFrame): void {
       frame.values.map((entry) => [keyOf(entry.pluginId, entry.name), entry.value as Json]),
     );
     for (const [pluginId, byName] of entries) {
-      for (const [name, entry] of byName) entry.cell.apply(streamed.get(keyOf(pluginId, name)));
+      for (const [name, cell] of byName) cell.apply(streamed.get(keyOf(pluginId, name)));
     }
+    source.boot = frame.boot;
+    ended.delete(frame.boot);
+    reached.set(frame.boot, frame.seq);
+    // A new session's current value: at or past every answer of this process, and PAST every answer
+    // of another one — that process restarted (or this tab follows another server now).
+    releaseWhere((wait) => wait.boot !== frame.boot || wait.seq <= frame.seq);
     return;
   }
   const value = frame.value as Json;
   streamed.set(keyOf(frame.pluginId, frame.name), value);
-  entries.get(frame.pluginId)?.get(frame.name)?.cell.apply(value);
+  entries.get(frame.pluginId)?.get(frame.name)?.apply(value);
+  const boot = source.boot;
+  const floor = Math.max(reached.get(boot) ?? 0, frame.floor);
+  reached.set(boot, floor);
+  releaseWhere((wait) => wait.boot === boot && wait.seq <= floor);
+}
+
+/**
+ * The stream `source` followed has ENDED — it failed, or its environment went away (the
+ * subscription's `ensuring`). No wait outlives the stream that would have ended it: the ones it owed
+ * are released now, and a later answer from that process is not held.
+ */
+export function endPluginStateStream(source: PluginStateSource): void {
+  const boot = source.boot;
+  source.boot = null;
+  if (boot === null) {
+    // It ended before its first snapshot: whatever waits on it has nothing else coming either.
+    releaseWhere(() => true);
+    return;
+  }
+  ended.add(boot);
+  reached.delete(boot);
+  releaseWhere((wait) => wait.boot === boot);
+}
+
+/**
+ * Resolve once this tab's `ctx.state` holds every value the server had published at `position`
+ * (S104, V2-73) — what `rpcPort.ts` awaits before it resolves a COMMAND's `ctx.invoke`. Never
+ * rejects: the command already succeeded, and this only orders its answer after its state. What
+ * ends it is in the file header.
+ */
+export function awaitPluginState(position: PluginStatePosition): Promise<void> {
+  if (unmountStream === null || ended.has(position.boot)) return Promise.resolve();
+  if ((reached.get(position.boot) ?? -1) >= position.seq) return Promise.resolve();
+  return new Promise<void>((release) => {
+    waits.add({ ...position, release });
+  });
+}
+
+/** How many answered commands are still waiting for their state. Diagnostics, and the leak specs. */
+export function pendingPluginStateWaits(): number {
+  return waits.size;
 }
 
 const stateSubscription = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
   label: "ru-code:plugins:state",
   tag: PLUGIN_METHODS.pluginState,
-  // Delivered in the TRANSFORM, once per frame, for the reason `notifications.ts` gives: the atom
-  // holds only the last frame, and two frames in a row are both owed to the cells.
-  transform: (stream) =>
-    stream.pipe(
+  // Delivered in the TRANSFORM, once per frame: the atom holds only the LAST frame, and two frames
+  // that arrive in a row are both owed to the cells. The transform runs once per environment's
+  // stream, so each stream has a source of its own, and its end releases only what it owed.
+  transform: (stream) => {
+    const source: PluginStateSource = { boot: null };
+    return stream.pipe(
       Stream.tap((frame) =>
         Effect.sync(() => {
-          deliverPluginStateFrame(frame);
+          deliverPluginStateFrame(frame, source);
         }),
       ),
-    ),
+      Stream.ensuring(
+        Effect.sync(() => {
+          endPluginStateStream(source);
+        }),
+      ),
+    );
+  },
 });
 
-/** The primary environment's stream, following a switch — `notifications.ts`'s driver, same shape. */
+/** The primary environment's stream, following a switch. */
 const pluginStateDriverAtom = Atom.make((get): null => {
   const environmentId = get(primaryEnvironmentIdAtom);
   if (environmentId === null) return null;
@@ -235,7 +289,16 @@ export function setPluginStateRegistryForTests(
   streamRegistry = next;
 }
 
-/** `mount`, not `subscribe` — the S53 measurement in `notifications.ts` `startPluginNotifications`. */
+/**
+ * `registry.mount` and NOT `registry.subscribe(atom, noop)`, and the difference is the whole
+ * mechanism: `subscribe` without `immediate` registers a listener and never calls `node.value()`
+ * (`effect/unstable/reactivity/AtomRegistry.js` · `subscribe`), so a DERIVED atom is never
+ * COMPUTED — its `get(subscription)` never runs, the stream is never opened, and nothing arrives
+ * (measured S53 on the push stream then in use: not one frame left the tab in a real browser,
+ * `WORKFLOW/logs/S53/9-probe-no-subscribe-frame.log`). `mount` IS
+ * `subscribe(atom, constVoid, { immediate: true })` — the API made for holding an atom whose value
+ * nobody reads, which is exactly this one: the delivery is the `transform`'s, not the value's.
+ */
 const mountStreamDefault = (): (() => void) =>
   (streamRegistry ?? appAtomRegistry).mount(pluginStateDriverAtom);
 let mountStream: () => () => void = mountStreamDefault;
@@ -252,91 +315,21 @@ export function startPluginStateStream(): void {
 }
 
 // --------------------------------------------------------------------------
-// NOTIFY transport
-// --------------------------------------------------------------------------
-
-/** Route one name from `plugin.notifications` to its reader — `notifications.ts` calls this. */
-export function deliverPluginStateName(pluginId: string, name: string): void {
-  void entries.get(pluginId)?.get(name)?.reader?.request();
-}
-
-const stateReadCommand = createEnvironmentCommand(connectionAtomRuntime, {
-  label: "plugin:state-read",
-  execute: (input: { readonly pluginId: PluginId; readonly name: string }) =>
-    request(PLUGIN_METHODS.pluginStateRead, input),
-});
-
-/** One `plugin.state.read` over the app's transport. */
-const readStateDefault = async (pluginId: string, name: string): Promise<Json | undefined> => {
-  const environmentId: EnvironmentId | null = appAtomRegistry.get(primaryEnvironmentIdAtom);
-  if (environmentId === null) throw new Error("no primary environment");
-  const result = await stateReadCommand.run(appAtomRegistry, {
-    environmentId,
-    input: { pluginId: PluginId.make(pluginId), name },
-  });
-  if (!AsyncResult.isSuccess(result))
-    throw new Error(`plugin.state.read failed for ${pluginId}.${name}`);
-  return result.value.value as Json | undefined;
-};
-let readState: (pluginId: string, name: string) => Promise<Json | undefined> = readStateDefault;
-
-/** Test seam: stand in for the read. `null` restores the real one. */
-export function setPluginStateReadForTests(
-  next: ((pluginId: string, name: string) => Promise<Json | undefined>) | null,
-): void {
-  readState = next ?? readStateDefault;
-}
-
-/** The connection as `ctx.connection` reads it — a seam, so a test can drive the edges. */
-let connectionSource: () => Signal<"connecting" | "ready" | "lost"> = pluginConnectionSignal;
-
-/** Test seam. `null` restores `ctx.connection`'s own source. */
-export function setPluginStateConnectionForTests(
-  next: Signal<"connecting" | "ready" | "lost"> | null,
-): void {
-  connectionSource = next === null ? pluginConnectionSignal : () => next;
-}
-
-const readConnection = (): "connecting" | "ready" | "lost" => connectionSource().get();
-
-let unwatchReady: (() => void) | null = null;
-
-/**
- * Every edge INTO `ready` reads every name once. Not only "after a `lost`": the app's supervisor
- * starts in `available`, which reads as `lost` (S66 F3), so the latch would be the same thing with
- * one more variable — and a cell created before the first `ready` needs this first edge anyway,
- * because it did not read at creation (the connection was down).
- */
-function watchReadyEdges(): void {
-  if (unwatchReady !== null) return;
-  const connection = connectionSource();
-  let previous = connection.get();
-  unwatchReady = connection.subscribe(() => {
-    const now = connection.get();
-    if (now === "ready" && previous !== "ready") {
-      for (const byName of entries.values()) {
-        for (const entry of byName.values()) void entry.reader?.request();
-      }
-    }
-    previous = now;
-  });
-}
-
-// --------------------------------------------------------------------------
 // Test seams
 // --------------------------------------------------------------------------
 
 /** How many listeners one name holds in this tab. Diagnostics, and what the leak specs assert on. */
 export function pluginStateListenerCount(pluginId: string, name: string): number {
-  return entries.get(pluginId)?.get(name)?.cell.listenerCount ?? 0;
+  return entries.get(pluginId)?.get(name)?.listenerCount ?? 0;
 }
 
 /** The module is a page-level singleton, like every other registry in the host. */
 export function resetPluginState(): void {
   unmountStream?.();
   unmountStream = null;
-  unwatchReady?.();
-  unwatchReady = null;
   entries.clear();
+  releaseWhere(() => true);
+  reached.clear();
+  ended.clear();
   streamed = new Map();
 }

@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { makeWebCtx } from "../../plugins/ctx";
 import { resetPluginProblems } from "../../plugins/problems";
 import { makePluginQuery } from "../../plugins/query";
+import { setPluginRpcPortForTests } from "../../plugins/rpcPort";
 import { makeSignal } from "../../plugins/signals";
 import { getPluginProblems } from "../../plugins/status";
 
@@ -23,6 +24,27 @@ const flush = async (): Promise<void> => {
 describe("ctx.query — the web host's wiring (V2-59)", () => {
   it("every plugin's ctx carries query", () => {
     expect(typeof makeWebCtx({ id: "demo", name: "Demo" }).query).toBe("function");
+  });
+
+  // S104 (V2-73, path row 9): a COMMAND's `invoke` is held until `ctx.state` holds what was
+  // published before its answer; a query round is a READ and is never held. Through the REAL
+  // default wiring — the plugin's ctx, `query.ts`, `rpcPort.ts` — the port is told which it is.
+  it("a ctx.query round goes out as a READ, never as a command held for the tab's state (S104 row 9)", async () => {
+    const kinds: Array<string | undefined> = [];
+    setPluginRpcPortForTests(async (_pluginId, _method, _payload, kind) => {
+      kinds.push(kind);
+      return { rows: 1 };
+    });
+    try {
+      const snapshot = makeWebCtx({ id: "demo", name: "Demo" }).query<{ rows: number }>("snapshot");
+      const stop = snapshot.subscribe(() => {});
+      await flush();
+      expect(snapshot.get()).toEqual({ phase: "ready", value: { rows: 1 } });
+      expect(kinds).toEqual(["read"]);
+      stop();
+    } finally {
+      setPluginRpcPortForTests(null);
+    }
   });
 
   it("reads through the plugin's invoke, and again when ctx.connection comes back", async () => {

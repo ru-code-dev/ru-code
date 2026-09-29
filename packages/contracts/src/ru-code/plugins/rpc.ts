@@ -1,6 +1,6 @@
 // ru-code: the ENTIRE ws surface of the plugin system — five RPCs, edited into the
 // three sealed tables exactly once (mvp-plan D3). Four are request/reply; the fifth,
-// `plugin.notifications` (S53, V2-54), is the ONE frame the server sends unasked.
+// `plugin.state` (S69, V2-58), is the ONE stream the server sends unasked.
 //
 // WHY a generic `plugin.invoke` instead of a method per plugin. A plugin is a folder
 // the user drops into `~/.ru-code/plugins/`; the host learns its methods at runtime,
@@ -10,8 +10,9 @@
 // had zero knowledge of the plugin before"). So the wire carries `{ pluginId, method,
 // payload }` and the plugin's own contract lives between its two halves.
 //
-// The price is `Schema.Unknown` on both payload and success, i.e. the wire is
-// unvalidated JSON for this one call. Contained deliberately:
+// The price is `Schema.Unknown` on the payload and on the answer's `value` (the answer's
+// `boot`/`seq` are typed, S104), i.e. the wire is unvalidated JSON for this one call. Contained
+// deliberately:
 //   - `pluginId` IS validated (`PluginId`, the same branded pattern the folder name,
 //     the storage path and the asset route use), so an id can never become a path;
 //   - `method` must be a non-empty string, and only a method the plugin actually
@@ -36,15 +37,15 @@ import {
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as Schema from "effect/Schema";
 
+import { NonNegativeInt } from "../../baseSchemas.ts";
+
 /** Literal-keyed method map (the host retains literal typing through a spread). */
 export const PLUGIN_METHODS = {
   pluginList: "plugin.list",
   pluginInvoke: "plugin.invoke",
   pluginSettings: "plugin.settings",
   pluginSetEnabled: "plugin.setEnabled",
-  pluginNotifications: "plugin.notifications",
   pluginState: "plugin.state",
-  pluginStateRead: "plugin.state.read",
 } as const;
 export type PluginMethods = typeof PLUGIN_METHODS;
 
@@ -62,10 +63,26 @@ export const WsPluginListRpc = Rpc.make(PLUGIN_METHODS.pluginList, {
 });
 
 /**
+ * ru-code S104 (V2-73): WHERE the server's state hub stood — `boot` names the server PROCESS (a
+ * restart is a new one, and its count starts again), `seq` counts every change the hub accepted.
+ * An invoke answer carries the position when its handler returned; a `plugin.state` snapshot the
+ * position it was taken at. The web host resolves a command's `ctx.invoke` only once this tab's
+ * stream has reached the answer's position — so `ctx.state` holds everything the server published
+ * before it answered (`apps/web/src/ru-code/plugins/state.ts`).
+ */
+export const PluginStatePosition = Schema.Struct({
+  boot: Schema.String,
+  seq: NonNegativeInt,
+});
+export type PluginStatePosition = typeof PluginStatePosition.Type;
+
+/**
  * Call a method a server plugin registered with `host.registerRpc`.
  *
- * `payload` and the success value are whatever the plugin's two halves agreed on
- * — see the module header for why that is `Unknown` and what still constrains it.
+ * `payload` and `value` are whatever the plugin's two halves agreed on — see the module header for
+ * why that is `Unknown` and what still constrains it. The answer also carries the state hub's
+ * position when the handler returned (S104, V2-73): an ENVELOPE the web host unwraps, so a plugin
+ * still receives its handler's value and nothing else.
  */
 export const WsPluginInvokeRpc = Rpc.make(PLUGIN_METHODS.pluginInvoke, {
   payload: Schema.Struct({
@@ -78,7 +95,11 @@ export const WsPluginInvokeRpc = Rpc.make(PLUGIN_METHODS.pluginInvoke, {
     // author could not act on.
     payload: Schema.optional(Schema.Unknown),
   }),
-  success: Schema.Unknown,
+  success: Schema.Struct({
+    value: Schema.Unknown,
+    boot: PluginStatePosition.fields.boot,
+    seq: PluginStatePosition.fields.seq,
+  }),
   error: PluginRpcError,
 });
 
@@ -140,49 +161,6 @@ export const WsPluginSetEnabledRpc = Rpc.make(PLUGIN_METHODS.pluginSetEnabled, {
 });
 
 /**
- * ru-code S53 (V2-54): ONE server→web notification — a plugin's name, and whose it is. Since S69
- * (V2-58) the name is a STATE value that changed (the state seam's notify transport), and the web
- * host reads the value through `plugin.state.read`.
- *
- * NAME ONLY: on this transport the value travels by the read, so there is exactly one description
- * of it. `pluginId` is the branded `PluginId` for the same reason every other member of this file
- * is: the web host routes on it, and an id that could never name a plugin must not reach that
- * routing.
- */
-export const PluginNotification = Schema.Struct({
-  pluginId: PluginId,
-  /** The plugin's own name for what moved. The SERVER validates its shape before it is sent. */
-  name: Schema.NonEmptyString,
-});
-export type PluginNotification = typeof PluginNotification.Type;
-
-/**
- * Every notification for every plugin, for as long as this tab holds the stream (V2-54).
- *
- * THE APP'S EXISTING PUSH PATH, not a new one: a `stream: true` RPC over the websocket the tab
- * already has, exactly like `subscribeServerConfig` and `subscribeAutoUpdate`. Each tab subscribes
- * once and the host fans every plugin's notifications out to all of them, which is the whole point
- * — ten tabs, one reconcile, ten refreshes.
- *
- * ONE STREAM FOR EVERY PLUGIN, not one per plugin: a tab hosts all of them, per-plugin streams
- * would be a frame budget that grows with the install, and the isolation a plugin needs is at the
- * CTX (a plugin only ever sees its own names, because `ctx.state` is bound to its id) rather than
- * on the wire.
- *
- * NO REPLAY. A tab that subscribes after a notification was sent does not get it — and needs
- * nothing: its readers read every name they hold on the way in (V2-58). That is also why the
- * stream's first frame is a notification and not a snapshot; the snapshot is `plugin.state`'s.
- *
- * READ scope: the frame carries a name a plugin chose and nothing else.
- */
-export const WsPluginNotificationsRpc = Rpc.make(PLUGIN_METHODS.pluginNotifications, {
-  payload: Schema.Struct({}),
-  success: PluginNotification,
-  error: PluginRpcError,
-  stream: true,
-});
-
-/**
  * ru-code S69 (V2-58): ONE current value — a plugin's name, and what its server half last published
  * under it. `value` is `Unknown` on the wire for the reason `plugin.invoke`'s answer is: the SERVER
  * validated it as plain JSON before it was stored (`apps/server/src/ru-code/plugins/state.ts`), and
@@ -203,29 +181,39 @@ export type PluginStateValue = typeof PluginStateValue.Type;
  * restart, a value a tab still shows is gone, and the tab has to learn that too). Every later frame
  * is a `value`: one name whose value CHANGED. A tab applies either by the one rule, structural
  * compare then set, so a snapshot that repeats what it holds renders nothing.
+ *
+ * S104 (V2-73): a snapshot also carries the hub's position it was taken at (`boot`, `seq`), and a
+ * `value` frame its `floor` — every change up to `floor` has reached this tab, delivered or replaced
+ * by a frame the tab already took (latest-wins).
  */
 export const PluginStateFrame = Schema.Union([
-  Schema.TaggedStruct("snapshot", { values: Schema.Array(PluginStateValue) }),
+  Schema.TaggedStruct("snapshot", {
+    values: Schema.Array(PluginStateValue),
+    boot: PluginStatePosition.fields.boot,
+    seq: PluginStatePosition.fields.seq,
+  }),
   Schema.TaggedStruct("value", {
     pluginId: PluginId,
     name: Schema.NonEmptyString,
     value: Schema.Unknown,
+    floor: NonNegativeInt,
   }),
 ]);
 export type PluginStateFrame = typeof PluginStateFrame.Type;
 
 /**
- * THE STREAM TRANSPORT of the state seam (V2-58, `PLUGIN_STATE_TRANSPORT = "stream"`).
+ * THE state seam's one transport (V2-58; the notify transport was removed, V2-75).
  *
- * The app's existing push path, like `plugin.notifications`: a `stream: true` RPC over the socket
- * the tab already holds, re-opened by the client runtime on every new session — so a reconnect IS
- * a resubscribe, and the snapshot it starts with is the current value. ONE stream for every plugin
- * and every name, for the reason `plugin.notifications` is one: a tab hosts all of them, and the
- * isolation a plugin needs is at its ctx, which routes by id. LATEST WINS: the server holds at most
- * one pending value per `(plugin, name)` per tab, so a value published a thousand times while one
- * frame is on its way costs one more frame, carrying the last.
+ * THE APP'S EXISTING PUSH PATH, not a new one: a `stream: true` RPC over the socket the tab already
+ * holds, exactly like `subscribeServerConfig` and `subscribeAutoUpdate`, re-opened by the client
+ * runtime on every new session — so a reconnect IS a resubscribe, and the snapshot it starts with is
+ * the current value. ONE stream for every plugin and every name, not one per plugin: a tab hosts all
+ * of them, per-plugin streams would be a frame budget that grows with the install, and the isolation
+ * a plugin needs is at its ctx, which routes by id. LATEST WINS: the server holds at most one
+ * pending value per `(plugin, name)` per tab, so a value published a thousand times while one frame
+ * is on its way costs one more frame, carrying the last.
  *
- * READ scope, identical to `plugin.notifications`: subscribing runs no plugin code.
+ * READ scope: subscribing runs no plugin code.
  */
 export const WsPluginStateRpc = Rpc.make(PLUGIN_METHODS.pluginState, {
   payload: Schema.Struct({}),
@@ -234,27 +222,11 @@ export const WsPluginStateRpc = Rpc.make(PLUGIN_METHODS.pluginState, {
   stream: true,
 });
 
-/**
- * THE NOTIFY TRANSPORT's one read (V2-58, `PLUGIN_STATE_TRANSPORT = "notify"`): the stored value of
- * one name. `plugin.notifications` carries the name; the web engine reads it here, one read in
- * flight per name. `value` is ABSENT when the server holds none — distinct from a published `null`.
- *
- * An ENGINE rpc, not a plugin one: it reads the host's store and runs no plugin code, so it is READ
- * scope where `plugin.invoke` is OPERATE.
- */
-export const WsPluginStateReadRpc = Rpc.make(PLUGIN_METHODS.pluginStateRead, {
-  payload: Schema.Struct({ pluginId: PluginId, name: Schema.NonEmptyString }),
-  success: Schema.Struct({ value: Schema.optional(Schema.Unknown) }),
-  error: PluginRpcError,
-});
-
-/** All seven, ready to spread into the host's `WsRpcGroup.make(...)`. */
+/** All five, ready to spread into the host's `WsRpcGroup.make(...)`. */
 export const pluginRpcs = [
   WsPluginListRpc,
   WsPluginInvokeRpc,
   WsPluginSettingsRpc,
   WsPluginSetEnabledRpc,
-  WsPluginNotificationsRpc,
   WsPluginStateRpc,
-  WsPluginStateReadRpc,
 ] as const;

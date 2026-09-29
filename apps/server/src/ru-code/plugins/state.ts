@@ -3,20 +3,25 @@
  *
  * WHAT IT OWNS. The last value every plugin published under every name, the compare that decides
  * whether a publish is a CHANGE, the checks every plugin-facing surface has (name, names per plugin,
- * JSON, size), and the fan-out of a change to both transports. A plugin calls `publish` whenever it
+ * JSON, size), and the fan-out of a change to every tab. A plugin calls `publish` whenever it
  * likes — after every operation, on every tick — and never tracks what it sent: a value equal to the
  * one held stops here and costs no tab anything.
  *
- * TWO TRANSPORTS, ONE STORE (the web host's `PLUGIN_STATE_TRANSPORT` picks which one a tab uses):
+ * ONE TRANSPORT, `plugin.state` (V2-75: the notify transport is gone). Every subscriber gets a
+ * SNAPSHOT of every current value first, then one `value` frame per change. Per subscriber the
+ * pending frames are LATEST-WINS: at most one per `(plugin, name)`, replaced in place by a newer
+ * value, released when the tab takes it. So a plugin publishing faster than a tab reads costs that
+ * tab one frame per pull, carrying the newest value — never a queue of stale ones, and never a lost
+ * last value.
  *
- *   · STREAM — `plugin.state`. Every subscriber gets a SNAPSHOT of every current value first, then
- *     one `value` frame per change. Per subscriber the pending frames are LATEST-WINS: at most one
- *     per `(plugin, name)`, replaced in place by a newer value, released when the tab takes it. So
- *     a plugin publishing faster than a tab reads costs that tab one frame per read, carrying the
- *     newest value — never a queue of stale ones, and never a lost last value.
- *   · NOTIFY — every change is handed to `onChange`, which the host wires to the notify hub
- *     (`notify.ts`): the tab hears the name and reads the value through `plugin.state.read`
- *     ({@link PluginStateHub.read}), one read in flight per name (the SDK's `makeStateReader`).
+ * THE POSITION (S104, V2-73). The hub counts every change it accepts (`seq`) and names its process
+ * (`boot`, a new one per server start). An invoke answer carries the position when its handler
+ * returned (`rpcHandlers.ts`), a snapshot the position it was taken at, and each `value` frame its
+ * FLOOR: every change up to it has reached this tab — delivered, or replaced by a frame the tab
+ * already took. A pending frame keeps the seq of the FIRST change it covers, so a replacement never
+ * lets the floor pass a change the tab has not seen in any form. That is what lets the web host
+ * resolve a command only once `ctx.state` holds everything published before its answer, with no
+ * timer: every wait ends on a frame or a snapshot this hub already owes the tab.
  *
  * THE COMPARE IS STRUCTURAL (`@smart-tools/plugin-sdk/state` `sameJson`) and runs on the value as it
  * will be SENT — the JSON text parsed back — so a value that differs only in a key the wire drops,
@@ -37,7 +42,7 @@ import {
   findNonJson,
   sameJson,
 } from "@smart-tools/plugin-sdk/state";
-import type { PluginStateFrame, PluginStateValue } from "@t3tools/contracts";
+import type { PluginStateFrame, PluginStatePosition, PluginStateValue } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -45,18 +50,31 @@ import * as Stream from "effect/Stream";
 /** The key a value and a pending frame are stored under. NUL cannot occur in either half. */
 const keyOf = (pluginId: string, name: string): string => `${pluginId}\u0000${name}`;
 
+/**
+ * One value waiting for a tab: the newest value (LATEST WINS), and the seq of the FIRST change it
+ * covers — a replacement keeps it, so the tab's floor stays below every change it has not seen.
+ */
+interface PendingValue {
+  readonly entry: PluginStateValue;
+  readonly seq: number;
+}
+
 /** One subscriber — one open tab's `plugin.state` stream. */
 interface StateSink {
-  /** The newest value not yet taken by this tab, per key: LATEST WINS. */
-  readonly pending: Map<string, PluginStateValue>;
+  /**
+   * The values not yet taken by this tab, per key. A `Map` keeps the order keys were FIRST queued in,
+   * which is seq order (a replacement keeps its key's place), so the first entry holds the lowest
+   * seq still owed.
+   */
+  readonly pending: Map<string, PendingValue>;
   readonly queue: Queue.Queue<string>;
 }
 
 export interface PluginStateHub {
   /** `ctx.publish(name, value)` for one plugin. Never throws, never waits. */
   readonly publish: (pluginId: PluginId, name: string, value: unknown) => void;
-  /** `plugin.state.read`: the stored value, or no `value` key when there is none. */
-  readonly read: (pluginId: string, name: string) => { readonly value?: unknown };
+  /** Where the hub stands now: its process and the count of changes it has accepted (S104). */
+  readonly position: () => PluginStatePosition;
   /** One subscriber's `plugin.state` stream: the snapshot, then every change. */
   readonly frames: Stream.Stream<PluginStateFrame>;
   /** How many tabs hold a `plugin.state` stream right now. Diagnostics and specs. */
@@ -64,14 +82,14 @@ export interface PluginStateHub {
 }
 
 export interface StateHubOptions {
-  /** One line per `(pluginId, code)` — the hub de-duplicates, like the notify hub's. */
+  /** One line per `(pluginId, code)` — the hub de-duplicates. */
   readonly report: (input: {
     readonly pluginId: PluginId;
     readonly code: string;
     readonly message: string;
   }) => void;
-  /** A value CHANGED — the notify transport's trigger (the host wires it to the notify hub). */
-  readonly onChange: (pluginId: PluginId, name: string) => void;
+  /** This server process's name — a restarted server is a new hub with a new one (S104). */
+  readonly boot: string;
 }
 
 export const makePluginStateHub = (options: StateHubOptions): PluginStateHub => {
@@ -81,6 +99,8 @@ export const makePluginStateHub = (options: StateHubOptions): PluginStateHub => 
   const namesByPlugin = new Map<string, number>();
   const sinks = new Set<StateSink>();
   const reported = new Set<string>();
+  /** Every change this hub accepted, counted. */
+  let seq = 0;
 
   const reportOnce = (pluginId: PluginId, code: string, message: string): void => {
     const key = `${pluginId}:${code}`;
@@ -141,18 +161,20 @@ export const makePluginStateHub = (options: StateHubOptions): PluginStateHub => 
     if (held !== undefined && sameJson(held.value, stored)) return;
     const entry: PluginStateValue = { pluginId, name, value: stored };
     values.set(key, entry);
+    seq += 1;
     for (const sink of sinks) {
-      // LATEST WINS: a frame for this key still waiting for the tab is REPLACED, not queued behind.
-      if (sink.pending.has(key)) {
-        sink.pending.set(key, entry);
+      // LATEST WINS: a frame for this key still waiting for the tab is REPLACED, not queued behind —
+      // and keeps the seq of the first change it covers.
+      const waiting = sink.pending.get(key);
+      if (waiting !== undefined) {
+        sink.pending.set(key, { entry, seq: waiting.seq });
         continue;
       }
-      sink.pending.set(key, entry);
+      sink.pending.set(key, { entry, seq });
       // An unbounded queue always accepts; `false` is a queue already shut down (the tab went away
       // between the walk and the offer), and the entry is dropped with the sink.
       if (!Queue.offerUnsafe(sink.queue, key)) sink.pending.delete(key);
     }
-    options.onChange(pluginId, name);
   };
 
   const frames: Stream.Stream<PluginStateFrame> = Stream.unwrap(
@@ -163,15 +185,24 @@ export const makePluginStateHub = (options: StateHubOptions): PluginStateHub => 
       // change can fall between the snapshot and the sink. A change after it is queued, and a
       // change the snapshot already carries arrives again as an equal value the tab drops.
       sinks.add(sink);
-      const snapshot: PluginStateFrame = { _tag: "snapshot", values: Array.from(values.values()) };
+      const snapshot: PluginStateFrame = {
+        _tag: "snapshot",
+        values: Array.from(values.values()),
+        boot: options.boot,
+        seq,
+      };
       return Stream.concat(
         Stream.succeed(snapshot),
         Stream.fromQueue(queue).pipe(
-          // Taken ON THE PULL: the entry is whatever is newest NOW, not what was offered first.
+          // Taken ON THE PULL: the entry is whatever is newest NOW, not what was offered first. The
+          // floor is just below the first change still owed to this tab, or the whole count.
           Stream.map((key): PluginStateFrame | null => {
-            const entry = sink.pending.get(key);
+            const pending = sink.pending.get(key);
             sink.pending.delete(key);
-            return entry === undefined ? null : { _tag: "value", ...entry };
+            if (pending === undefined) return null;
+            const owed = sink.pending.values().next();
+            const floor = owed.done === true ? seq : owed.value.seq - 1;
+            return { _tag: "value", ...pending.entry, floor };
           }),
           Stream.filter((frame): frame is PluginStateFrame => frame !== null),
         ),
@@ -188,10 +219,7 @@ export const makePluginStateHub = (options: StateHubOptions): PluginStateHub => 
 
   return {
     publish,
-    read: (pluginId, name) => {
-      const entry = values.get(keyOf(pluginId, name));
-      return entry === undefined ? {} : { value: entry.value };
-    },
+    position: () => ({ boot: options.boot, seq }),
     frames,
     subscriberCount: () => sinks.size,
   };

@@ -625,8 +625,8 @@ it.layer(NodeServices.layer)("PluginHost", (it) => {
     }),
   );
 
-  // ru-code S37 (rule 37, "boundaries validate"). The wire carries JSON and only JSON: the
-  // success of `plugin.invoke` is `Schema.Unknown`, which effect lowers to `Schema.Json`, and the
+  // ru-code S37 (rule 37, "boundaries validate"). The wire carries JSON and only JSON: the answer's
+  // `value` in `plugin.invoke` is `Schema.Unknown` (S104), which effect lowers to `Schema.Json`, and the
   // RPC server encodes the exit against it BEFORE the frame is written. A value that is not a
   // JSON value therefore dies inside the protocol as an untyped `Die` defect — the plugin's web
   // half gets a rejection with no `reason`, and the page blames the socket for a call the server

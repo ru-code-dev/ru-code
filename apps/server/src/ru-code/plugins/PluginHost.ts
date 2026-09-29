@@ -42,7 +42,8 @@ import {
   type WebManifestList,
 } from "@smart-tools/plugin-sdk/contracts";
 import type { PluginManifest } from "@smart-tools/plugin-sdk/contracts";
-import type { PluginSettingsRow, PluginStateFrame } from "@t3tools/contracts";
+import type { PluginSettingsRow, PluginStateFrame, PluginStatePosition } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import type {
   PluginProject,
@@ -66,7 +67,6 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
 import { makePluginLogger, makeServerCtx } from "./ctx.ts";
-import { makePluginNotifyHub, type PluginNotification } from "./notify.ts";
 import { makePluginStateHub } from "./state.ts";
 import { describeNonJson, findNonJson } from "@smart-tools/plugin-sdk/state";
 import {
@@ -495,31 +495,19 @@ export class PluginHost extends Context.Service<
     >;
 
     /**
-     * ru-code S53 (V2-54): one SUBSCRIBER's server→web notification stream — what
-     * `plugin.notifications` serves to one tab. Since S69 (V2-58) it is the state seam's NOTIFY
-     * transport and nothing else: every name on it is a state value that changed.
-     *
-     * Every plugin's names on one stream, because a tab hosts every plugin: the web host routes
-     * `{ pluginId, name }` to that plugin's own state reader and no plugin can hear another's
-     * (`apps/web/src/ru-code/plugins/state.ts`). Reading it registers a sink and ending it removes
-     * one; see `notify.ts` for the fan-out and the coalescing rule.
-     */
-    readonly notifications: Stream.Stream<PluginNotification>;
-
-    /** How many tabs hold a `plugin.notifications` stream right now. Diagnostics and specs. */
-    readonly notifySubscriberCount: Effect.Effect<number>;
-
-    /**
      * ru-code S69 (V2-58): one subscriber's `plugin.state` stream — the snapshot of every plugin's
-     * current values, then every change (the STREAM transport). See `state.ts`.
+     * current values, then every change. Every plugin's names on one stream, because a tab hosts
+     * every plugin: the web host routes each value to that plugin's own cell, and no plugin can read
+     * another's (`apps/web/src/ru-code/plugins/state.ts`). See `state.ts`.
      */
     readonly stateFrames: Stream.Stream<PluginStateFrame>;
 
-    /** `plugin.state.read` — the NOTIFY transport's read of one stored value. */
-    readonly readState: (
-      pluginId: string,
-      name: string,
-    ) => Effect.Effect<{ readonly value?: unknown }>;
+    /**
+     * ru-code S104 (V2-73): where the state hub stands — this process's `boot` and the count of
+     * changes it accepted. `plugin.invoke` reads it when a handler returns, so the web host can
+     * resolve a command only once its tab holds everything published before the answer.
+     */
+    readonly statePosition: Effect.Effect<PluginStatePosition>;
 
     /** How many tabs hold a `plugin.state` stream right now. Diagnostics and specs. */
     readonly stateSubscriberCount: Effect.Effect<number>;
@@ -553,28 +541,13 @@ const make = Effect.gen(function* () {
   const runFork = Effect.runForkWith(runtimeContext);
   const runPromise = Effect.runPromiseWith(runtimeContext);
   /**
-   * ru-code S53 (V2-54): the notify hub, one per host — so one plugin's changed state name reaches
-   * every tab and no other plugin's names. Since S69 (V2-58) it is the state seam's NOTIFY
-   * transport's internal: its only caller is the state hub below (`onChange`), and no plugin reaches
-   * it — `ctx.notify` left the contract.
+   * ru-code S69 (V2-58): the state hub — every plugin's last published values, one per host, and
+   * every tab's `plugin.state` stream.
    *
    * Its `report` is the SERVER's half of the V2-42 channel: the host talking ABOUT a plugin, one
    * line per `(pluginId, code)` (the hub de-duplicates), at WARNING because it names a call the
    * plugin made that the host refused. It is not a toast and not a status row — a server plugin's
    * author reads `<stateDir>/logs/server.log`, and the app's user is not the audience for either.
-   */
-  const notifyHub = makePluginNotifyHub({
-    report: ({ pluginId, code, message }) => {
-      runFork(
-        Effect.logWarning("ru-code plugins: notify refused", { plugin: pluginId, code, message }),
-      );
-    },
-  });
-  /**
-   * ru-code S69 (V2-58): the state hub — every plugin's last published values, one per host. A
-   * CHANGE goes to both transports at once: the stream sinks inside the hub, and the notify hub
-   * above, which costs nothing when no tab uses that transport (a name with no sink is discarded).
-   * Its `report` is the same server-side half of the V2-42 channel the notify hub's is.
    */
   const stateHub = makePluginStateHub({
     report: ({ pluginId, code, message }) => {
@@ -582,9 +555,9 @@ const make = Effect.gen(function* () {
         Effect.logWarning("ru-code plugins: publish refused", { plugin: pluginId, code, message }),
       );
     },
-    onChange: (pluginId, name) => {
-      notifyHub.notify(pluginId, name);
-    },
+    // S104 (V2-73): one per host, i.e. per server process — a restart is a new name, which is how a
+    // tab tells a count that started again from one that went backwards.
+    boot: NodeCrypto.randomUUID(),
   });
   const path = yield* Path.Path;
   const rootDir = yield* pluginsDir;
@@ -1174,10 +1147,8 @@ const make = Effect.gen(function* () {
       Effect.sync(() =>
         statuses.get(pluginId)?.state === "loaded" ? directories.get(pluginId) : undefined,
       ),
-    notifications: notifyHub.notifications,
-    notifySubscriberCount: Effect.sync(() => notifyHub.subscriberCount()),
     stateFrames: stateHub.frames,
-    readState: (pluginId: string, name: string) => Effect.sync(() => stateHub.read(pluginId, name)),
+    statePosition: Effect.sync(() => stateHub.position()),
     stateSubscriberCount: Effect.sync(() => stateHub.subscriberCount()),
   } satisfies PluginHost["Service"];
 });

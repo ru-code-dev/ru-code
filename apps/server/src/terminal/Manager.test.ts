@@ -7,6 +7,7 @@ import {
   type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
+  TerminalSessionSnapshot,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
@@ -22,6 +23,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -31,6 +33,8 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
+const decodeTerminalSessionSnapshot = Schema.decodeUnknownExit(TerminalSessionSnapshot);
+
 class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
   readonly message: string;
 }> {}
@@ -39,7 +43,7 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
   readonly writes: string[] = [];
   readonly resizeCalls: Array<{ cols: number; rows: number }> = [];
   readonly killSignals: Array<string | undefined> = [];
-  readonly pid: number;
+  private currentPid: number;
   writeFailure: unknown | undefined;
   resizeFailure: unknown | undefined;
   private readonly dataListeners = new Set<(data: string) => void>();
@@ -47,7 +51,16 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
   killed = false;
 
   constructor(pid: number) {
-    this.pid = pid;
+    this.currentPid = pid;
+  }
+
+  get pid(): number {
+    return this.currentPid;
+  }
+
+  /** node-pty 1.2 on Windows: pid is 0 at spawn and set once ConPTY connects. */
+  connect(pid: number): void {
+    this.currentPid = pid;
   }
 
   write(data: string): void {
@@ -101,10 +114,12 @@ class FakePtyAdapter {
   readonly processes: FakePtyProcess[] = [];
   readonly spawnFailures: Error[] = [];
   private readonly mode: "sync" | "async";
+  private readonly latePid: boolean;
   private nextPid = 9000;
 
-  constructor(mode: "sync" | "async" = "sync") {
+  constructor(mode: "sync" | "async" = "sync", options: { latePid?: boolean } = {}) {
     this.mode = mode;
+    this.latePid = options.latePid ?? false;
   }
 
   spawn(
@@ -121,7 +136,7 @@ class FakePtyAdapter {
         }),
       );
     }
-    const process = new FakePtyProcess(this.nextPid++);
+    const process = new FakePtyProcess(this.latePid ? 0 : this.nextPid++);
     this.processes.push(process);
     if (this.mode === "async") {
       return Effect.tryPromise({
@@ -297,6 +312,51 @@ it.layer(
       assert.equal(second.threadId, "thread-1");
       assert.equal(third.threadId, "thread-1");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
+  it.effect("returns a wire-valid snapshot with a null pid while the pty pid is unknown", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager(5, {
+        ptyAdapter: new FakePtyAdapter("sync", { latePid: true }),
+      });
+
+      const snap = yield* manager.open(openInput());
+
+      expect(Exit.isSuccess(decodeTerminalSessionSnapshot(snap))).toBe(true);
+      expect(snap.pid).toBeNull();
+    }),
+  );
+
+  it.effect("keeps streaming output and publishes the pid once the pty knows it", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        ptyAdapter: new FakePtyAdapter("sync", { latePid: true }),
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.connect(4242);
+      process.emitData("after connect\n");
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data === "after connect\n"),
+        ),
+      );
+
+      const metadataEvents = yield* Ref.make<ReadonlyArray<TerminalMetadataStreamEvent>>([]);
+      const unsubscribe = yield* manager.subscribeMetadata((event) =>
+        Ref.update(metadataEvents, (events) => [...events, event]),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      expect((yield* Ref.get(metadataEvents))[0]).toMatchObject({
+        type: "snapshot",
+        terminals: [{ threadId: "thread-1", pid: 4242 }],
+      });
+      const snap = yield* manager.open(openInput());
+      expect(snap.pid).toBe(4242);
     }),
   );
 

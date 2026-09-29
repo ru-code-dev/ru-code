@@ -258,7 +258,6 @@ export interface TerminalSessionState {
   cwd: string;
   worktreePath: string | null;
   status: TerminalSessionStatus;
-  pid: number | null;
   history: string;
   pendingHistoryControlSequence: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
@@ -346,6 +345,12 @@ function terminalWireLabel(session: TerminalSessionState): string {
   return truncateTerminalWireLabel(getTerminalLabel(session.terminalId));
 }
 
+/** node-pty 1.2 on Windows reports pid 0 until ConPTY connects; unknown is `null` on the wire. */
+function knownPid(session: TerminalSessionState): number | null {
+  const pid = session.process?.pid;
+  return pid !== undefined && pid > 0 ? pid : null;
+}
+
 function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   return {
     threadId: session.threadId,
@@ -353,7 +358,7 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     cwd: session.cwd,
     worktreePath: session.worktreePath,
     status: session.status,
-    pid: session.pid,
+    pid: knownPid(session),
     history: session.history,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
@@ -370,7 +375,7 @@ function summary(session: TerminalSessionState): TerminalSummary {
     cwd: session.cwd,
     worktreePath: session.worktreePath,
     status: session.status,
-    pid: session.pid,
+    pid: knownPid(session),
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     hasRunningSubprocess: session.hasRunningSubprocess,
@@ -443,10 +448,10 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
 
 function enqueueProcessEvent(
   session: TerminalSessionState,
-  expectedPid: number,
+  expectedProcess: PtyAdapter.PtyProcess,
   event: PendingProcessEvent,
 ): boolean {
-  if (!session.process || session.status !== "running" || session.pid !== expectedPid) {
+  if (session.process !== expectedProcess || session.status !== "running") {
     return false;
   }
 
@@ -1675,11 +1680,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   const drainProcessEvents = Effect.fn("terminal.drainProcessEvents")(function* (
     session: TerminalSessionState,
-    expectedPid: number,
+    expectedProcess: PtyAdapter.PtyProcess,
   ) {
     while (true) {
       const action: DrainProcessEventAction = yield* Effect.sync(() => {
-        if (session.pid !== expectedPid || !session.process || session.status !== "running") {
+        if (session.process !== expectedProcess || session.status !== "running") {
           session.pendingProcessEvents = [];
           session.pendingProcessEventIndex = 0;
           session.processEventDrainRunning = false;
@@ -1727,7 +1732,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const process = session.process;
         cleanupProcessHandles(session);
         session.process = null;
-        session.pid = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
         session.status = "exited";
@@ -1799,7 +1803,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* modifyManagerState((state) => {
       cleanupProcessHandles(session);
       session.process = null;
-      session.pid = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
       session.status = "exited";
@@ -1928,18 +1931,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;
 
-            const processPid = ptyProcess.pid;
+            const spawnedProcess = ptyProcess;
             const unsubscribeData = ptyProcess.onData((data) => {
-              if (!enqueueProcessEvent(session, processPid, { type: "output", data })) {
+              if (!enqueueProcessEvent(session, spawnedProcess, { type: "output", data })) {
                 return;
               }
-              runFork(drainProcessEvents(session, processPid));
+              runFork(drainProcessEvents(session, spawnedProcess));
             });
             const unsubscribeExit = ptyProcess.onExit((event) => {
-              if (!enqueueProcessEvent(session, processPid, { type: "exit", event })) {
+              if (!enqueueProcessEvent(session, spawnedProcess, { type: "exit", event })) {
                 return;
               }
-              runFork(drainProcessEvents(session, processPid));
+              runFork(drainProcessEvents(session, spawnedProcess));
             });
 
             let eventStamp: ReturnType<typeof advanceEventSequence> = {
@@ -1948,7 +1951,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             };
             yield* modifyManagerState((state) => {
               session.process = ptyProcess;
-              session.pid = processPid;
               session.status = "running";
               session.unsubscribeData = unsubscribeData;
               session.unsubscribeExit = unsubscribeExit;
@@ -1981,7 +1983,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       yield* modifyManagerState((state) => {
         cleanupProcessHandles(session);
         session.status = "error";
-        session.pid = null;
         session.process = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
@@ -2061,10 +2062,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       return;
     }
     const state = yield* readManagerState;
-    const runningSessions = [...state.sessions.values()].filter(
-      (session): session is TerminalSessionState & { pid: number } =>
-        session.status === "running" && Number.isInteger(session.pid),
-    );
+    const runningSessions = [...state.sessions.values()].flatMap((session) => {
+      const terminalPid = knownPid(session);
+      return session.status === "running" && session.process && terminalPid !== null
+        ? [{ session, terminalProcess: session.process, terminalPid }]
+        : [];
+    });
 
     if (runningSessions.length === 0) {
       return;
@@ -2085,10 +2088,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
     const subprocessInspector = inspectorOption.value;
 
-    const checkSubprocessActivity = Effect.fn("terminal.checkSubprocessActivity")(function* (
-      session: TerminalSessionState & { pid: number },
-    ) {
-      const terminalPid = session.pid;
+    const checkSubprocessActivity = Effect.fn("terminal.checkSubprocessActivity")(function* ({
+      session,
+      terminalProcess,
+      terminalPid,
+    }: {
+      session: TerminalSessionState;
+      terminalProcess: PtyAdapter.PtyProcess;
+      terminalPid: number;
+    }) {
       const inspectResult = yield* subprocessInspector(terminalPid).pipe(
         Effect.map(Option.some),
         Effect.catch((reason) =>
@@ -2119,7 +2127,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (
           Option.isNone(liveSession) ||
           liveSession.value.status !== "running" ||
-          liveSession.value.pid !== terminalPid ||
+          liveSession.value.process !== terminalProcess ||
           (liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
             liveSession.value.childCommandLabel === nextChildLabel)
         ) {
@@ -2218,7 +2226,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         cwd: input.cwd,
         worktreePath: input.worktreePath ?? null,
         status: "starting",
-        pid: null,
         history,
         pendingHistoryControlSequence: "",
         pendingProcessEvents: [],
@@ -2630,7 +2637,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             cwd: input.cwd,
             worktreePath: input.worktreePath ?? null,
             status: "starting",
-            pid: null,
             history: "",
             pendingHistoryControlSequence: "",
             pendingProcessEvents: [],

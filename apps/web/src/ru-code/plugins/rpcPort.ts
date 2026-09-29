@@ -9,6 +9,13 @@
 // (V2-35), a call is never REFUSED for a reason the plugin cannot see: one made while the socket
 // is down is parked and sent when the session is up, and `plugin-failed` means only "the handler
 // threw".
+// S104 (V2-73): a COMMAND's answer never overtakes the state it follows. The wire's answer carries
+// the server's state position when the handler returned, and the call resolves only once this tab's
+// `ctx.state` has reached it (`state.ts` `awaitPluginState`) — so a plugin whose server half
+// published before it answered sees that value in `ctx.state` by the time `invoke` resolves, and a
+// busy flag held for exactly the call's lifetime can never show an idle moment before the value.
+// A READ (`ctx.query`, `makePluginRead`) is not held: its result is its answer.
+//
 // v1 also carried a PORT indirection here — a settable `RpcPort` whose default rejected with "this
 // arrives in a later phase" — which was a build-order artefact of the original plan and, once the
 // real client landed, dead code with its own tests. v2 builds the client lazily and keeps one
@@ -20,7 +27,7 @@ import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
 import { request } from "@t3tools/client-runtime/rpc";
 import { createEnvironmentCommand } from "@t3tools/client-runtime/state/runtime";
 import { PLUGIN_METHODS } from "@t3tools/contracts";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, PluginStatePosition } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -38,6 +45,7 @@ import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { MAX_PARKED_INVOKES_PER_PLUGIN } from "./caps";
 import { pluginConnectionAtom } from "./connectionAtom";
 import { reportPluginProblem } from "./problems";
+import { awaitPluginState } from "./state";
 
 // --------------------------------------------------------------------------
 // The client
@@ -57,9 +65,9 @@ export interface PluginInvokeInput {
   readonly payload?: unknown;
 }
 
-/** What one dispatch came back with. */
+/** What one dispatch came back with — the handler's value, and where the server's state stood then. */
 export type PluginInvokeOutcome =
-  | { readonly _tag: "Answered"; readonly value: unknown }
+  | { readonly _tag: "Answered"; readonly value: unknown; readonly state: PluginStatePosition }
   | { readonly _tag: "Failed"; readonly failure: unknown };
 
 /** How one `plugin.invoke` reaches the server. Injected in tests (no atom runtime needed). */
@@ -146,7 +154,11 @@ const invokeCommand = createEnvironmentCommand(connectionAtomRuntime, {
     Effect.gen(function* () {
       const exit = yield* Effect.exit(request(PLUGIN_METHODS.pluginInvoke, input));
       return Exit.isSuccess(exit)
-        ? ({ _tag: "Answered", value: exit.value as unknown } satisfies PluginInvokeOutcome)
+        ? ({
+            _tag: "Answered",
+            value: exit.value.value,
+            state: { boot: exit.value.boot, seq: exit.value.seq },
+          } satisfies PluginInvokeOutcome)
         : ({ _tag: "Failed", failure: failureOfCause(exit.cause) } satisfies PluginInvokeOutcome);
     }),
 });
@@ -268,6 +280,8 @@ export function makePluginRpcClient(options?: {
   readonly awaitPrimaryEnvironment?: () => Promise<EnvironmentId>;
   readonly awaitLiveSession?: (environmentId: EnvironmentId) => Promise<void>;
   readonly transport?: PluginInvokeTransport;
+  /** S104: what a COMMAND awaits after its answer (`state.ts` `awaitPluginState`). */
+  readonly awaitState?: (position: PluginStatePosition) => Promise<void>;
 }): RpcPort {
   const readEnvironmentId =
     options?.readEnvironmentId ?? (() => appAtomRegistry.get(primaryEnvironmentIdAtom));
@@ -275,6 +289,7 @@ export function makePluginRpcClient(options?: {
   const awaitEnvironment = options?.awaitPrimaryEnvironment ?? awaitPrimaryEnvironment;
   const awaitLiveSession = options?.awaitLiveSession ?? defaultAwaitLiveSession;
   const transport = options?.transport ?? defaultTransport;
+  const awaitState = options?.awaitState ?? awaitPluginState;
 
   /** The environment a call may go to RIGHT NOW, or `null` when it has to wait. */
   const liveEnvironment = (): EnvironmentId | null => {
@@ -304,7 +319,7 @@ export function makePluginRpcClient(options?: {
     }
   };
 
-  return async (pluginId, method, payload) => {
+  return async (pluginId, method, payload, kind = "command") => {
     if (!PLUGIN_ID_PATTERN.test(pluginId)) {
       // Cannot happen through `makePluginInvoke` (the id comes from the host's own manifest
       // list), which is exactly why it must not be an unchecked cast: a `PluginId` that was
@@ -324,16 +339,27 @@ export function makePluginRpcClient(options?: {
         environmentId: liveEnvironment() ?? (await park(pluginId)),
         input,
       });
-      if (outcome._tag === "Answered") return outcome.value;
-      throw outcome.failure;
+      if (outcome._tag !== "Answered") throw outcome.failure;
+      // S104 (V2-73): a command resolves once `ctx.state` holds what was published before its
+      // answer. The wait ends on a frame, a snapshot or the stream's end (`state.ts`), never rejects.
+      if (kind === "command") await awaitState(outcome.state);
+      return outcome.value;
     } catch (error) {
       throw asPluginRpcError(error);
     }
   };
 }
 
-/** What one plugin's `ctx.invoke` calls. */
-export type RpcPort = (pluginId: string, method: string, payload?: unknown) => Promise<unknown>;
+/**
+ * What one plugin's `ctx.invoke` calls. A `"command"` (the default) resolves once the tab's state
+ * has caught up with its answer; a `"read"` — `ctx.query`'s rounds — resolves at the answer.
+ */
+export type RpcPort = (
+  pluginId: string,
+  method: string,
+  payload?: unknown,
+  kind?: "command" | "read",
+) => Promise<unknown>;
 
 /**
  * The one client, built on first use.
@@ -364,4 +390,13 @@ export function setPluginRpcPortForTests(next: RpcPort | null): void {
 export function makePluginInvoke(pluginId: string) {
   return <Result = unknown>(method: string, payload?: unknown): Promise<Result> =>
     activePort()(pluginId, method, payload) as Promise<Result>;
+}
+
+/**
+ * The same call as a READ (S104): `ctx.query`'s rounds. Its result IS its answer, so it is not held
+ * for the tab's state (V2-59/60 unchanged).
+ */
+export function makePluginRead(pluginId: string) {
+  return (method: string, payload?: unknown): Promise<unknown> =>
+    activePort()(pluginId, method, payload, "read");
 }

@@ -601,7 +601,7 @@ const makeWsRpcLayer = (
         );
       // ru-code S53 (V2-54): the same fold for the ONE streaming plugin RPC. `instrumentRpcStream`
       // + `authorizeStream`, and the scope rejection becomes `PluginRpcError({ unauthorized })`
-      // because that is the only error `plugin.notifications` declares — a tab without the read
+      // because that is the only error `plugin.state` declares — a tab without the read
       // scope must see a plugin error, not a transport-shaped one it cannot switch on.
       const observePluginRpcStream: ObservePluginRpcStream = (method, stream) =>
         instrumentRpcStream(

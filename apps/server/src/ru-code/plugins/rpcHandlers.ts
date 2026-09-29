@@ -8,9 +8,9 @@
 // methods at runtime from `host.registerRpc`, so the dispatch has to be generic
 // (see the contract's module doc for what still constrains the wire).
 //
-// S53 (V2-54) added the one STREAM: `plugin.notifications`, the server→web push, which is generic
-// for the same reason and for one more — a tab hosts every plugin, so it subscribes once and the
-// frame says which plugin a name belongs to.
+// S69 (V2-58) added the one STREAM: `plugin.state`, the server→web push, which is generic for the
+// same reason and for one more — a tab hosts every plugin, so it subscribes once and the frame says
+// which plugin a value belongs to.
 
 import { PLUGIN_METHODS } from "@t3tools/contracts";
 import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
@@ -48,16 +48,10 @@ export const PLUGIN_RPC_SCOPES = {
   // boot runs, which is the most operate-shaped thing this surface has.
   [PLUGIN_METHODS.pluginSettings]: AuthOrchestrationReadScope,
   [PLUGIN_METHODS.pluginSetEnabled]: AuthOrchestrationOperateScope,
-  // ru-code S53 (V2-54): a READ. The stream carries a name a plugin chose and the id it belongs to
-  // — no plugin state, no plugin payload — and subscribing runs no plugin code at all: the handler
-  // registers a queue in the host and nothing else. The OPERATE door stays `plugin.invoke`, which
-  // is where a notification sends the tab next.
-  [PLUGIN_METHODS.pluginNotifications]: AuthOrchestrationReadScope,
-  // ru-code S69 (V2-58): the state seam's two transports, both READS, for the reason above: the
-  // stream carries values a plugin already published, the read answers one of them, and neither
-  // runs plugin code. The OPERATE door is still only `plugin.invoke`.
+  // ru-code S69 (V2-58): the state seam's stream, a READ. It carries values a plugin already
+  // published, and subscribing runs no plugin code at all: the handler registers a queue in the host
+  // and nothing else. The OPERATE door is still only `plugin.invoke`.
   [PLUGIN_METHODS.pluginState]: AuthOrchestrationReadScope,
-  [PLUGIN_METHODS.pluginStateRead]: AuthOrchestrationReadScope,
 } as const;
 
 /**
@@ -74,7 +68,7 @@ export type ObservePluginRpc = <A, R>(
 ) => Effect.Effect<A, PluginRpcError, R>;
 
 /**
- * The same wrapper for the ONE streaming plugin RPC (S53, V2-54).
+ * The same wrapper for the ONE streaming plugin RPC (`plugin.state`, V2-58).
  *
  * Separate rather than generic for the reason `ws.ts` states about the MCP pair: the auth fold is
  * `catchTag` on a CONCRETE error type, and a helper that took both shapes would widen the handler's
@@ -199,6 +193,10 @@ export function buildPluginRpcHandlers(deps: {
     // Every failure mode already comes back typed from the host: unknown-plugin,
     // unknown-method, plugin-disabled, plugin-failed. Nothing is added here — a
     // second layer of interpretation would only be able to guess.
+    //
+    // S104 (V2-73): the answer is the handler's value AND the state hub's position read when the
+    // handler returned — so it is at or past every value the handler published. The web host
+    // resolves the plugin's `ctx.invoke` only once its tab has reached that position.
     [PLUGIN_METHODS.pluginInvoke]: (input: {
       readonly pluginId: string;
       readonly method: string;
@@ -214,7 +212,13 @@ export function buildPluginRpcHandlers(deps: {
           plugin: input.pluginId,
           call: input.method,
         },
-        pluginHost.invoke(input.pluginId, input.method, input.payload),
+        pluginHost
+          .invoke(input.pluginId, input.method, input.payload)
+          .pipe(
+            Effect.flatMap((value) =>
+              Effect.map(pluginHost.statePosition, (position) => ({ value, ...position })),
+            ),
+          ),
       ),
     // ru-code S38 (V2-43): the Settings ▸ Plugins section — the rows, and the one switch.
     [PLUGIN_METHODS.pluginSettings]: (_input: object) =>
@@ -227,24 +231,12 @@ export function buildPluginRpcHandlers(deps: {
         { method: PLUGIN_METHODS.pluginSetEnabled, plugin: input.pluginId },
         pluginHost.setEnabled(input.pluginId, input.enabled),
       ),
-    // ru-code S53 (V2-54): the server→web push. ONE stream per tab, every plugin's names on it;
-    // the host registers this tab's sink when the stream is pulled and removes it when the request
-    // ends. Nothing is traced per notification — the volume is a plugin's business and the two
-    // interesting facts (a refused name, a cap) are logged once by the hub itself.
-    [PLUGIN_METHODS.pluginNotifications]: (_input: object) =>
-      observePluginRpcStream(PLUGIN_METHODS.pluginNotifications, pluginHost.notifications),
-    // ru-code S69 (V2-58): the state seam. The STREAM transport — one stream per tab, the snapshot
-    // of every current value first, then each change — and the NOTIFY transport's read of one
-    // stored value. Neither is traced per frame, for the reason `plugin.notifications` is not.
+    // ru-code S69 (V2-58): the server→web push. ONE stream per tab, every plugin's values on it —
+    // the snapshot of every current value first, then each change; the host registers this tab's
+    // sink when the stream is pulled and removes it when the request ends. Nothing is traced per
+    // frame — the volume is a plugin's business and the interesting facts (a refused name, a cap)
+    // are logged once by the hub itself.
     [PLUGIN_METHODS.pluginState]: (_input: object) =>
       observePluginRpcStream(PLUGIN_METHODS.pluginState, pluginHost.stateFrames),
-    [PLUGIN_METHODS.pluginStateRead]: (input: {
-      readonly pluginId: string;
-      readonly name: string;
-    }) =>
-      observePluginRpc(
-        { method: PLUGIN_METHODS.pluginStateRead, plugin: input.pluginId },
-        pluginHost.readState(input.pluginId, input.name),
-      ),
   };
 }

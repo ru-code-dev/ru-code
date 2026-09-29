@@ -41,7 +41,13 @@ const gate = () => {
   return { promise, release, fail };
 };
 
-const answered = (value: unknown): PluginInvokeOutcome => ({ _tag: "Answered", value });
+// S104: an answer carries the server's state position. No `plugin.state` stream is open in this
+// file, so a command resolves at its answer (`state.ts` `awaitPluginState`, path row 7).
+const answered = (value: unknown): PluginInvokeOutcome => ({
+  _tag: "Answered",
+  value,
+  state: { boot: "test", seq: 0 },
+});
 const failed = (failure: unknown): PluginInvokeOutcome => ({ _tag: "Failed", failure });
 
 const reasonOf = async (promise: Promise<unknown>): Promise<string> => {

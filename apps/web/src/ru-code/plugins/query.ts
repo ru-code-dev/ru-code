@@ -5,7 +5,8 @@
 // a failure retried on the next ready edge or `refresh()` only, disposal on the last unsubscribe,
 // the per-plugin live cap — is `@smart-tools/plugin-sdk/state` `makeQueryHost`, written once and run
 // by this host, the playground and the fakes alike. What this file supplies is what only the app
-// has: this plugin's `invoke` (which parks while the socket is down, V2-35), `ctx.connection`'s
+// has: this plugin's `invoke` as a READ (which parks while the socket is down, V2-35, and is not
+// held for the tab's state the way a command is, S104), `ctx.connection`'s
 // own signal, and the V2-42 problem channel.
 
 import type { QuerySignal, Signal, PluginConnection, WebCtx } from "@smart-tools/plugin-sdk/host";
@@ -14,7 +15,7 @@ import { L } from "@ru-code/localization";
 
 import { pluginConnectionSignal } from "./connectionAtom";
 import { reportPluginProblem } from "./problems";
-import { makePluginInvoke } from "./rpcPort";
+import { makePluginRead } from "./rpcPort";
 
 export type PluginQueryDeps = {
   readonly invoke: (method: string, payload: unknown) => Promise<unknown>;
@@ -25,7 +26,7 @@ export type PluginQueryDeps = {
 export function makePluginQuery(
   pluginId: string,
   deps: PluginQueryDeps = {
-    invoke: makePluginInvoke(pluginId),
+    invoke: makePluginRead(pluginId),
     connection: pluginConnectionSignal(),
   },
 ): { readonly query: WebCtx["query"]; readonly host: QueryHost } {

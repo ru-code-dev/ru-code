@@ -200,8 +200,8 @@ export function makeWebCtx(plugin: { readonly id: string; readonly name: string 
     },
     // V2-58 — the plugin's LIVE values, one `Signal` per name, set by the host only when the
     // server's value differs from the one held. Bound to THIS plugin's id, like everything else
-    // here; the transport (`caps.ts` `PLUGIN_STATE_TRANSPORT`) is the host's business, not the
-    // plugin's. A refused name is an inert signal and one report, never a throw (`state.ts`).
+    // here; the transport (`plugin.state`) is the host's business, not the plugin's. A refused name
+    // is an inert signal and one report, never a throw (`state.ts`).
     state: makePluginState(pluginId),
     // V2-59 — a READ the host keeps current: re-run on every reconnect, one in flight, an equal
     // answer a no-op. The rule is the SDK's `makeQueryHost`, written once; `query.ts` only wires

@@ -225,10 +225,13 @@ export { CLI_RELOAD_METHODS };
 import { pluginRpcs, PLUGIN_METHODS } from "./ru-code/plugins/index.ts";
 // ru-code S38 (V2-43): the Settings ▸ Plugins row shape, so both halves of the app read one type.
 export { PluginSettingsRow, PluginSettingsList } from "./ru-code/plugins/index.ts";
-// ru-code S53 (V2-54): the server→web notification frame — the web host routes on it.
-export { PluginNotification } from "./ru-code/plugins/index.ts";
-// ru-code: plugins — S69 (V2-58): the state seam's frame — the web host applies it.
-export { PluginStateFrame, PluginStateValue } from "./ru-code/plugins/index.ts";
+// ru-code: plugins — S69 (V2-58): the state seam's frame — the web host applies it; S104 (V2-73):
+// the hub's position an invoke answer and a snapshot carry.
+export {
+  PluginStateFrame,
+  PluginStatePosition,
+  PluginStateValue,
+} from "./ru-code/plugins/index.ts";
 
 // `pluginRpcs` is exported too (the sibling packages export theirs from their own
 // entry; this zone lives inside contracts, so the barrel is the equivalent door).

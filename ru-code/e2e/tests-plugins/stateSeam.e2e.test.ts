@@ -1,23 +1,20 @@
-// ru-code S69 (V2-58): the state seam on the REAL wire, for whichever transport this build carries
-// (`apps/web/src/ru-code/plugins/caps.ts` `PLUGIN_STATE_TRANSPORT` — the owner compares the two by
-// flipping it, rebuilding and running this suite once per transport).
+// ru-code S69 (V2-58): the state seam on the REAL wire — `plugin.state`, its one transport since
+// V2-75 removed the notify transport.
 //
 // WHAT IT MEASURES, and why a spec of its own: `pluginWire.ts` records `plugin.invoke` only, and the
-// state seam's frames are two OTHER RPCs — `plugin.state` (the stream transport: a snapshot, then
-// one frame per change) or `plugin.notifications` + `plugin.state.read` (the notify transport: a
-// name, then a read). This recorder watches exactly those, per page, with their bytes and times:
+// state seam's frames are another RPC — `plugin.state` (a snapshot, then one frame per change). This
+// recorder watches exactly that, per page, with its bytes and times:
 //
-//   1. THE BOOT FLOOR, re-stated in these frames: one subscription for the whole page on either
-//      transport; on the stream transport ONE frame, the snapshot, and no read; on the notify
-//      transport EXACTLY ONE read per name a plugin holds.
+//   1. THE BOOT FLOOR, re-stated in these frames: one subscription for the whole page, ONE frame
+//      (the snapshot), and nothing after it on a clean boot.
 //
 // RUN IT ON ITS OWN SERVER BOOT (its own `playwright test` invocation, as the S69 runbook does):
 // the floor is a clean boot's. Inside a batch, an earlier spec's cleanup is a real change the page's
 // boot reconcile walks in — measured in S69: `catalogs.e2e.test.ts`'s `afterAll` deletes its seeded
-// tree, the next page's reconcile publishes the emptier catalogs, and each transport pays that
-// change (a value frame; a name and a read), which is correct and is not the boot's floor.
+// tree, the next page's reconcile publishes the emptier catalogs, and the page pays that
+// change (a value frame), which is correct and is not the boot's floor.
 //   2. ONE MUTATION, across two tabs: tab A walks a new skill in with the panel's Refresh; tab B
-//      must receive it with no reload. PINNED: the exact frames each tab took for it, per transport
+//      must receive it with no reload. PINNED: the exact frames each tab took for it
 //      (S73 Q4). RECORDED only: the LATENCY from A sending its `skill.rescan` to B holding the value —
 //      both clocks are this browser's.
 //
@@ -34,7 +31,7 @@ import {
 } from "../harness/pluginsBoot.ts";
 import { saveEvidenceJson } from "../harness/pluginsEvidence.ts";
 
-const STATE_TAGS = ["plugin.state", "plugin.notifications", "plugin.state.read"] as const;
+const STATE_TAGS = ["plugin.state"] as const;
 
 interface StateRequest {
   readonly at: number;
@@ -80,7 +77,7 @@ const hook = (socket) => {
 WS.prototype.send = function (data) {
   hook(this);
   const text = typeof data === "string" ? data : "";
-  const tag = /"tag":"(plugin\\.state\\.read|plugin\\.state|plugin\\.notifications)"/.exec(text);
+  const tag = /"tag":"(plugin\\.state)"/.exec(text);
   if (tag !== null) {
     const id = /"id":"?(\\d+)/.exec(text);
     const requestId = id === null ? "" : id[1];
@@ -103,14 +100,6 @@ const stateWire = (page: Page): Promise<StateWire> =>
       }) as StateWire,
   );
 
-/** Which transport the page is on — the only subscription it opened says so. */
-const transportOf = (wire: StateWire): "stream" | "notify" | "none" =>
-  wire.requests.some((request) => request.tag === "plugin.state")
-    ? "stream"
-    : wire.requests.some((request) => request.tag === "plugin.notifications")
-      ? "notify"
-      : "none";
-
 /** Wait until the state wire goes quiet: no new request or answer for `quietPolls` polls. */
 const settle = async (page: Page, quietPolls = 4): Promise<StateWire> => {
   let last = -1;
@@ -131,28 +120,8 @@ const settle = async (page: Page, quietPolls = 4): Promise<StateWire> => {
   return wire;
 };
 
-/** `(pluginId, name)` of one `plugin.state.read` request. */
-const readKey = (request: StateRequest): string => {
-  const plugin = /"pluginId":"([^"]+)"/.exec(request.text)?.[1] ?? "";
-  const name = /"name":"([^"]+)"/.exec(request.text)?.[1] ?? "";
-  return `${plugin}:${name}`;
-};
-
 const PROBE_SKILL = { name: "e2e-state-probe", label: "E2e State Probe" };
 
-/**
- * The names a plugin HOLDS at a clean boot of the chat page, as `(pluginId, name)` — what the notify
- * transport must read, each exactly once (S73 Q4). Measured on this spec's own server boot:
- * `S69/evidence-notify/69-state-boot.json` and `S70/83-notify-state-boot.json` both read exactly these
- * four. `auto-coder:run.output` is published too (the stream snapshot carries it) but no boot surface
- * asks for it — its tab is not open — so the notify transport has no cell to fill for it.
- */
-const BOOT_HELD_NAMES = [
-  "catalogs:agent.catalog",
-  "catalogs:command.catalog",
-  "catalogs:skill.catalog",
-  "pixso:scanState",
-] as const;
 const SKILLS_LABEL = /^(Менеджер Навыков|Skill manager)$/;
 const SKILLS_REFRESH = /^(Обновить навыки|Refresh skills)$/;
 const CATALOG_TAB = /^(Каталог|Catalog)$/;
@@ -174,52 +143,31 @@ test.describe("plugins — the state seam on the wire (V2-58)", () => {
     NodeFS.rmSync(NodePath.dirname(probeSkillFile()), { recursive: true, force: true });
   });
 
-  test("the boot holds ONE state subscription, and the notify transport reads each name ONCE", async ({
+  test("the boot holds ONE state subscription, and its ONE frame is the snapshot", async ({
     page,
   }) => {
     test.setTimeout(180_000);
     await page.addInitScript(STATE_WIRE_INIT);
     await openChat(page);
     const wire = await settle(page);
-    const transport = transportOf(wire);
-    const reads = wire.requests.filter((request) => request.tag === "plugin.state.read");
-    const subscriptions = wire.requests.filter((request) => request.tag !== "plugin.state.read");
     const answerBytes = wire.answers.reduce((sum, answer) => sum + answer.bytes, 0);
     saveEvidenceJson("69-state-boot", {
       spec: "stateSeam.e2e.test.ts",
-      transport,
       requests: wire.requests.map((request) => ({ tag: request.tag, at: request.at })),
-      reads: reads.map(readKey),
-      notifications: wire.answers
-        .filter((answer) => answer.kind === "Chunk")
-        .map((answer) => answer.text.match(/"name":"[^"]+"/g) ?? []),
       answers: wire.answers.map((answer) => ({ kind: answer.kind, bytes: answer.bytes })),
       answerBytes,
     });
 
-    expect(transport, "the page opened a state subscription").not.toBe("none");
-    // ONE subscription for the whole page, whatever the transport and however many plugins.
-    expect(subscriptions, JSON.stringify(subscriptions.map((request) => request.tag))).toHaveLength(
+    // ONE subscription for the whole page, however many plugins.
+    expect(wire.requests, JSON.stringify(wire.requests.map((request) => request.tag))).toHaveLength(
       1,
     );
-    if (transport === "stream") {
-      expect(reads, "the stream transport never reads").toHaveLength(0);
-      // ONE frame: the SNAPSHOT of every current value, and nothing after it on a clean boot.
-      const chunks = wire.answers.filter((answer) => answer.kind === "Chunk");
-      expect(chunks, JSON.stringify(chunks.map((chunk) => chunk.bytes))).toHaveLength(1);
-      expect(chunks[0]?.text ?? "", "the stream's first frame is the snapshot").toContain(
-        '"snapshot"',
-      );
-    } else {
-      // EXACTLY one read per name a plugin holds at boot — no name missed, none read twice, none extra.
-      const keys = reads.map(readKey);
-      expect([...keys].sort(), `reads=${JSON.stringify(keys)}`).toEqual([...BOOT_HELD_NAMES]);
-      // Each read is answered once, as its value (Exit); a clean boot carries no notification (Chunk).
-      expect(
-        wire.answers.map((answer) => answer.kind),
-        JSON.stringify(wire.answers.map((answer) => answer.kind)),
-      ).toEqual(BOOT_HELD_NAMES.map(() => "Exit"));
-    }
+    // ONE frame: the SNAPSHOT of every current value, and nothing after it on a clean boot.
+    const chunks = wire.answers.filter((answer) => answer.kind === "Chunk");
+    expect(chunks, JSON.stringify(chunks.map((chunk) => chunk.bytes))).toHaveLength(1);
+    expect(chunks[0]?.text ?? "", "the stream's first frame is the snapshot").toContain(
+      '"snapshot"',
+    );
   });
 
   test("a change in ONE tab reaches another: its frames and its latency", async ({ page }) => {
@@ -253,7 +201,7 @@ test.describe("plugins — the state seam on the wire (V2-58)", () => {
       await expect(refresh, "the panel's refresh control").toBeVisible({ timeout: 20_000 });
       await refresh.dispatchEvent("click");
 
-      // TAB B holds the value — on the stream as a frame, on the notify transport as a read's answer.
+      // TAB B holds the value, as a frame.
       await expect
         .poll(
           async () =>
@@ -281,21 +229,15 @@ test.describe("plugins — the state seam on the wire (V2-58)", () => {
       const mutation = { tabA: delta(beforeA, afterA), tabB: delta(beforeB, afterB) };
       saveEvidenceJson("69-state-mutation", {
         spec: "stateSeam.e2e.test.ts",
-        transport: transportOf(afterB),
         latencyMs,
         mutation,
       });
-      // The latency is not a budget — a MEASUREMENT for the owner's comparison, recorded above. The
-      // FRAMES are pinned, per tab, per transport (S73 Q4; measured identical in S69 and S70 —
-      // `S69/evidence-*/69-state-mutation.json`, `S70/71-*.json`, `S70/84-*.json`): ONE change, so
-      // on the stream ONE value frame and no request; on the notify transport ONE name (a Chunk on
-      // the notifications stream), ONE read for it, and that read's ONE answer (Exit). Tab A, which
-      // made the change, pays exactly what tab B pays: the echo of its own rescan is no extra frame.
+      // The latency is not a budget — a MEASUREMENT, recorded above. The FRAMES are pinned, per tab
+      // (S73 Q4; measured identical in S69 and S70 — `S69/evidence-*/69-state-mutation.json`,
+      // `S70/71-*.json`): ONE change, so ONE value frame and no request. Tab A, which made the
+      // change, pays exactly what tab B pays: the echo of its own rescan is no extra frame.
       expect(latencyMs).toBeGreaterThanOrEqual(0);
-      const expected =
-        transportOf(afterB) === "stream"
-          ? { requests: [], answers: ["Chunk"] }
-          : { requests: ["plugin.state.read"], answers: ["Chunk", "Exit"] };
+      const expected = { requests: [], answers: ["Chunk"] };
       for (const [tab, frames] of Object.entries(mutation)) {
         expect(
           { requests: frames.requests, answers: frames.answers.map((answer) => answer.kind) },
@@ -348,8 +290,6 @@ test.describe("plugins — the state seam on a COLD boot (V2-58)", () => {
       "the fresh browser reaches the authenticated app shell (0 projects)",
     ).toBeVisible({ timeout: 60_000 });
     const wire = await settle(page);
-    const transport = transportOf(wire);
-    const subscriptions = wire.requests.filter((request) => request.tag !== "plugin.state.read");
     const chunks = wire.answers.filter((answer) => answer.kind === "Chunk");
     const snapshot = chunks[0]?.text ?? "";
     /** How many times a catalog's value reached the page: in the snapshot, then as `value` frames. */
@@ -370,23 +310,16 @@ test.describe("plugins — the state seam on a COLD boot (V2-58)", () => {
     );
     saveEvidenceJson("71-state-cold-boot", {
       spec: "stateSeam.e2e.test.ts",
-      transport,
       requests: wire.requests.map((request) => ({ tag: request.tag, at: request.at })),
       chunks: chunks.map((chunk) => chunk.bytes),
       deliveries,
     });
 
-    expect(subscriptions, JSON.stringify(subscriptions.map((request) => request.tag))).toHaveLength(
+    expect(wire.requests, JSON.stringify(wire.requests.map((request) => request.tag))).toHaveLength(
       1,
     );
-    if (transport === "stream") {
-      expect(snapshot, "the stream's first frame is the snapshot").toContain('"snapshot"');
-      expect(
-        wire.requests.filter((request) => request.tag === "plugin.state.read"),
-        "the stream transport never reads",
-      ).toHaveLength(0);
-      // Each catalog: exactly ONE delivery — the value its boot walk published.
-      expect(deliveries).toEqual(Object.fromEntries(CATALOG_NAMES.map((name) => [name, 1])));
-    }
+    expect(snapshot, "the stream's first frame is the snapshot").toContain('"snapshot"');
+    // Each catalog: exactly ONE delivery — the value its boot walk published.
+    expect(deliveries).toEqual(Object.fromEntries(CATALOG_NAMES.map((name) => [name, 1])));
   });
 });

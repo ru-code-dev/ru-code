@@ -42,7 +42,7 @@ import { connectionAtomRuntime } from "~/connection/runtime";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
-import { MAX_PARKED_INVOKES_PER_PLUGIN } from "./caps";
+import { MAX_PARKED_INVOKES_PER_PLUGIN } from "@smart-tools/plugin-sdk/host-rules";
 import { pluginConnectionAtom } from "./connectionAtom";
 import { reportPluginProblem } from "./problems";
 import { awaitPluginState } from "./state";
@@ -230,7 +230,7 @@ const defaultAwaitLiveSession = async (environmentId: EnvironmentId): Promise<vo
 /** Is the primary environment's transport live RIGHT NOW — the same value `ctx.connection` reads. */
 const defaultReadConnection = (): PluginConnection => appAtomRegistry.get(pluginConnectionAtom);
 
-/** How many calls each plugin holds parked right now (S28 cap, `caps.ts`). */
+/** How many calls each plugin holds parked right now (S28 cap, `MAX_PARKED_INVOKES_PER_PLUGIN`). */
 const parkedCounts = new Map<string, number>();
 
 /** Test seam. */

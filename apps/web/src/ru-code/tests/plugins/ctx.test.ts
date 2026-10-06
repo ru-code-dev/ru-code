@@ -3,7 +3,9 @@
 // it can get wrong with it is here.
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { folderPickStart, invalidToastCall, makeWebCtx, pluginAssetUrl } from "../../plugins/ctx";
+import { invalidToastCall, pluginAssetUrl } from "@smart-tools/plugin-sdk/host-rules";
+
+import { folderPickStart, makeWebCtx } from "../../plugins/ctx";
 import {
   readFolderPickRequest,
   registerFolderPickerHost,
@@ -63,21 +65,27 @@ describe("invalidToastCall", () => {
 
   const notAString: unknown = { toString: (): string => "x" };
 
+  // SUPERSEDED PIN (S111 #7, #8): this table also named `message` for `""` and for 201 chars, and
+  // `detail` for 1001 chars. Neither guarded anything: the toast draws its title and description
+  // as React children in a stack that wraps and scrolls; what guards the MEASURED crash (v1: a
+  // `{ toString }` object replaced the app with React's crash card) is the "is a string" clause.
   it.each<readonly [string, unknown, unknown, unknown]>([
     ["kind", "shout", "Saved", undefined],
-    ["message", "info", "", undefined],
     ["message", "info", notAString, undefined],
-    ["message", "info", "x".repeat(201), undefined],
-    ["detail", "info", "Saved", "y".repeat(1001)],
+    ["message", "info", undefined, undefined],
     ["detail", "info", "Saved", 42],
+    ["detail", "info", "Saved", notAString],
   ])("names %s as the unusable field", (field, kind, message, detail) => {
     expect(invalidToastCall(kind, message, detail)).toBe(field);
   });
 
-  it("refuses invisible characters rather than sanitising them", () => {
-    // A bidi override makes a label display text that is not the text it contains; substituting
-    // would show the user something the plugin did not ask for.
-    expect(invalidToastCall("info", "Saved\u202E", undefined)).toBe("message");
+  // SUPERSEDED PIN (S111 #7, #8): this case refused a bidi override in the message. The toast is
+  // the plugin's own product text, drawn as given; a control character is not a crash.
+  it("S111 #7, #8: takes any STRING message and detail — empty, 10,000 chars, multi-line, control or bidi", () => {
+    for (const text of ["", "x".repeat(10_000), "line one\nline two", "Saved\u202E", "a\u0007b"]) {
+      expect(invalidToastCall("info", text, undefined)).toBeNull();
+      expect(invalidToastCall("error", "Saved", text)).toBeNull();
+    }
   });
 });
 
@@ -145,6 +153,14 @@ describe("makeWebCtx", () => {
     it("drops a control character and a path over the wire's own cap", () => {
       expect(folderPickStart({ start: "/tmp/\u0007bell" })).toBeUndefined();
       expect(folderPickStart({ start: `/${"a".repeat(600)}` })).toBeUndefined();
+    });
+
+    // S111 R2-F4: the cap IS the app's browse wire (`FilesystemBrowseInput`, 512) — read from that
+    // contract, so the hint and the browse it opens can never disagree.
+    it("keeps a 512-char path and opens home for a 513-char one — the browse contract's own cap", () => {
+      const at = `/${"a".repeat(511)}`;
+      expect(folderPickStart({ start: at })).toBe(at);
+      expect(folderPickStart({ start: `${at}b` })).toBeUndefined();
     });
   });
 

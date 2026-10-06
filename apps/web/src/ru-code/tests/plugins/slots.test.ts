@@ -52,6 +52,23 @@ describe("closePluginPanel", () => {
     expect(openPanel()).toBe("plugin:demo:side");
   });
 
+  // S111 #1: ONE rule for a panel id. The seam keeps `2fa` (`PLUGIN_SLUG_PATTERN` admits a leading
+  // digit, S110 R03); the global slot's own second pattern did not, so the panel was dropped from
+  // the slot with no report (R04). The slot now composes the id from the same two rules the seam
+  // and the manifest apply, so it cannot refuse what they accepted.
+  it("S111 #1: a panel id that starts with a digit is a legal global panel, and its owner can close it", () => {
+    expect(pluginPanelId("demo", "2fa")).toBe("plugin:demo:2fa");
+    open("2fa");
+    closePluginPanel("demo", "2fa");
+    expect(openPanel()).toBe(null);
+  });
+
+  it("S111 #1: the slot still refuses what the seam refuses", () => {
+    for (const bad of ["Notes", "-x", "a/b", "a:b", "x".repeat(65)]) {
+      expect(pluginPanelId("demo", bad)).toBe(null);
+    }
+  });
+
   it("cannot close a BUILT-IN panel", () => {
     useRightGlobalPanelStore.setState({ open: "mcp" });
     closePluginPanel("demo", "mcp");

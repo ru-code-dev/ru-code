@@ -3,7 +3,8 @@
 // THE DEFECT THIS FILE EXISTS FOR. `resolveQwenSubmitPrompt` aborts a message that opens with an
 // unknown `/command` (qwen answers one over ACP with a raw -32603), and the allowlist it takes is
 // derived from the composer seam: `ChatView` calls `useQwenPluginCommandSlugs()` →
-// `usePluginComposerRows("/", "")` → `composer.items("/", "", ctx)`. Before V2-25 that runner's
+// `useContributedComposerRows("/", "")` (EVERY contributed row, drawn in the menu or not — S111 #6)
+// → `composer.items("/", "", ctx)`. Before V2-25 that runner's
 // effect was keyed on `(plugins, trigger, query)` alone — three inputs the HOST owns, none of which
 // moves when a plugin's own data does. The catalogs plugin answers out of an atom it fills over its
 // own transport, so the answer the guard took at chat mount was frozen there: a command the user
@@ -48,6 +49,13 @@ import { saveEvidenceJson, saveEvidenceScreenshot } from "../harness/pluginsEvid
 const LIVE_COMMAND = "e2elive";
 /** Seeded before any page load here, so a page's boot resync is what brings it in. */
 const BOOT_COMMAND = "e2eboot";
+/** S111 #6: more commands than the menu draws for one plugin (`MAX_COMPOSER_ROWS_PER_PLUGIN`, 100). */
+const MANY_COMMANDS = Array.from(
+  { length: 101 },
+  (_, index) => `e2emany-${String(index).padStart(3, "0")}`,
+);
+/** S111 #4: a 70-character command — legal for the CLI (≤ 120), over the old 64-char label rule. */
+const LONG_COMMAND = `e2elong-${"x".repeat(62)}`;
 
 /** The Commands panel — `aria-label` is the panel label (`SidebarChrome.tsx`). */
 const COMMANDS_LABEL = /^(Менеджер Команд|Command manager)$/;
@@ -179,7 +187,7 @@ test.describe("plugins — the qwen submit guard sees a plugin's `/` commands", 
   });
 
   test.afterAll(() => {
-    for (const name of [LIVE_COMMAND, BOOT_COMMAND]) {
+    for (const name of [LIVE_COMMAND, BOOT_COMMAND, ...MANY_COMMANDS, LONG_COMMAND]) {
       NodeFS.rmSync(commandFile(name), { force: true });
     }
   });
@@ -270,6 +278,66 @@ test.describe("plugins — the qwen submit guard sees a plugin's `/` commands", 
       delayMs,
       connectedAfterMs,
       sent: text,
+      prompts: promptsSeen().slice(-4),
+    });
+  });
+
+  // S111 #6, shape (b), and #4 — what the guard reads is not what the menu draws. The menu draws at
+  // most `MAX_COMPOSER_ROWS_PER_PLUGIN` (100) rows of one plugin; the submit allowlist takes EVERY
+  // valid `/` row (`qwenCommandSlugs.ts` → `useContributedComposerRows`). So with 102 commands on
+  // disk, (a) the `/` menu draws at most 100 catalogs rows, and (b) a command the menu did NOT draw,
+  // and a 70-character one, typed by hand with the menu never opened, reach the CLI. Before S111
+  // the cap SLICED the answer and the old 64-char label rule dropped the long row, so both were
+  // refused at send time.
+  test("S111 #6: past the 100 the menu draws, a typed command still runs — and a 70-char one", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    for (const name of [...MANY_COMMANDS, LONG_COMMAND]) seedCommand(name);
+    await openChat(page);
+    await waitForConnection(page);
+    await dismissToasts(page);
+    await refreshCommandsPanel(page, LONG_COMMAND);
+    await dismissToasts(page);
+
+    // (a) the menu, empty query: at most 100 catalogs rows, and the seeded ones are among them.
+    await clearComposer(page);
+    await focusComposer(page);
+    await page.keyboard.type("/", { delay: 10 });
+    const catalogRows = page.locator('[data-composer-item-id^="plugin:catalogs:/:"]');
+    await expect
+      .poll(() => catalogRows.count(), {
+        timeout: 60_000,
+        message: "the `/` menu lists catalogs rows",
+      })
+      .toBeGreaterThan(50);
+    const drawn = await catalogRows.allTextContents();
+    expect(drawn.length, "the menu draws at most 100 rows of one plugin").toBeLessThanOrEqual(100);
+    const drawnNames = new Set(
+      drawn.flatMap((text) =>
+        [...text.matchAll(/\/(e2e[a-z]+-[a-z0-9-]+)/g)].map((match) => match[1]),
+      ),
+    );
+    const undrawn = [...MANY_COMMANDS, LONG_COMMAND].filter((name) => !drawnNames.has(name));
+    expect(
+      undrawn.length,
+      "102 seeded commands cannot all be among 100 drawn rows",
+    ).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+
+    // (b) typed by hand, trailing space so no menu opens: the guard's decision and nothing else.
+    for (const name of [undrawn[0] ?? "", LONG_COMMAND]) {
+      const baseline = promptsSeen();
+      await typeAndEnter(page, `/${name} `);
+      await expectDelivered(page, `/${name}`, baseline);
+    }
+
+    saveEvidenceJson("slash-guard-past-the-cap", {
+      spec: "slashGuard.e2e.test.ts",
+      claim: "S111 #6 shape (b): the allowlist takes every valid `/` row; the menu draws ≤ 100",
+      drawnCatalogRows: drawn.length,
+      typedUndrawn: undrawn[0],
+      typedLong: LONG_COMMAND,
       prompts: promptsSeen().slice(-4),
     });
   });

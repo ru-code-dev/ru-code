@@ -17,6 +17,8 @@ import {
   type GlobalPanelId,
 } from "../skills-agents/rightGlobalPanel/store";
 
+import { clampPanelWidth } from "@smart-tools/plugin-sdk/host-rules";
+
 import { pluginIconComponent } from "./PluginIcon";
 import { PluginSlotBoundary, PluginSurface } from "./PluginSurface";
 import {
@@ -33,15 +35,6 @@ import {
   type PluginTabSurface,
 } from "./tabSurfaces";
 
-/** The width a panel opens at, clamped. A plugin asks; the user's own drag still wins. */
-export const MIN_PANEL_WIDTH = 320;
-export const MAX_PANEL_WIDTH = 960;
-
-const clampWidth = (width: number | undefined): number | undefined =>
-  typeof width === "number" && Number.isFinite(width)
-    ? Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(width)))
-    : undefined;
-
 /**
  * A plugin panel as the app's right-hand slot understands it.
  *
@@ -52,7 +45,8 @@ const clampWidth = (width: number | undefined): number | undefined =>
  * would go down with the plugin.
  */
 const toOverlayPanel = (entry: PluginContribution<Panel>, id: GlobalPanelId): OverlayPanel => {
-  const width = clampWidth(entry.value.width);
+  // The width a panel opens at, clamped (the SDK's rule). A plugin asks; the user's drag still wins.
+  const width = clampPanelWidth(entry.value.width);
   return {
     id,
     label: entry.value.title,

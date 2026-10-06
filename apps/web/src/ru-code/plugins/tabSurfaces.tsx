@@ -43,9 +43,10 @@ import {
   useRightPanelStore,
 } from "~/rightPanelStore";
 
+import { drawnDescription, panelMount } from "@smart-tools/plugin-sdk/host-rules";
+
 import { PluginSlotBoundary, PluginSurface } from "./PluginSurface";
 import {
-  drawnDescription,
   splitPluginIds,
   usePanelsAuthority,
   usePluginPanels,
@@ -96,7 +97,7 @@ export function resetPluginThreadRef(): void {
  * lives only inside a hook is a rule only the e2e suite can check.
  */
 export const isTabPanel = (entry: PluginContribution<Panel>): boolean =>
-  entry.value.mount === "tab";
+  panelMount(entry.value) === "tab";
 
 /** The panels a plugin asked to mount as a TAB. */
 export function usePluginTabPanels(): ReadonlyArray<PluginContribution<Panel>> {
@@ -146,7 +147,7 @@ export const toPluginTabSurface = (
   pluginId: entry.pluginId,
   panelId: entry.value.id,
   title: entry.value.title,
-  // The plugin's own line, drawn as given and clamped here (`seams.tsx` `drawnDescription`);
+  // The plugin's own line, drawn as given and clamped here (the SDK's `drawnDescription`);
   // `""` is "none" — an absent, blank or whitespace description all read the same.
   description: drawnDescription(entry.value.description),
   icon: entry.value.icon,

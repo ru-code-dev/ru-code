@@ -16,7 +16,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { MAX_PARKED_INVOKES_PER_PLUGIN } from "../../plugins/caps";
+import { MAX_PARKED_INVOKES_PER_PLUGIN } from "@smart-tools/plugin-sdk/host-rules";
 import { resetPluginProblems } from "../../plugins/problems";
 // V2-42: a host finding about a plugin is a status row and a console line, never a toast — so this
 // is where every assertion below reads it from.

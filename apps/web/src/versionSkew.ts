@@ -1,8 +1,7 @@
-import { APP_NAME, APP_SCOPE } from "@ru-code/branding";
+import { APP_SCOPE } from "@ru-code/branding";
 import type { EnvironmentId, ServerConfig, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import { APP_VERSION } from "./branding";
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 
 export interface VersionMismatch {
@@ -24,24 +23,15 @@ function normalizeVersion(version: string | null | undefined): string | null {
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
+// ru-code: never report a mismatch. The client and server ship in one bundle, so a skew only
+// exists for a moment after an auto-update (a page not yet reloaded, or the cached server config
+// read before the live one arrives), and every surface it drives — the chat "Server update
+// available" banner and reconnect fold, the Settings → Connections rows — offers upstream T3's
+// `npx t3@<version>`, which is wrong for ru-code. The reload ru-code auto-update performs is the fix.
 export function resolveVersionMismatch(
-  serverVersion: string | null | undefined,
+  _serverVersion: string | null | undefined,
 ): VersionMismatch | null {
-  const normalizedClientVersion = normalizeVersion(APP_VERSION);
-  const normalizedServerVersion = normalizeVersion(serverVersion);
-  if (
-    !normalizedClientVersion ||
-    !normalizedServerVersion ||
-    normalizedClientVersion === normalizedServerVersion
-  ) {
-    return null;
-  }
-
-  return {
-    clientVersion: normalizedClientVersion,
-    serverVersion: normalizedServerVersion,
-    hint: `Version mismatch. Try syncing the client and server to the same ${APP_NAME} version.`,
-  };
+  return null;
 }
 
 export function resolveServerConfigVersionMismatch(

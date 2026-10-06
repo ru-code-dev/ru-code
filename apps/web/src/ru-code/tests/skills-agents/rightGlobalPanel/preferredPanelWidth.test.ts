@@ -20,9 +20,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { preferredPanelWidth } from "~/ru-code/skills-agents/rightGlobalPanel/RightGlobalPanelHost";
 import type { OverlayPanel } from "~/ru-code/skills-agents/rightGlobalPanel/registry";
-import { makeGlobalPanelId } from "~/ru-code/skills-agents/rightGlobalPanel/store";
+import { pluginPanelId } from "~/ru-code/skills-agents/rightGlobalPanel/store";
 
-const panelId = makeGlobalPanelId("plugin:analytics");
+const panelId = pluginPanelId("analytics");
 if (panelId === null) throw new Error("the test id is not a valid GlobalPanelId");
 
 const panel = (preferredWidth?: unknown): OverlayPanel =>

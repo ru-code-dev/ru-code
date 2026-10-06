@@ -17,7 +17,7 @@
 // Everything a plugin can observe is the promise. The `pluginId` on a request is for the host's
 // own diagnostics and for the CAP below — the picker itself is the same for every plugin.
 //
-// CAPPED (S26 A2), like every other plugin-facing surface (`caps.ts`): ONE pending request per
+// CAPPED (S26 A2), like every other plugin-facing surface: ONE pending request per
 // plugin, active or queued. A button with no in-flight guard clicked five times, or a loop, would
 // otherwise queue five pickers that take five Escs to drain and re-open over ⌘K each time; the
 // excess is answered `null` at once and the plugin is told once through the problem channel.

@@ -68,7 +68,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../../config.ts";
 import { makePluginLogger, makeServerCtx } from "./ctx.ts";
 import { makePluginStateHub } from "./state.ts";
-import { describeNonJson, findNonJson } from "@smart-tools/plugin-sdk/state";
+import { ownRpcHandler, rpcAnswer, rpcErrorData } from "@smart-tools/plugin-sdk/host-rules";
 import {
   ProjectionProjectRepository,
   type ProjectionProjectRepositoryShape,
@@ -262,33 +262,6 @@ const describeError = (cause: unknown): string =>
             return String(cause);
           }
         })();
-
-/**
- * ru-code v2 (decision V2-7): the structured `data` a plugin's thrown error may carry.
- *
- * v1 gave a plugin one host-owned `reason` and a free-text `detail`, so every non-trivial plugin
- * encoded its own failure kind into `Error.message` and parsed it back on the other side (two
- * ~90-line `failure.ts` files did exactly that, in two plugins). A handler may now throw
- * `Object.assign(new Error("…"), { data: { kind: "quota-exceeded" } })` and the payload reaches
- * the web half untouched.
- *
- * Only a JSON value is taken — by the SAME rule the success channel is held to (S37, rule 37).
- * `data` rides the same `Schema.Unknown` field, so a `Map`, a `BigInt`, a cycle or one key holding
- * `undefined` would fail inside effect's RPC encoder AFTER the handler's side effects already ran,
- * and the plugin would get an untyped defect instead of the error it threw. It costs the FIELD:
- * the plugin still gets its `reason` and its `detail`.
- *
- * It used to be `JSON.parse(JSON.stringify(data))`, which is not the wire's rule: it turns a `NaN`
- * into `null` and drops an `undefined` key, so a payload the plugin's two halves disagree about
- * arrived looking fine. One walk, the same predicate, and the field is either exactly what the
- * handler attached or absent.
- */
-const structuredErrorData = (cause: unknown): { readonly data?: unknown } => {
-  if (typeof cause !== "object" || cause === null) return {};
-  const data = (cause as { readonly data?: unknown }).data;
-  if (data === undefined) return {};
-  return findNonJson(data, "data") === null ? { data } : {};
-};
 
 /**
  * Accept both shapes a server entry may default-export.
@@ -1053,8 +1026,10 @@ const make = Effect.gen(function* () {
         });
       }
       const entry = loaded.get(pluginId);
-      const handler = entry?.plugin.rpc?.[method];
-      if (entry === undefined || typeof handler !== "function") {
+      // S111 #16: only the plugin's OWN handlers — `@smart-tools/plugin-sdk/host-rules`
+      // `ownRpcHandler`, the rule the playground and the fakes import too (S111 F4).
+      const handler = ownRpcHandler(entry?.plugin.rpc, method);
+      if (entry === undefined || handler === undefined) {
         return yield* new PluginRpcError({
           reason: "unknown-method",
           detail: `${pluginId}.${method}`,
@@ -1064,20 +1039,19 @@ const make = Effect.gen(function* () {
         //  · `Promise.resolve(...)` — a handler that forgets `async` and returns a plain value used
         //    to surface `internalCall(...).then is not a function`, a minified host internal in the
         //    plugin author's error;
-        //  · `?? null` — `undefined` is not a JSON value, so the wire schema rejected it AFTER the
-        //    handler's side effects had already run. The most natural write-only handler is
-        //    `async (p, ctx) => { await ctx.storage.exec("DELETE FROM notes") }` and it returns
-        //    `undefined`. `null` is the JSON spelling of "nothing".
-        try: async () => (await Promise.resolve(handler(payload, entry.ctx))) ?? null,
+        //  · `undefined` → `null` and the JSON check are `rpcAnswer` below.
+        try: async (): Promise<unknown> => await Promise.resolve(handler(payload, entry.ctx)),
         catch: (cause) =>
           // v2 (V2-7): a handler may attach STRUCTURED `data` to its error, and it is forwarded
           // verbatim — that is what replaces the reason-encoded-into-a-message workaround every
-          // non-trivial v1 plugin grew. Only a plain JSON value is taken; anything else is dropped
-          // rather than risking an unencodable payload on the wire.
+          // non-trivial v1 plugin grew. Only a plain JSON value is taken (`rpcErrorData`, the
+          // wire's rule, written once in `@smart-tools/plugin-sdk/host-rules` for this host, the
+          // playground and the fakes — S111 R2-F2); anything else is dropped rather than risking
+          // an unencodable payload on the wire.
           new PluginRpcError({
             reason: "plugin-failed",
             detail: describeError(cause),
-            ...structuredErrorData(cause),
+            ...rpcErrorData(cause),
           }),
       });
 
@@ -1091,21 +1065,20 @@ const make = Effect.gen(function* () {
       //
       // DEBUG, not error or warning: a plugin bug is not an operator's incident, and the plugin
       // is told properly through the typed error below. The path is the whole point — effect's
-      // own message can only ever say `["value"]`.
-      const offending = findNonJson(answer);
-      if (offending !== null) {
+      // own message can only ever say `["value"]`. The rule — `undefined` is `null`, the rest must
+      // be JSON — is `rpcAnswer` (`@smart-tools/plugin-sdk/host-rules`, S111 R2-F2), the one the
+      // playground and the `./testing` fake apply too.
+      const judged = rpcAnswer(pluginId, method, answer);
+      if (!judged.ok) {
         yield* Effect.logDebug("ru-code plugins: invoke answer is not JSON", {
           pluginId,
           method,
-          path: offending.path,
-          found: describeNonJson(offending.found),
+          path: judged.path,
+          found: judged.found,
         });
-        return yield* new PluginRpcError({
-          reason: "invalid-answer",
-          detail: `${pluginId}.${method} answered with ${describeNonJson(offending.found)} at ${offending.path}`,
-        });
+        return yield* new PluginRpcError({ reason: "invalid-answer", detail: judged.detail });
       }
-      return answer;
+      return judged.value;
     }).pipe(Effect.withSpan("plugins.invoke", { attributes: { pluginId, method } }));
 
   const sessions = Effect.sync(

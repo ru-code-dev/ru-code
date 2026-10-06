@@ -592,6 +592,34 @@ it.layer(NodeServices.layer)("PluginHost", (it) => {
     }),
   );
 
+  // S111 #16 (S110 R64): `plugin.invoke` dispatches only the plugin's OWN handlers. The lookup was
+  // `rpc?.[method]`, so a method name inherited from `Object.prototype` reached a function the
+  // plugin never registered — `toString` answered "[object Undefined]", `constructor` an object —
+  // which is exactly what `packages/contracts/src/ru-code/plugins/rpc.ts` says can never happen
+  // ("never a lookup on a prototype").
+  it.effect(
+    "S111 #16: an rpc name inherited from Object.prototype is unknown-method, never dispatched",
+    () =>
+      Effect.gen(function* () {
+        const baseDir = yield* makeBaseDir({ good: okPlugin("good") });
+        const host = yield* startHost(baseDir);
+        for (const method of [
+          "toString",
+          "constructor",
+          "valueOf",
+          "hasOwnProperty",
+          "__proto__",
+        ]) {
+          const result = yield* Effect.result(host.invoke("good", method, null));
+          expect(Result.isFailure(result) ? result.failure.reason : "<succeeded>").toBe(
+            "unknown-method",
+          );
+        }
+        // …and the plugin's own handlers still answer.
+        expect(yield* host.invoke("good", "echo", 1)).toEqual({ echoed: 1, id: "good" });
+      }),
+  );
+
   // ru-code S40 gap 1 (REVIEW): a WEB-ONLY plugin whose web half calls `ctx.invoke`.
   //
   // A manifest with no `server` is `loaded` with `hasServer: false`, and nothing in the SDK stops
@@ -676,7 +704,7 @@ it.layer(NodeServices.layer)("PluginHost", (it) => {
       expect(yield* host.invoke("answers", "empty-string", null)).toBe("");
       expect(yield* host.invoke("answers", "zero", null)).toBe(0);
       expect(yield* host.invoke("answers", "null", null)).toBeNull();
-      // A handler that returns nothing still answers `null` (the `?? null` above this check).
+      // A handler that returns nothing still answers `null` (`rpcAnswer`, `@smart-tools/plugin-sdk/host-rules`).
       expect(yield* host.invoke("answers", "nothing", null)).toBeNull();
       // Depth is the host's problem, not vitest's: walk it rather than deep-comparing it
       // (`toMatchObject` recurses, and the point here is that the HOST's check did not).
@@ -953,6 +981,52 @@ it.layer(NodeServices.layer)("PluginHost storage + migrations", (it) => {
       // Disabled means unreachable, not "half working".
       const result = yield* Effect.result(host.invoke("notes", "add", "x"));
       expect(Result.isFailure(result) ? result.failure.reason : "").toBe("plugin-disabled");
+    }),
+  );
+
+  // S111 #15 (S110 R61): a migration id is the primary key of `_plugin_migrations`, so a SECOND
+  // migration carrying an id already in the list was skipped as "already applied" — silently, its
+  // SQL never run. A list with one id twice is an author's mistake the host now names.
+  // S111 F4 (V2-64, rule 37 "boundaries validate"): the list is checked WHOLE before any migration
+  // runs, so a bad list applies NOTHING — not the migrations declared before the bad id either.
+  it.effect("S111 #15: two migrations with one id fail the plugin, named, and apply nothing", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* makeBaseDir({
+        notes: migratingPlugin([
+          MIGRATION_ONE,
+          MIGRATION_TWO,
+          { id: "001-notes", sql: "CREATE TABLE never_ran (id INTEGER)" },
+        ]),
+      });
+      const host = yield* startHost(baseDir);
+      const status = (yield* host.list)[0];
+      expect(status?.state).toBe("failed");
+      expect(status?.error).toContain("001-notes");
+      expect(status?.error).toContain("duplicate migration id");
+
+      const dbPath = `${stateDirOf(baseDir)}/plugins/notes/data.sqlite`;
+      expect(tableNames(dbPath)).not.toContain("never_ran");
+      expect(tableNames(dbPath)).not.toContain("notes");
+    }),
+  );
+
+  it.effect("S111 F4: a blank migration id ANYWHERE in the list applies nothing", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* makeBaseDir({
+        notes: migratingPlugin([
+          MIGRATION_ONE,
+          { id: "", sql: "CREATE TABLE never_ran (id INTEGER)" },
+        ]),
+      });
+      const host = yield* startHost(baseDir);
+      const status = (yield* host.list)[0];
+      expect(status?.state).toBe("failed");
+      expect(status?.error).toContain("(unnamed)");
+      expect(status?.error).toContain("migration id must be a non-empty string");
+
+      const dbPath = `${stateDirOf(baseDir)}/plugins/notes/data.sqlite`;
+      expect(tableNames(dbPath)).not.toContain("notes");
+      expect(tableNames(dbPath)).not.toContain("never_ran");
     }),
   );
 

@@ -41,7 +41,7 @@ import type { InvalidateSeam } from "@smart-tools/plugin-sdk/host";
 import { useSyncExternalStore } from "react";
 import { create } from "zustand";
 
-import { INVALIDATE_SEAMS } from "./caps";
+import { INVALIDATE_SEAMS } from "@smart-tools/plugin-sdk/host-rules";
 
 /** Every loaded plugin's version for ONE seam. Absent ⇒ that plugin has never invalidated it. */
 export type SeamVersions = Readonly<Record<string, number>>;

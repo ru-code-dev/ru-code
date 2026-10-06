@@ -472,6 +472,46 @@ test("diagnostics is reachable once debugPixso is set, and a forced tool failure
   await expect(galleryCards(page)).toHaveCount(3);
 });
 
+/**
+ * D-A2's OWN precondition, established by the case itself instead of inherited from the cases
+ * before it: the three distinct cards of «three scans import three distinct cards» in the
+ * gallery, and the last settled run on the forced failure. A SETUP page does it, so the page
+ * under test still mounts fresh. The gallery is OBSERVED, never assumed: loaded and holding
+ * cards (the file order already ran the three scans) means no scan is repeated — the fake's
+ * cursor must not move — and loaded and empty (the case alone) means the three scans run. The
+ * forced failure never advances the cursor and never lands a card, so settling it again after
+ * the file order's own is a no-op.
+ */
+async function establishEarlyMountPrecondition(page: Page): Promise<void> {
+  const state = readHarnessState();
+  const setup = await page.context().newPage();
+  try {
+    await openPixsoPanel(setup);
+    await openGallery(setup);
+    const cards = galleryCards(setup);
+    const empty = setup.getByText("Галерея пуста");
+    await expect(cards.first().or(empty)).toBeVisible({ timeout: 30_000 });
+    if (await empty.isVisible()) {
+      await setup.getByRole("tab", { name: "Импорт" }).click();
+      for (let index = 0; index < 3; index += 1) {
+        await runScan(setup);
+      }
+      await openGallery(setup);
+    }
+    await expect(cards).toHaveCount(3, { timeout: 30_000 });
+    await setup.getByRole("tab", { name: "Импорт" }).click();
+    setPixsoFakeMode(state, "dsl-error");
+    try {
+      await runScan(setup);
+      await expect(setup.getByTestId("pixso-outcome-message")).toContainText(FORCED_DSL_ERROR);
+    } finally {
+      setPixsoFakeMode(state, "normal");
+    }
+  } finally {
+    await setup.close();
+  }
+}
+
 test("an early-mounted panel recovers both boot tiers — subscription and gallery (D-A2)", async ({
   page,
 }) => {
@@ -480,6 +520,7 @@ test("an early-mounted panel recovers both boot tiers — subscription and galle
   // catalogue join) is seconds rather than milliseconds. The default 120 s budget is a
   // per-case guard against a hang, not a performance claim; a real corpus needs more of it.
   test.setTimeout(360_000);
+  await establishEarlyMountPrecondition(page);
   const state = readHarnessState();
   await page.goto(state.webUrl, { waitUntil: "domcontentloaded" });
   // Deliberately do NOT wait for the composer (the app's connected signal): open the panel
@@ -505,7 +546,7 @@ test("an early-mounted panel recovers both boot tiers — subscription and galle
   await page.getByTestId("pixso-source-local").click();
   await expect(page.getByTestId("pixso-scan-button")).toBeVisible();
 
-  // The previous case left the last settled run on the forced failure; the subscription
+  // `establishEarlyMountPrecondition` left the last settled run on the forced failure; the subscription
   // replays it into the freshly mounted panel.
   const outcome = page.getByTestId("pixso-outcome-message");
   await expect(outcome).toContainText(FORCED_DSL_ERROR, { timeout: 30_000 });

@@ -5,7 +5,8 @@
 //     loadedPlugins().flatMap(p => isolate(() => p.plugin.<seam>?.(p.ctx)))
 //
 // Every call is isolated (a throw costs that plugin's contribution and reports once), every result
-// is validated against the caps (`caps.ts`), and every component that survives is mounted by
+// is judged by the host's rules (`@smart-tools/plugin-sdk/host-rules`, S111 — written once for this
+// host, the playground and the `./testing` fake), and every component that survives is mounted by
 // `PluginSurface` — as an element, inside a boundary and a Suspense — never called by the host.
 //
 // A plugin that does not export a seam is simply absent from that surface. There is no
@@ -37,15 +38,13 @@ import { useActiveComposerTarget } from "../composer/activeComposerTarget";
 import { composerTargetToken } from "./composerAttach";
 
 import {
-  MAX_BACKGROUND_PER_PLUGIN,
-  MAX_COMPOSER_ROWS_PER_PLUGIN,
-  MAX_LABEL_LENGTH,
-  MAX_PAGES_PER_PLUGIN,
-  MAX_PANELS_PER_PLUGIN,
-  MAX_DESCRIPTION_LENGTH,
-  isDisplayString,
-  isPluginSlug,
-} from "./caps";
+  SEAM_RULES,
+  judgeSeam,
+  type JudgedEntry,
+  type PastCapVerdict,
+  type SeamEntries,
+  type SeamName,
+} from "@smart-tools/plugin-sdk/host-rules";
 import { useSeamVersions, type SeamVersions } from "./invalidations";
 import { PluginSurface } from "./PluginSurface";
 import { reportPluginProblem } from "./problems";
@@ -117,15 +116,13 @@ const callSeam = <T,>(
   }
 };
 
-// anchor: capped — mirrored by `plugin-dev/src/playground/contract.ts` (`applyHostRules`)
-/** Apply the per-plugin cap, telling the plugin once when it overflowed. */
-const capped = <T,>(
-  plugin: LoadedPlugin,
-  seam: string,
-  entries: ReadonlyArray<T>,
-  max: number,
-): ReadonlyArray<T> => {
-  if (entries.length <= max) return entries;
+/**
+ * Tell the plugin once that it overflowed a seam's cap. The words follow the VERDICT the seam's rule
+ * gave its excess (`SeamRule.pastCap`): `over-cap` entries were dropped; `undrawn` ones (S111 #6)
+ * are still contributed and only not drawn — a `/` one still runs when typed.
+ */
+const reportOverCap = (plugin: LoadedPlugin, seam: SeamName, verdict: PastCapVerdict): void => {
+  const max = String(SEAM_RULES[seam].max);
   reportPluginProblem({
     kind: "error",
     pluginId: plugin.id,
@@ -134,150 +131,96 @@ const capped = <T,>(
       `Plugin "${plugin.name}" contributed too many ${seam}`,
       `Плагин «${plugin.name}» добавил слишком много (${seam})`,
     ),
-    detail: L(
-      `at most ${String(max)} per plugin; the rest are ignored`,
-      `не более ${String(max)} на плагин; остальные игнорируются`,
-    ),
+    detail:
+      verdict === "undrawn"
+        ? L(
+            `at most ${max} per plugin are drawn in the menu; a \`/\` row past them still runs when typed`,
+            `в меню показываются не более ${max} на плагин; команда \`/\` сверх них всё равно выполняется, если её набрать`,
+          )
+        : L(
+            `at most ${max} per plugin; the rest are ignored`,
+            `не более ${max} на плагин; остальные игнорируются`,
+          ),
   });
-  return entries.slice(0, max);
 };
 
-// anchor: isComponent — mirrored by `plugin-dev/src/playground/contract.ts`
-const isComponent = (value: unknown): value is ComponentType =>
-  typeof value === "function" ||
-  // `memo` / `forwardRef` / `lazy` are exotic objects, and a plugin may legitimately return one.
-  (typeof value === "object" && value !== null && "$$typeof" in value);
-
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// pages / panels
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-
-// anchor: validPage — mirrored by `plugin-dev/src/playground/contract.ts`. A PANEL needs exactly
-// the same three things (S33 A3): its `description` is never judged here, or anywhere else — it is
-// drawn as given, clamped where it is drawn (`drawnDescription`).
-const validPage = (plugin: LoadedPlugin, page: unknown): page is Page => {
-  const candidate = page as Partial<Page> | null;
-  if (typeof candidate !== "object" || candidate === null) return false;
-  if (!isPluginSlug(candidate.id)) return false;
-  if (!isDisplayString(candidate.title, MAX_LABEL_LENGTH)) return false;
-  return isComponent(candidate.render);
-};
-
-/** What `keepValid` tells the plugin an entry of this seam needs — beside the rule that checks it. */
-const PAGE_NEEDS = "a slug `id`, a short `title` and a component `render`";
-
-/**
- * A plugin's `description` as the host DRAWS it — the line under a tab surface's title, and the
- * second line of a composer row. The one and only rule the host applies to the field.
- *
- * THE HOST DOES NOT INSPECT A DESCRIPTION (owner, S41 item 2). It is drawn AS GIVEN. Earlier this
- * was a validator: blank, over `MAX_DESCRIPTION_LENGTH` or carrying a control character meant "draw
- * none" for a panel and — one seam over — meant DROP THE WHOLE ROW, which took a `/` row's slug out
- * of the submit allowlist and refused the user's own command at send time (S40 F5). Neither half
- * was the host's business: `description: summary ?? ""` is how an author spells an optional line,
- * a `\n` in a subtitle is a typographic accident and not a broken contribution, and the slots that
- * draw it already truncate and `line-clamp` whatever they are handed.
- *
- * So exactly two things remain, and both belong here, where the string becomes text:
- *   · not a string ⇒ `""`, which is what "the author said nothing" has always meant;
- *   · trimmed, so `""` and whitespace read the same, and CLAMPED at `MAX_DESCRIPTION_LENGTH` —
- *     a cap, never a drop, so no description can cost the surface that carries it.
- */
-export const drawnDescription = (description: unknown): string =>
-  typeof description === "string" ? description.trim().slice(0, MAX_DESCRIPTION_LENGTH) : "";
-
-/** Drop the entries a host surface cannot render, and say so once — naming what the seam needs. */
-const keepValid = <T,>(
-  plugin: LoadedPlugin,
-  seam: string,
-  entries: ReadonlyArray<unknown>,
-  isValid: (plugin: LoadedPlugin, entry: unknown) => entry is T,
-  needs: string,
-): ReadonlyArray<T> => {
-  const kept = entries.filter((entry): entry is T => isValid(plugin, entry));
-  if (kept.length !== entries.length) {
-    reportSeamProblem(
-      plugin,
-      seam,
-      `${String(entries.length - kept.length)} entr${entries.length - kept.length === 1 ? "y" : "ies"} dropped: each needs ${needs}`,
-    );
-  }
-  return kept;
-};
-
-/** One entry, with the id its React key is built from — computed ONCE, by {@link uniqueById}. */
+/** One entry the host's rules kept, with the id its React key is built from. */
 interface IdentifiedEntry<T> {
   readonly id: string;
   readonly value: T;
+  /** `false` only for an `undrawn` entry: contributed, not drawn (S111 #6). */
+  readonly drawn: boolean;
 }
 
 /**
- * ONE entry per id within one plugin: keep the first, drop the repeats, tell the plugin once.
+ * Report what the host's rules dropped from ONE seam call — once per kind of drop, naming what the
+ * seam needs, or which ids repeated — and answer every entry still contributed, with its id.
  *
- * `PluginContribution.key` is `plugin:<pluginId>:<entryId>` and IS the React key the app renders
- * these entries under — the sidebar footer, the right panel's launcher cards and its "+" menu, the
- * composer menu. Two entries of one plugin sharing an id pass every other gate this runner has
- * (slug, title, render, cap), so the app was handed two children with one key and React kept only
- * the first: a nav button, a card and a menu row the plugin declared vanished with no reason given
- * anywhere (S40 F2). Every other author mistake at this seam costs the ENTRY and says so; this one
- * has to do the same, through the same `seam:<name>` channel {@link keepValid} uses.
- *
- * It runs AFTER validation and BEFORE the cap, so the cap counts entries that will really be
- * contributed and an author does not lose a distinct page to a duplicate of another one. Manifest
- * order is untouched — the FIRST occurrence keeps its place.
+ * The verdicts are `judgeSeam` (validate → dedupe by id → cap, the seam's rules from `SEAM_RULES`),
+ * the call the playground and the `./testing` fake make too. Dedupe exists because
+ * `PluginContribution.key` — `plugin:<pluginId>:<entryId>` — IS the React key these entries render
+ * under (the sidebar footer, the right panel's launcher cards and "+" menu, the composer menu): two
+ * entries of one plugin sharing an id handed React two children with one key and it kept only the
+ * first, with no reason given anywhere (S40 F2, S43 F1). It runs before the cap, so the cap counts
+ * entries that will really be contributed. Manifest order is untouched — the FIRST occurrence keeps
+ * its place.
  */
-const uniqueById = <T,>(
+const reportJudged = <S extends SeamName>(
   plugin: LoadedPlugin,
-  seam: string,
-  entries: ReadonlyArray<T>,
-  idOf: (entry: T, index: number) => string,
-): ReadonlyArray<IdentifiedEntry<T>> => {
-  const kept: Array<IdentifiedEntry<T>> = [];
+  seam: S,
+  judged: ReadonlyArray<JudgedEntry<SeamEntries[S]>>,
+): ReadonlyArray<IdentifiedEntry<SeamEntries[S]>> => {
+  const contributed: Array<IdentifiedEntry<SeamEntries[S]>> = [];
+  let invalid = 0;
   const repeated = new Set<string>();
-  const seen = new Set<string>();
-  for (const [index, value] of entries.entries()) {
-    const id = idOf(value, index);
-    if (seen.has(id)) {
-      repeated.add(id);
-      continue;
-    }
-    seen.add(id);
-    kept.push({ id, value });
+  let repeats = 0;
+  let pastCap: PastCapVerdict | null = null;
+  for (const entry of judged) {
+    if (entry.verdict === "invalid") invalid += 1;
+    else if (entry.verdict === "repeated") {
+      repeats += 1;
+      repeated.add(entry.id);
+    } else if (entry.verdict === "over-cap") pastCap = "over-cap";
+    else if (entry.verdict === "undrawn") {
+      // S111 #6, shape (b), decided by the seam's rule: contributed — the `/` submit allowlist takes
+      // it — but not drawn in the menu.
+      pastCap = "undrawn";
+      contributed.push({ id: entry.id, value: entry.value, drawn: false });
+    } else contributed.push({ id: entry.id, value: entry.value, drawn: true });
   }
-  if (repeated.size > 0) {
-    const dropped = entries.length - kept.length;
+  if (invalid > 0) {
     reportSeamProblem(
       plugin,
       seam,
-      `${String(dropped)} entr${dropped === 1 ? "y" : "ies"} dropped: an entry \`id\` must be unique within a plugin, and ${[...repeated].map((id) => `"${id}"`).join(", ")} ${repeated.size === 1 ? "was" : "were"} repeated`,
+      `${String(invalid)} entr${invalid === 1 ? "y" : "ies"} dropped: each needs ${SEAM_RULES[seam].needs}`,
     );
   }
-  return kept;
+  if (repeats > 0) {
+    reportSeamProblem(
+      plugin,
+      seam,
+      `${String(repeats)} entr${repeats === 1 ? "y" : "ies"} dropped: an entry \`id\` must be unique within a plugin, and ${[...repeated].map((id) => `"${id}"`).join(", ")} ${repeated.size === 1 ? "was" : "were"} repeated`,
+    );
+  }
+  if (pastCap !== null) reportOverCap(plugin, seam, pastCap);
+  return contributed;
 };
 
-const contributionsOf = <T,>(
+const contributionsOf = <S extends "pages" | "panels" | "background">(
   plugins: ReadonlyArray<LoadedPlugin>,
-  seam: string,
-  max: number,
+  seam: S,
   call: (plugin: WebPlugin, ctx: WebCtx) => ReadonlyArray<unknown> | undefined,
-  isValid: (plugin: LoadedPlugin, entry: unknown) => entry is T,
-  /** What an entry of this seam needs, for the message `keepValid` sends when one is dropped. */
-  needs: string,
-  /** The entry's id — or, for a seam whose entries have none, its index WITHIN THIS PLUGIN. */
-  idOf: (entry: T, index: number) => string,
   /** S15 A2 — filled with the id of every plugin whose seam FAULTED on this pass, when given. */
   faulted?: Set<string>,
-): ReadonlyArray<PluginContribution<T>> => {
-  const out: Array<PluginContribution<T>> = [];
+): ReadonlyArray<PluginContribution<SeamEntries[S]>> => {
+  const out: Array<PluginContribution<SeamEntries[S]>> = [];
   for (const plugin of plugins) {
     const raw = callSeam(plugin, seam, call);
     if (raw === null) {
       faulted?.add(plugin.id);
       continue;
     }
-    const valid = keepValid(plugin, seam, raw, isValid, needs);
-    const distinct = uniqueById(plugin, seam, valid, idOf);
-    for (const entry of capped(plugin, seam, distinct, max)) {
+    for (const entry of reportJudged(plugin, seam, judgeSeam(seam, raw))) {
       out.push({
         pluginId: plugin.id,
         pluginName: plugin.name,
@@ -301,15 +244,7 @@ const contributionsOf = <T,>(
 export function collectPluginPages(
   plugins: ReadonlyArray<LoadedPlugin>,
 ): ReadonlyArray<PluginContribution<Page>> {
-  return contributionsOf<Page>(
-    plugins,
-    "pages",
-    MAX_PAGES_PER_PLUGIN,
-    (plugin, ctx) => plugin.pages?.(ctx),
-    validPage,
-    PAGE_NEEDS,
-    (page) => page.id,
-  );
+  return contributionsOf(plugins, "pages", (plugin, ctx) => plugin.pages?.(ctx));
 }
 
 /**
@@ -329,14 +264,10 @@ export interface PluginPanelsPass {
 
 export function collectPluginPanelsPass(plugins: ReadonlyArray<LoadedPlugin>): PluginPanelsPass {
   const faultedPluginIds = new Set<string>();
-  const entries = contributionsOf<Panel>(
+  const entries = contributionsOf(
     plugins,
     "panels",
-    MAX_PANELS_PER_PLUGIN,
     (plugin, ctx) => plugin.panels?.(ctx),
-    (plugin, entry): entry is Panel => validPage(plugin, entry),
-    PAGE_NEEDS,
-    (panel) => panel.id,
     faultedPluginIds,
   );
   return { entries, faultedPluginIds };
@@ -349,21 +280,13 @@ export function collectPluginPanelsPass(plugins: ReadonlyArray<LoadedPlugin>): P
  * of completion order (`addLoadedPlugin` re-sorts on every write) — so an index into the flattened
  * cross-plugin list changed whenever an earlier-sorting plugin arrived, and every change unmounted
  * and remounted a plugin that had done nothing (S28 §4.3: three mount-time invokes from one
- * fixture). The index is now the position within the plugin's own capped list, which nothing but
- * that plugin's own answer can move.
+ * fixture). The index is now the position within the plugin's own valid list
+ * (`SEAM_RULES.background.idOf`), which nothing but that plugin's own answer can move.
  */
 export function collectPluginBackground(
   plugins: ReadonlyArray<LoadedPlugin>,
 ): ReadonlyArray<PluginContribution<ComponentType>> {
-  return contributionsOf<ComponentType>(
-    plugins,
-    "background",
-    MAX_BACKGROUND_PER_PLUGIN,
-    (plugin, ctx) => plugin.background?.(ctx),
-    (_plugin, entry): entry is ComponentType => isComponent(entry),
-    "to be a component",
-    (_entry, index) => `background:${String(index)}`,
-  );
+  return contributionsOf(plugins, "background", (plugin, ctx) => plugin.background?.(ctx));
 }
 
 /**
@@ -530,20 +453,16 @@ export const splitPluginIds = (joined: string): readonly string[] =>
 // composer.items
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-// anchor: validRow — mirrored by `plugin-dev/src/playground/contract.ts`. `description` is NOT
-// judged here (S40 F5, owner's ruling): it is drawn as given and clamped where it is drawn
-// (`drawnDescription`), exactly like a panel's, so no subtitle can cost a row — and a `/` row its
-// slug in the submit allowlist.
-const validRow = (row: unknown): row is ComposerRow => {
-  const candidate = row as Partial<ComposerRow> | null;
-  if (typeof candidate !== "object" || candidate === null) return false;
-  if (!isDisplayString(candidate.id, MAX_LABEL_LENGTH)) return false;
-  if (!isDisplayString(candidate.label, MAX_LABEL_LENGTH)) return false;
-  if (typeof candidate.insert !== "string" || candidate.insert === "") return false;
-  return candidate.group === undefined || isDisplayString(candidate.group, MAX_LABEL_LENGTH);
-};
+/**
+ * One contributed composer row. `drawn` is S111 #6, shape (b): `MAX_COMPOSER_ROWS_PER_PLUGIN` bounds
+ * what the MENU draws per plugin; a valid row past it is still contributed, so the `/` submit
+ * allowlist (`qwenCommandSlugs.ts`) takes it and a command typed by hand runs.
+ */
+export interface PluginComposerRow extends PluginContribution<ComposerRow> {
+  readonly drawn: boolean;
+}
 
-const EMPTY_ROWS: ReadonlyArray<PluginContribution<ComposerRow>> = [];
+const EMPTY_ROWS: ReadonlyArray<PluginComposerRow> = [];
 
 /**
  * Would re-publishing `next` show the user anything different from `shown`?
@@ -561,8 +480,8 @@ const EMPTY_ROWS: ReadonlyArray<PluginContribution<ComposerRow>> = [];
  * check.
  */
 export const sameComposerRows = (
-  shown: ReadonlyArray<PluginContribution<ComposerRow>>,
-  next: ReadonlyArray<PluginContribution<ComposerRow>>,
+  shown: ReadonlyArray<PluginComposerRow>,
+  next: ReadonlyArray<PluginComposerRow>,
 ): boolean =>
   shown.length === next.length &&
   next.every((entry, index) => {
@@ -588,38 +507,28 @@ export async function collectPluginComposerRows(
   plugins: ReadonlyArray<LoadedPlugin>,
   trigger: ComposerTrigger,
   query: string,
-): Promise<ReadonlyArray<PluginContribution<ComposerRow>>> {
+): Promise<ReadonlyArray<PluginComposerRow>> {
   const collected = await Promise.all(
-    plugins.map(async (plugin): Promise<ReadonlyArray<PluginContribution<ComposerRow>>> => {
+    plugins.map(async (plugin): Promise<ReadonlyArray<PluginComposerRow>> => {
       const items = plugin.plugin.composer?.items;
       if (items === undefined) return [];
       try {
         const answered = await items.call(plugin.plugin.composer, trigger, query, plugin.ctx);
-        const valid = Array.isArray(answered) ? answered.filter(validRow) : [];
-        if (Array.isArray(answered) && valid.length !== answered.length) {
-          reportSeamProblem(
-            plugin,
-            "composer.items",
-            "a row needs a short `id`, a short `label` and a non-empty `insert`",
-          );
-        }
-        // THE SAME DEDUPE THE OTHER THREE SEAMS GET (S43 F1). `items` is async, so this seam is a
-        // second pipeline and `contributionsOf` — where `uniqueById` sits — never ran for it. The
-        // key below IS the menu's React key, and `toComposerCommandItem` hands it to the menu as
-        // the item's `id`, which `ComposerCommandMenu` also uses for `isActive` and for cmdk's
-        // `value`: two rows of one plugin sharing an `id` collided exactly as S40 F2 described,
-        // and the second row vanished unreported. Between the validity filter and the cap, so the
-        // cap counts rows that will really be offered — the order `contributionsOf` uses.
-        const distinct = uniqueById(plugin, "composer.items", valid, (row) => row.id);
-        return capped(plugin, "composer.items", distinct, MAX_COMPOSER_ROWS_PER_PLUGIN).map(
-          (entry) => ({
-            pluginId: plugin.id,
-            pluginName: plugin.name,
-            key: `plugin:${plugin.id}:${trigger}:${entry.id}`,
-            value: entry.value,
-            ctx: plugin.ctx,
-          }),
-        );
+        // THE SAME RULES THE OTHER THREE SEAMS GET (S43 F1). `items` is async, so this seam is a
+        // second pipeline and `contributionsOf` never runs for it. The key below IS the menu's
+        // React key, and `toComposerCommandItem` hands it to the menu as the item's `id`, which
+        // `ComposerCommandMenu` also uses for `isActive` and for cmdk's `value`: two rows of one
+        // plugin sharing an `id` collided exactly as S40 F2 described, and the second row vanished
+        // unreported — hence the dedupe, between the validity filter and the cap.
+        const judged = judgeSeam("composer.items", Array.isArray(answered) ? answered : []);
+        return reportJudged(plugin, "composer.items", judged).map((entry) => ({
+          pluginId: plugin.id,
+          pluginName: plugin.name,
+          key: `plugin:${plugin.id}:${trigger}:${entry.id}`,
+          value: entry.value,
+          ctx: plugin.ctx,
+          drawn: entry.drawn,
+        }));
       } catch (error) {
         reportSeamProblem(
           plugin,
@@ -649,7 +558,7 @@ interface ComposerMemo {
   readonly version: number;
   readonly trigger: ComposerTrigger;
   readonly query: string;
-  readonly rows: Promise<ReadonlyArray<PluginContribution<ComposerRow>>>;
+  readonly rows: Promise<ReadonlyArray<PluginComposerRow>>;
 }
 
 /**
@@ -704,7 +613,7 @@ export const memoizedComposerRows = (
 };
 
 /**
- * Reactive {@link collectPluginComposerRows}.
+ * Reactive {@link collectPluginComposerRows} — every CONTRIBUTED row, drawn in the menu or not.
  *
  * A hook with state rather than a pure derivation, because the seam may answer asynchronously. The
  * effect is keyed on `(plugins, trigger, query, versions)`: React re-runs it when the user types,
@@ -717,13 +626,13 @@ export const memoizedComposerRows = (
  * WHICH plugins the re-run actually asks is V2-40: the one whose version moved, and any whose rows
  * are not already cached for this exact `(trigger, query)`.
  */
-export function usePluginComposerRows(
+export function useContributedComposerRows(
   trigger: ComposerTrigger | null,
   query: string,
-): ReadonlyArray<PluginContribution<ComposerRow>> {
+): ReadonlyArray<PluginComposerRow> {
   const plugins = usePlugins();
   const versions = useSeamVersions("composer");
-  const [rows, setRows] = useState<ReadonlyArray<PluginContribution<ComposerRow>>>(EMPTY_ROWS);
+  const [rows, setRows] = useState<ReadonlyArray<PluginComposerRow>>(EMPTY_ROWS);
   // The rows currently on screen, so an unchanged answer does not re-render the composer menu.
   const shown = useRef(rows);
   shown.current = rows;
@@ -749,6 +658,19 @@ export function usePluginComposerRows(
   }, [plugins, trigger, query, versions]);
 
   return rows;
+}
+
+/**
+ * The rows the composer MENU draws: {@link useContributedComposerRows} without the rows past a
+ * plugin's `MAX_COMPOSER_ROWS_PER_PLUGIN` (S111 #6). The submit allowlist reads the contributed
+ * rows instead, so a command the menu does not draw still runs when typed.
+ */
+export function usePluginComposerRows(
+  trigger: ComposerTrigger | null,
+  query: string,
+): ReadonlyArray<PluginComposerRow> {
+  const rows = useContributedComposerRows(trigger, query);
+  return useMemo(() => rows.filter((row) => row.drawn), [rows]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────

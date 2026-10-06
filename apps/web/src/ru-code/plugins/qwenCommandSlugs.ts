@@ -19,13 +19,15 @@
 import { useMemo } from "react";
 
 import { pluginCommandSlugs, toComposerCommandItem } from "./composerRows";
-import { usePluginComposerRows } from "./seams";
+import { useContributedComposerRows } from "./seams";
 
 /** The `/` commands every loaded plugin currently offers. Empty with no such plugin installed. */
 export function useQwenPluginCommandSlugs(): ReadonlySet<string> {
   // The EMPTY query: "everything you would offer", which is the set the guard has to know about
-  // for a `/name` typed by hand with the menu never opened.
-  const rows = usePluginComposerRows("/", "");
+  // for a `/name` typed by hand with the menu never opened. EVERY contributed row, not only the ones
+  // the menu draws (S111 #6): a plugin offering more than `MAX_COMPOSER_ROWS_PER_PLUGIN` commands
+  // used to have the rest refused at submit.
+  const rows = useContributedComposerRows("/", "");
   return useMemo(
     () => pluginCommandSlugs(rows.map((row) => toComposerCommandItem(row, "/"))),
     [rows],

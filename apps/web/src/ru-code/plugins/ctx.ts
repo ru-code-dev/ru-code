@@ -16,14 +16,18 @@ import type {
 } from "@smart-tools/plugin-sdk/host";
 import { L } from "@ru-code/localization";
 
+// S111: every check below on what the plugin hands this ctx — the toast fields, the invalidate
+// name, the asset path — is the SDK's, written once for this host, the playground and the
+// `./testing` fake. The picker's start hint is this host's alone (S111 R2-F4, below).
 import {
   CONTROL_OR_FORMAT,
   INVALIDATE_SEAMS,
-  MAX_DESCRIPTION_LENGTH,
-  MAX_LABEL_LENGTH,
-  isDisplayString,
+  invalidToastCall,
   isInvalidateSeam,
-} from "./caps";
+  pluginAssetUrl,
+} from "@smart-tools/plugin-sdk/host-rules";
+import { FilesystemBrowseInput } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { pluginConnectionSignal } from "./connectionAtom";
 import { requestFolderPick } from "./folderPicker";
 import { invalidatePluginSeam } from "./invalidations";
@@ -43,75 +47,31 @@ import {
 import { closePluginPanel } from "./slots";
 import { makePluginComposer } from "./composerAttach";
 
-/**
- * `/plugins/<id>/<rel>` — the route the server serves plugin files from.
- *
- * Containment is enforced here as well as on the server (defence in depth): a `..` segment, a
- * leading `/` and a NUL are all refused, so a plugin cannot mint a URL that walks out of its own
- * folder even if the route ever regresses. A leading slash THROWS rather than being stripped —
- * `assetUrl("/etc/passwd")` quietly becoming `/plugins/<id>/etc/passwd` gave an author the
- * opposite of the documented behaviour, which is how a real traversal attempt goes unnoticed.
- */
-export function pluginAssetUrl(pluginId: string, rel: string): string {
-  const rejected =
-    typeof rel !== "string" ||
-    rel === "" ||
-    rel.startsWith("/") ||
-    rel.includes("\0") ||
-    rel.split("/").some((segment) => segment === ".." || segment === ".");
-  if (rejected) {
-    throw new Error(
-      `[plugins] ${pluginId}: assetUrl(${JSON.stringify(rel)}) is not a contained relative path`,
-    );
-  }
-  return `/plugins/${pluginId}/${rel}`;
-}
-
-const TOAST_KINDS: ReadonlySet<string> = new Set(["success", "error", "info"]);
-
-/** The server's own ceiling on a browse path (`packages/contracts/src/filesystem.ts`). */
-const MAX_START_PATH_LENGTH = 512;
+/** A path the app's own browse RPC accepts — `FilesystemBrowseInput`'s `partialPath` rule. */
+const isBrowsablePath = Schema.is(FilesystemBrowseInput);
 
 /**
- * The `start` hint `ctx.pickFolder` opens on, or `undefined` for home.
+ * R36 — the `start` hint `ctx.pickFolder` opens on, or `undefined` for home.
  *
  * A HINT, so nothing is reported: the contract says an unreadable start opens home, and a start
- * that is not even a usable string — not a string, empty, over the wire's own cap, carrying a
- * control character — is the same thing by another route. The argument arrives from plain
- * JavaScript, so `pickFolder({ start: 42 })` is a call a real author makes.
+ * that is not even a usable string — not a string, blank, over the app's own browse-path cap,
+ * carrying a control character — is the same thing by another route. The argument arrives from
+ * plain JavaScript, so `pickFolder({ start: 42 })` is a call a real author makes.
+ *
+ * THIS HOST'S rule, not the SDK's (S111 R2-F4): only this ctx reads it (the playground's and the
+ * fake's `pickFolder` take any option), and its length bound IS the app's browse wire, so it is
+ * read from that contract (`packages/contracts/src/filesystem.ts` `FilesystemBrowseInput`) rather
+ * than copied.
  */
 export function folderPickStart(options: unknown): string | undefined {
   if (typeof options !== "object" || options === null) return undefined;
   const start = (options as PickFolderOptions).start;
   if (typeof start !== "string") return undefined;
   const trimmed = start.trim();
-  if (trimmed === "" || trimmed.length > MAX_START_PATH_LENGTH || CONTROL_OR_FORMAT.test(trimmed)) {
+  if (!isBrowsablePath({ partialPath: trimmed }) || CONTROL_OR_FORMAT.test(trimmed)) {
     return undefined;
   }
   return trimmed;
-}
-
-/**
- * Why a `ctx.toast(...)` call is unusable, or `null` when it is fine.
- *
- * NOTHING IS COERCED. `title` and `description` are rendered as React CHILDREN in the app's own
- * toast, outside every plugin boundary — v1 measured `host.toast.error({ toString() {…} })` from
- * `activate()` replacing the entire app with React's crash card, on every boot, with a reload not
- * helping. Substituting the plugin's name would show a toast that lies about what the plugin
- * asked for, so the call is dropped and the author is told once.
- */
-export function invalidToastCall(kind: unknown, message: unknown, detail: unknown): string | null {
-  if (typeof kind !== "string" || !TOAST_KINDS.has(kind)) return "kind";
-  if (!isDisplayString(message, 200)) return "message";
-  if (
-    detail !== undefined &&
-    (typeof detail !== "string" ||
-      detail.length > MAX_DESCRIPTION_LENGTH ||
-      CONTROL_OR_FORMAT.test(detail))
-  ) {
-    return "detail";
-  }
-  return null;
 }
 
 /** The console channel a plugin's `ctx.log` writes to, prefixed so a noisy plugin is nameable. */
@@ -219,7 +179,7 @@ export function makeWebCtx(plugin: { readonly id: string; readonly name: string 
             `Сообщение плагина «${plugin.name}» отброшено`,
           ),
           detail: L(
-            `invalid toast field: ${invalid} (title ≤ 200 chars, detail ≤ ${String(MAX_DESCRIPTION_LENGTH)}, no control characters; labels elsewhere ≤ ${String(MAX_LABEL_LENGTH)})`,
+            `invalid toast field: ${invalid} (kind is success, error or info; message and detail are strings)`,
             `некорректное поле уведомления: ${invalid}`,
           ),
         });

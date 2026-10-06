@@ -1690,8 +1690,8 @@ export type PluginState = typeof PluginState.Type;</code></pre>
             пределах плагина (повтор отбрасывается, остаётся первое вхождение);
           </li>
           <li>
-            <code>title</code> — отображаемая строка не длиннее 64 символов без управляющих
-            символов; <strong>слишком длинный заголовок отбрасывает всю страницу</strong>;
+            <code>title</code> — строка любой длины (места отрисовки обрезают её сами); страница
+            отбрасывается, только если <code>title</code> не строка;
           </li>
           <li>
             <code>render</code> — компонент без пропсов; приложение монтирует
@@ -1823,12 +1823,13 @@ export default defineWebPlugin({
             слаг строки <code>/</code> (начальное <code>/имя</code> до первого пробела, в нижнем
             регистре; допустимы кириллица, точки и двоеточия) попадает в список команд, которые
             приложение пропускает при отправке; строка, которая была отброшена, — это и команда,
-            которая будет отклонена при отправке;
+            которая будет отклонена при отправке; строка сверх 100 не рисуется в меню, но остаётся в
+            этом списке, и набранная вручную команда выполняется;
           </li>
           <li>
-            <code>id</code>, <code>label</code>, <code>group</code> — отображаемые строки не длиннее
-            64; <code>description</code> не проверяется (как у панели); не больше 100 строк за
-            вызов.
+            <code>id</code> — непустая строка (ключ, не отображается); <code>label</code> — строка;
+            <code>group</code> — строка или отсутствует; <code>description</code> не проверяется
+            (как у панели); меню рисует не больше 100 строк плагина за запрос.
           </li>
         </ul>
         <pre><code class="language-typescript">import { defineWebPlugin, type ComposerRow } from &quot;@smart-tools/plugin-sdk/host&quot;;
@@ -2462,8 +2463,8 @@ if (provider === null) return null;</code></pre>
         <p>
           <code>toast(kind, message, detail?)</code> — тост плагина в стеке приложения, предназначен
           пользователю. Значения не приводятся: <code>kind</code> — один из <code>ToastKind</code>,
-          <code>message</code> — отображаемая строка до 200 символов без управляющих символов,
-          <code>detail</code> — до 1000. Неверный вызов отбрасывается с одной записью о проблеме. Не
+          <code>message</code> — строка, <code>detail</code> — строка или отсутствует; любой длины,
+          в том числе многострочные. Неверный вызов отбрасывается с одной записью о проблеме. Не
           больше 50 тостов на плагин за загрузку страницы.
         </p>
         <pre><code class="language-typescript">ctx.toast(&quot;success&quot;, &quot;Note saved&quot;);
@@ -2577,9 +2578,15 @@ return &lt;button disabled={picking} onClick={choose}&gt;Choose folder&lt;/butto
             <code>subscribe</code> — любой черновик изменился; слушатель вызывается без аргументов;
           </li>
           <li>
-            все поля, кроме <code>body</code>, — отображаемые строки до 64 символов;
-            <code>body</code> — любая строка, усекается до 256 КБ; идентификаторы получают префикс
-            <code>plugin:&lt;pluginId&gt;:</code>, поэтому плагины не пересекаются.
+            <code>id</code> и <code>group</code> — непустые строки (ключи, не отображаются);
+            <code>title</code>, <code>label</code>, <code>text</code> — строки (<code>text</code>
+            рисуется многострочным); <code>name</code> — НЕПУСТАЯ строка (это
+            <code>filePath</code> отправленного <code>&lt;review_comment&gt;</code>, без него
+            карточку не прочитать обратно); <code>body</code> — строка, отправляется целиком (длину
+            сообщения ограничивает само приложение при отправке); <code>language</code> —
+            отсутствует или строка без пробельных символов (иначе ломается заголовок блока кода);
+            идентификаторы получают префикс <code>plugin:&lt;pluginId&gt;:</code>, поэтому плагины
+            не пересекаются.
           </li>
         </ul>
         <pre><code class="language-typescript">const target = useSignal(ctx.composer.target);
@@ -2947,7 +2954,10 @@ const describe = (error: unknown): string =&gt; {
               <tr>
                 <td><code>MAX_COMPOSER_ROWS_PER_PLUGIN</code></td>
                 <td>100</td>
-                <td>строк за один вызов <code>composer.items</code></td>
+                <td>
+                  строк плагина, которые меню рисует на один запрос; остальные действительные строки
+                  <code>/</code> остаются в списке разрешённых команд
+                </td>
               </tr>
               <tr>
                 <td><code>MAX_BACKGROUND_PER_PLUGIN</code></td>
@@ -2963,26 +2973,11 @@ const describe = (error: unknown): string =&gt; {
                 </td>
               </tr>
               <tr>
-                <td><code>MAX_LABEL_LENGTH</code></td>
-                <td>64</td>
-                <td>
-                  <code>Page.title</code>, <code>Panel.title</code>, <code>ComposerRow.id</code> /
-                  <code>label</code> / <code>group</code>, поля
-                  <code>ComposerAttachment</code> кроме <code>body</code>
-                </td>
-              </tr>
-              <tr>
                 <td><code>MAX_DESCRIPTION_LENGTH</code></td>
                 <td>1000</td>
                 <td>
-                  <code>Panel.description</code>, <code>ComposerRow.description</code> (усекается),
-                  <code>detail</code> у <code>toast</code>
+                  <code>Panel.description</code>, <code>ComposerRow.description</code> (усекается)
                 </td>
-              </tr>
-              <tr>
-                <td>сообщение <code>toast</code></td>
-                <td>200</td>
-                <td><code>message</code> у <code>ctx.toast</code></td>
               </tr>
               <tr>
                 <td><code>MAX_PLUGIN_TOASTS</code></td>
@@ -2998,11 +2993,6 @@ const describe = (error: unknown): string =&gt; {
                 <td><code>PLUGIN_SLUG_PATTERN</code></td>
                 <td><code>/^[a-z0-9][a-z0-9-]{0,63}$/</code></td>
                 <td><code>Page.id</code>, <code>Panel.id</code></td>
-              </tr>
-              <tr>
-                <td><code>MAX_ATTACHMENT_BODY_LENGTH</code></td>
-                <td>256 × 1024</td>
-                <td><code>ComposerAttachment.body</code>, усекается</td>
               </tr>
               <tr>
                 <td>ожидающий <code>pickFolder</code></td>

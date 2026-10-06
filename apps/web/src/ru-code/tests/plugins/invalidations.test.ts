@@ -16,7 +16,7 @@
 // `ru-code/e2e/tests-plugins/slashGuard.e2e.test.ts`.
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { INVALIDATE_SEAMS, isInvalidateSeam } from "../../plugins/caps";
+import { INVALIDATE_SEAMS, isInvalidateSeam } from "@smart-tools/plugin-sdk/host-rules";
 import {
   invalidatePluginSeam,
   pluginSeamVersion,
@@ -97,7 +97,7 @@ describe("invalidatePluginSeam", () => {
   });
 
   it("cannot be spelled into another plugin's counter", () => {
-    // The key joins the two with a separator no plugin id can carry (`caps.ts` slug rule), so
+    // The key joins the two with a separator no plugin id can carry (the `host-rules` slug rule), so
     // `"a demo"` invalidating `composer` is not `"a"` invalidating `"demo composer"`.
     invalidatePluginSeam("a demo", "composer");
     expect(pluginSeamVersion("a", "composer")).toBe(0);

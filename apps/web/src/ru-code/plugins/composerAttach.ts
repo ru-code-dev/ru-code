@@ -29,7 +29,11 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { DraftId, useComposerDraftStore, type ComposerThreadTarget } from "~/composerDraftStore";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
-import { MAX_LABEL_LENGTH, isDisplayString } from "./caps";
+import {
+  ATTACHMENT_NEEDS,
+  invalidAttachment,
+  isAttachmentId,
+} from "@smart-tools/plugin-sdk/host-rules";
 
 /** The token's two spellings. A draft id has no colon in it; a thread ref is a pair. */
 const DRAFT_PREFIX = "draft:";
@@ -76,26 +80,6 @@ const commentId = (pluginId: string, id: string): string => `plugin:${pluginId}:
 /** The prefix `attached()` strips to answer in the plugin's own ids. */
 const commentPrefix = (pluginId: string): string => `plugin:${pluginId}:`;
 
-/**
- * Is this an attachment the host will draw?
- *
- * Every display field goes through the SAME `isDisplayString` the other seams use, so a control
- * character or an over-length label is refused here rather than drawn. `body` is the payload the
- * model reads, not a display string: it is only required to be a string, and it is clamped by
- * nothing — a scanned node's DSL is legitimately long.
- */
-const validAttachment = (item: unknown): item is ComposerAttachment => {
-  if (typeof item !== "object" || item === null) return false;
-  const candidate = item as Record<string, unknown>;
-  for (const field of ["id", "group", "title", "name", "label", "text"] as const) {
-    if (!isDisplayString(candidate[field], MAX_LABEL_LENGTH)) return false;
-  }
-  if (typeof candidate["body"] !== "string") return false;
-  const language = candidate["language"];
-  if (language !== undefined && !isDisplayString(language, MAX_LABEL_LENGTH)) return false;
-  return true;
-};
-
 /** The plugin's seven fields → the app's persisted review comment. */
 const toReviewComment = (pluginId: string, item: ComposerAttachment): ReviewCommentContext => ({
   id: commentId(pluginId, item.id),
@@ -108,18 +92,10 @@ const toReviewComment = (pluginId: string, item: ComposerAttachment): ReviewComm
   endIndex: 0,
   rangeLabel: item.label,
   text: item.text,
-  diff: item.body.slice(0, MAX_ATTACHMENT_BODY_LENGTH),
+  // Whole: the app's own send limit bounds the message (S111 #14), not a clamp here.
+  diff: item.body,
   ...(item.language === undefined ? {} : { fenceLanguage: item.language }),
 });
-
-/**
- * The cap on a payload, and it is generous on purpose.
- *
- * It is not a display string — it is what the model reads — but it DOES reach the wire and the
- * user's persisted draft, so an accidental unbounded value must not be able to wedge either. A
- * design-tool node's serialized form measures single-digit KB; 256 KB is two orders above.
- */
-export const MAX_ATTACHMENT_BODY_LENGTH = 256 * 1024;
 
 /**
  * Build the seam for one plugin.
@@ -136,10 +112,13 @@ export const makePluginComposer = (input: {
   target: input.target,
 
   attach: (token, item) => {
-    if (!validAttachment(item)) {
+    // The host's attachment rule is the SDK's (`invalidAttachment`, S111), written once for this
+    // host, the playground and the `./testing` fake.
+    const invalid = invalidAttachment(item);
+    if (invalid !== null) {
       input.report(
         "composer:attach",
-        "the attachment was dropped: a field is not a display string",
+        `the attachment was dropped: it needs ${ATTACHMENT_NEEDS[invalid]}`,
       );
       return;
     }
@@ -154,7 +133,7 @@ export const makePluginComposer = (input: {
 
   detach: (token, id) => {
     const target = parseTarget(token);
-    if (target === null || typeof id !== "string" || id === "") return;
+    if (target === null || !isAttachmentId(id)) return;
     useComposerDraftStore.getState().removeReviewComment(target, commentId(input.pluginId, id));
   },
 

@@ -19,7 +19,7 @@ import {
   useRightPanelStore,
 } from "~/rightPanelStore";
 
-import { makeGlobalPanelId } from "../../skills-agents/rightGlobalPanel/store";
+import { pluginPanelId } from "../../skills-agents/rightGlobalPanel/store";
 import { resetLoadedPlugins } from "../../plugins/registry";
 import {
   closePluginPanel,
@@ -275,34 +275,24 @@ describe("footer nav keys", () => {
 describe("vanishedPluginGlobalPanel", () => {
   it("names the plugin panel that is open and no longer contributed", () => {
     expect(
-      vanishedPluginGlobalPanel(
-        makeGlobalPanelId("plugin:demo:notes"),
-        ["plugin:demo:other"],
-        ["demo"],
-      ),
+      vanishedPluginGlobalPanel(pluginPanelId("demo", "notes"), ["plugin:demo:other"], ["demo"]),
     ).toBe("plugin:demo:notes");
   });
 
   it("leaves a panel that is still contributed alone", () => {
     expect(
-      vanishedPluginGlobalPanel(
-        makeGlobalPanelId("plugin:demo:notes"),
-        ["plugin:demo:notes"],
-        ["demo"],
-      ),
+      vanishedPluginGlobalPanel(pluginPanelId("demo", "notes"), ["plugin:demo:notes"], ["demo"]),
     ).toBe(null);
   });
 
   it("never touches a BUILT-IN panel, whatever the plugins are doing", () => {
-    expect(vanishedPluginGlobalPanel(makeGlobalPanelId("mcp"), [], ["demo"])).toBe(null);
+    expect(vanishedPluginGlobalPanel("mcp", [], ["demo"])).toBe(null);
     expect(vanishedPluginGlobalPanel(null, [], ["demo"])).toBe(null);
   });
 
   it("keeps the panel of a plugin that is not authoritative — the same silence rule as a tab", () => {
-    expect(vanishedPluginGlobalPanel(makeGlobalPanelId("plugin:demo:notes"), [], [])).toBe(null);
-    expect(
-      vanishedPluginGlobalPanel(makeGlobalPanelId("plugin:demo:notes"), [], ["catalogs"]),
-    ).toBe(null);
+    expect(vanishedPluginGlobalPanel(pluginPanelId("demo", "notes"), [], [])).toBe(null);
+    expect(vanishedPluginGlobalPanel(pluginPanelId("demo", "notes"), [], ["catalogs"])).toBe(null);
   });
 });
 

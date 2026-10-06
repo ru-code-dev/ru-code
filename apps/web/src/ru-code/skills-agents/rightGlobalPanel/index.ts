@@ -14,10 +14,8 @@ export {
 export {
   closeGlobalPanelIfOpen,
   isGlobalPanelOpen,
-  makeGlobalPanelId,
   pluginPanelId,
   useRightGlobalPanelStore,
-  GLOBAL_PANEL_ID_PATTERN,
   type GlobalPanelId,
   type KnownGlobalPanelId,
   type PluginGlobalPanelId,

@@ -57,6 +57,8 @@
 
 import { L } from "@ru-code/localization";
 
+import { MAX_PLUGIN_TOASTS, toastCeiling } from "@smart-tools/plugin-sdk/host-rules";
+
 import { recordPluginProblem, resetPluginProblemRecords } from "./status";
 
 export type PluginToastKind = "success" | "error" | "info";
@@ -73,9 +75,6 @@ export interface PluginProblem {
    */
   readonly code?: string;
 }
-
-/** A plugin's own toasts, per page load. High enough that no honest plugin can reach it. */
-export const MAX_PLUGIN_TOASTS = 50;
 
 const pending: PluginProblem[] = [];
 let viewportReady = false;
@@ -127,8 +126,11 @@ function admit(problem: PluginProblem): boolean {
   const { pluginId } = problem;
   const raised = toastCounts.get(pluginId) ?? 0;
   toastCounts.set(pluginId, raised + 1);
-  if (raised < MAX_PLUGIN_TOASTS) return true;
-  if (raised === MAX_PLUGIN_TOASTS) {
+  // The ceiling's rule is the SDK's (`toastCeiling`, S111) — the playground and the `./testing`
+  // fake apply the same one, each over its own count.
+  const verdict = toastCeiling(raised);
+  if (verdict === "show") return true;
+  if (verdict === "announce") {
     reportPluginProblem({
       kind: "error",
       pluginId,

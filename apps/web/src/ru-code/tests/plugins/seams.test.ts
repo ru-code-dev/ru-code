@@ -15,7 +15,9 @@ import {
   MAX_COMPOSER_ROWS_PER_PLUGIN,
   MAX_PAGES_PER_PLUGIN,
   MAX_PANELS_PER_PLUGIN,
-} from "../../plugins/caps";
+  drawnDescription,
+} from "@smart-tools/plugin-sdk/host-rules";
+import { pluginCommandSlugs, toComposerCommandItem } from "../../plugins/composerRows";
 import { resetPluginProblems } from "../../plugins/problems";
 // V2-42: a host finding about a plugin is a status row and a console line, never a toast — so this
 // is where every assertion below reads it from.
@@ -26,7 +28,6 @@ import {
   collectPluginComposerRows,
   collectPluginPages,
   collectPluginPanelsPass,
-  drawnDescription,
   memoizedByPlugin,
   memoizedComposerRows,
   sameComposerRows,
@@ -217,6 +218,29 @@ describe("collectPluginPages", () => {
     expect(getPendingPluginProblems()[0]?.detail).toContain("4 entries dropped");
   });
 
+  // S111 #2: a title is drawn in host chrome that truncates it (page header, sidebar button, tab
+  // strip — `truncate` at every draw site, S110 R05). What guards a crash is that it is a STRING:
+  // a non-string React child there is outside every plugin boundary.
+  it("S111 #2: keeps a page and a panel whose title is 100 chars, multi-line or bidi; drops a non-string one", () => {
+    const long = "T".repeat(100);
+    const pages = collectPluginPages([
+      plugin("titled", {
+        pages: () =>
+          [
+            { ...page("long"), title: long },
+            { ...page("lines"), title: "two\nlines" },
+            { ...page("blank"), title: "  " },
+            { ...page("object"), title: { toString: () => "x" } },
+          ] as never,
+      }),
+    ]);
+    expect(pages.map((entry) => entry.value.id)).toEqual(["long", "lines", "blank"]);
+    const panels = collectPluginPanelsPass([
+      plugin("titled", { panels: () => [{ ...page("side"), title: long }] }),
+    ]);
+    expect(panels.entries.map((entry) => entry.value.title)).toEqual([long]);
+  });
+
   it("caps the pages one plugin can contribute and says so once", () => {
     const entries = collectPluginPages([
       plugin("flood", {
@@ -389,9 +413,10 @@ describe("collectPluginComposerRows", () => {
 
   // ru-code S43 F1 (REVIEW): the one seam S41 item 4's dedupe did not reach.
   //
-  // `uniqueById` lives inside `contributionsOf`, which runs pages, panels and background. The
-  // composer seam does NOT run through it: `items` is async, so `collectPluginComposerRows`
-  // (`seams.tsx`) builds its own pipeline — validate, then `capped` — with nothing between them.
+  // The dedupe lived inside `contributionsOf`, which runs pages, panels and background. The
+  // composer seam did NOT run through it: `items` is async, so `collectPluginComposerRows`
+  // (`seams.tsx`) built its own pipeline — validate, then cap — with nothing between them. Since
+  // S111 both pipelines call the SDK's `judgeSeam` (validate → dedupe → cap).
   //
   // The key it builds is `plugin:<pluginId>:<trigger>:<rowId>`, and `toComposerCommandItem`
   // (`composerRows.ts`) hands that key to the menu AS THE ITEM'S `id`, where the app uses it three
@@ -401,7 +426,7 @@ describe("collectPluginComposerRows", () => {
   // from the menu with no reason given anywhere, and the highlight resolves by a colliding id.
   //
   // It is not a gap anyone can read from the outside: `api.md` states the rule for EVERY seam
-  // ("An `id` must be unique within your plugin, per seam … `seams.tsx · uniqueById`", and the
+  // ("An `id` must be unique within your plugin, per seam … `host-rules · judgeSeamEntries`", and the
   // `ComposerRow` paragraph sits under it), and the playground mirror dedupes composer rows
   // (`plugin-dev/src/playground/client/seams.ts` passes `(entry) => entry.id` to `applyHostRules`
   // for `useComposerRows`). So the row an author sees dropped-and-reported in the playground is
@@ -413,7 +438,7 @@ describe("collectPluginComposerRows", () => {
       "",
     );
     // The FIRST occurrence keeps its place, manifest order untouched, the repeat gone — the same
-    // rule `uniqueById` applies at every other seam.
+    // rule `judgeSeam` applies at every other seam.
     expect(rows.map((entry) => entry.key)).toEqual(["plugin:alpha:/:one", "plugin:alpha:/:two"]);
     // …and the author is told once, through this seam's own `seam:<name>` code, exactly as a
     // malformed row and an over-cap list already are.
@@ -501,7 +526,11 @@ describe("collectPluginComposerRows", () => {
     expect(rows).toEqual([]);
   });
 
-  it("drops a malformed row and caps the rest", async () => {
+  // SUPERSEDED PIN (S111 #6): this case pinned `rows.length === MAX_COMPOSER_ROWS_PER_PLUGIN` —
+  // the cap SLICED the answer, so a `/` row past the 100th left the submit allowlist too and the
+  // user's own typed command was refused (S110 R20). Shape (b): the cap bounds what the menu DRAWS;
+  // the collector keeps every valid row, marking the first 100 per plugin `drawn`.
+  it("drops a malformed row and caps what the menu DRAWS, keeping every valid row", async () => {
     const rows = await collectPluginComposerRows(
       [
         plugin("flood", {
@@ -518,16 +547,18 @@ describe("collectPluginComposerRows", () => {
       "/",
       "",
     );
-    expect(rows).toHaveLength(MAX_COMPOSER_ROWS_PER_PLUGIN);
+    expect(rows).toHaveLength(MAX_COMPOSER_ROWS_PER_PLUGIN + 3);
+    expect(rows.filter((entry) => entry.drawn)).toHaveLength(MAX_COMPOSER_ROWS_PER_PLUGIN);
+    expect(rows.slice(MAX_COMPOSER_ROWS_PER_PLUGIN).every((entry) => !entry.drawn)).toBe(true);
   });
 
   // ru-code S40 F5 — THE RULE UNDER TEST (comment rewritten at S41 item 17; the assertions below
   // have not moved since the fix).
   //
-  // A ROW SURVIVES ANY `description`, because the host does not judge one. `validRow` gates `id`,
-  // `label`, `insert` and `group` and says nothing about `description` (`seams.tsx` anchor:
-  // validRow); the field is drawn as given and clamped where it is drawn, by `drawnDescription`
-  // (`seams.tsx`), which every draw site calls — `tabSurfaces.tsx` for a panel's line and
+  // A ROW SURVIVES ANY `description`, because the host does not judge one. `isValidComposerRow`
+  // gates `id`, `label`, `insert` and `group` and says nothing about `description`
+  // (`@smart-tools/plugin-sdk/host-rules`); the field is drawn as given and clamped where it is
+  // drawn, by `drawnDescription` (the same module), which every draw site calls — `tabSurfaces.tsx` for a panel's line and
   // `composerRows.ts` `toComposerCommandItem` for a row's. So `""`, whitespace and a two-line
   // string are all "no second line, keep the row", exactly as they are one seam over.
   //
@@ -552,6 +583,109 @@ describe("collectPluginComposerRows", () => {
       "",
     );
     expect(rows.map((entry) => entry.value.id)).toEqual(["blank", "two-line", "none"]);
+  });
+
+  // ── S111: catalogs' real rows (S110 R15, R20) ─────────────────────────────────────────────
+  //
+  // Catalogs builds a `/` row as `label: "/<name>"`, `insert: "/<name> "` (`plugin-catalogs
+  // src/web/composer.ts` ROW_STYLE.command) from command names the scan accepts up to 120 chars,
+  // and a `$` row's label from a skill's front-matter name with no length check at scan. The
+  // 64-char display-string rule dropped both rows — and for `/` the slug left the submit
+  // allowlist, so the user's own typed command was stripped or the send aborted.
+  const commandRow = (name: string, index: number) => ({
+    id: `cmd-${String(index)}`,
+    label: `/${name}`,
+    insert: `/${name} `,
+    description: "Command",
+    icon: "Bot",
+  });
+  const allowlist = (rows: Awaited<ReturnType<typeof collectPluginComposerRows>>) =>
+    pluginCommandSlugs(rows.map((entry) => toComposerCommandItem(entry, "/")));
+
+  it("S111 #4: a 70-char `/command` is in the menu AND in the submit allowlist", async () => {
+    const name = "deploy-".repeat(10);
+    const rows = await collectPluginComposerRows(
+      [plugin("catalogs", { composer: { items: () => [commandRow(name, 0)] } })],
+      "/",
+      "",
+    );
+    expect(rows.filter((entry) => entry.drawn).map((entry) => entry.value.label)).toEqual([
+      `/${name}`,
+    ]);
+    expect(allowlist(rows).has(name)).toBe(true);
+  });
+
+  // S111 #6 — the COLLECTOR's half of shape (b), stated with literal expectations: it keeps all 101
+  // valid rows and marks exactly the 101st not drawn. Which rows the submit guard READS (every
+  // contributed row, `qwenCommandSlugs.ts` → `useContributedComposerRows`) is a hook, which this
+  // NODE project cannot render; its guard is `ru-code/e2e/tests-plugins/slashGuard.e2e.test.ts`
+  // "S111 #6: past the 100 the menu draws…" (S111 review F2: the earlier version computed its
+  // allowlist from these same rows, so it could not see which hook the guard used).
+  it("S111 #6: the collector keeps all 101 valid `/` rows and marks only the 101st not drawn", async () => {
+    const rows = await collectPluginComposerRows(
+      [
+        plugin("catalogs", {
+          composer: {
+            items: () =>
+              Array.from({ length: 101 }, (_, index) =>
+                commandRow(`command-${String(index)}`, index),
+              ),
+          },
+        }),
+      ],
+      "/",
+      "",
+    );
+    expect(rows).toHaveLength(101);
+    expect(rows.slice(98).map((entry) => [entry.key, entry.drawn])).toEqual([
+      ["plugin:catalogs:/:cmd-98", true],
+      ["plugin:catalogs:/:cmd-99", true],
+      ["plugin:catalogs:/:cmd-100", false],
+    ]);
+  });
+
+  it("S111 #4: a `$` skill whose name is 65 chars is in the menu", async () => {
+    const name = "Очень подробный навык для проверки длинных имён в меню композера ".slice(0, 65);
+    expect(name).toHaveLength(65);
+    const rows = await collectPluginComposerRows(
+      [
+        plugin("catalogs", {
+          composer: {
+            items: () => [
+              { id: "skill-1", label: name, insert: `skill:⟦${name}⟧ `, icon: "Package" },
+            ],
+          },
+        }),
+      ],
+      "$",
+      "",
+    );
+    expect(rows.filter((entry) => entry.drawn).map((entry) => entry.value.label)).toEqual([name]);
+  });
+
+  it("S111 #3–#5: a row's id needs a non-empty string, its label and group a string — nothing more", async () => {
+    const good = { id: "x".repeat(70), label: "", insert: "/a ", group: "g".repeat(200) };
+    const rows = await collectPluginComposerRows(
+      [
+        plugin("rules", {
+          composer: {
+            items: () =>
+              [
+                good,
+                { ...good, id: "tab\there", label: "bidi\u202Elabel" },
+                { ...good, id: "" },
+                { ...good, id: 7 },
+                { ...good, id: "nl", label: { toString: () => "x" } },
+                { ...good, id: "grp", group: 7 },
+                { ...good, id: "nogroup", group: undefined },
+              ] as never,
+          },
+        }),
+      ],
+      "/",
+      "",
+    );
+    expect(rows.map((entry) => entry.value.id)).toEqual(["x".repeat(70), "tab\there", "nogroup"]);
   });
 
   it("ignores a plugin with no composer seam", async () => {

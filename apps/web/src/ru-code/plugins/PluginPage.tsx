@@ -38,7 +38,8 @@ export const pluginPagePath = (pluginId: string, pageId: string): string =>
  *
  * HOST MARKUP, deliberately OUTSIDE `[data-plugin-root]` (see `PluginSurface`): the plugin's scoped
  * stylesheet must not be able to restyle the app's own chrome, and the title is the plugin's only
- * contribution here — a string the seam already capped at `MAX_LABEL_LENGTH`.
+ * contribution here — any string (S111: the seam asks only that it is one); `truncate` below is
+ * what keeps a long one in its row.
  */
 function PluginPageHeader({ title, icon }: { readonly title: string; readonly icon?: string }) {
   // The two shapes every whole-area page in this app has (`UsagePage`, `_chat.pull-requests`): a

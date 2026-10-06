@@ -18,11 +18,11 @@ import {
   getPendingPluginProblems,
   getPluginProblemRepeats,
   markPluginToastViewportReady,
-  MAX_PLUGIN_TOASTS,
   reportPluginProblem,
   resetPluginProblems,
 } from "../../plugins/problems";
 import { getPluginProblems } from "../../plugins/status";
+import { MAX_PLUGIN_TOASTS } from "@smart-tools/plugin-sdk/host-rules";
 
 const problem = (title: string) => ({ kind: "info" as const, pluginId: "demo", title });
 

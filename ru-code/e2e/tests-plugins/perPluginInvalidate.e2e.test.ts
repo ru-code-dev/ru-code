@@ -145,7 +145,8 @@ test.describe("plugins — a plugin's invalidate recomputes that plugin only (V2
     await expect(page.getByRole("tab", { name: CATALOG_TAB })).toHaveCount(0, { timeout: 20_000 });
 
     // The "/" runner must be LIVE before the measurement — that is the consumer the demo's row
-    // hangs off (`ChatView.tsx` → `useQwenPluginCommandSlugs` → `usePluginComposerRows("/", "")`).
+    // hangs off (`ChatView.tsx` → `useQwenPluginCommandSlugs` → `useContributedComposerRows("/", "")`,
+    // every contributed row — S111 #6).
     await clearComposer(page);
     await typeTrigger(page, "/");
     await expect(

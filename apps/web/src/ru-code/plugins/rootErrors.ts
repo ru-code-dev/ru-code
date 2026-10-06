@@ -17,7 +17,7 @@
 
 import { L } from "@ru-code/localization";
 
-import { isPluginSlug } from "./caps";
+import { isPluginSlug } from "@smart-tools/plugin-sdk/host-rules";
 import { reportPluginProblem } from "./problems";
 import { pluginDisplayName } from "./status";
 

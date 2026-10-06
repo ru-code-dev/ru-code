@@ -24,7 +24,13 @@
 // the html block precedes the links block whenever both are on screen, AND it occupies the
 // last slot of the tab — which IS the slot immediately above the links block.
 
-import { expect, readHarnessState, test, type Page } from "../tests-core/fixtures.ts";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
+import { expect, readHarnessState, sendPrompt, test, type Page } from "../tests-core/fixtures.ts";
+
+/** The fake CLI's own log (`scripts/bootApp.ts` `RU_CODE_FAKE_LOG_FILE`): one `prompt text:` line per send. */
+const FAKE_ACP_LOG = NodePath.join(import.meta.dirname, "../.artifacts/fake-acp.log");
 
 /** The Import tab defaults to "remote"; every assertion here is about a LOCAL scan. */
 async function openPixsoPanel(page: Page): Promise<void> {
@@ -165,6 +171,15 @@ test("the HTML preview block rides the main tab above the links, collapsed but a
   await attach.click();
   await expect(attach).toHaveAttribute("aria-pressed", "true");
 
+  // ---- S111 (S109 S1): …and the item IS ON THE COMPOSER, as a chip. `aria-pressed` follows the
+  // panel's own tray, which flips even when the host refuses the attachment — and it refused every
+  // pixso "+" since the port: the card id is a 64-hex sha256, so `group` ("pixso:<id>", 70 chars)
+  // failed the old 64-char display-string rule. The chip is `ComposerPendingReviewComments`'s
+  // remove button, labelled `Remove comment on <filePath> <rangeLabel>`; pixso's filePath is
+  // `pixso/<card name>`.
+  const chip = page.getByRole("button", { name: /^Remove comment on pixso\// });
+  await expect(chip).toHaveCount(1);
+
   // ---- §4: «Открыть HTML» is a button of the tab's existing app-button row — the SAME row
   // the group picker's own button sits in — and NOT part of the block.
   const openHtml = page.getByTestId("pixso-open-html");
@@ -216,4 +231,22 @@ test("the HTML preview block rides the main tab above the links, collapsed but a
   expect(cssLine).toBeDefined();
   expect(popupHtml).toContain(cssLine as string);
   await popup.close();
+
+  // ---- S111: SENDING carries the card. The prompt the CLI receives holds the `<review_comment>`
+  // block (`reviewCommentContext.ts` `formatReviewCommentContext`, the sectionId namespaced by the
+  // host as `plugin:pixso:<group>`), and the timeline parses it back into a card under the user's
+  // message, titled `Pixso · <card>` — what the composer had before the port.
+  const sentAt = NodeFS.existsSync(FAKE_ACP_LOG)
+    ? NodeFS.readFileSync(FAKE_ACP_LOG, "utf8").length
+    : 0;
+  await sendPrompt(page, "S111 attach check");
+  await expect(chip).toHaveCount(0, { timeout: 30_000 });
+  await expect
+    .poll(() => NodeFS.readFileSync(FAKE_ACP_LOG, "utf8").slice(sentAt), { timeout: 30_000 })
+    // The fake logs the first 120 characters of a prompt, which cuts the 64-hex card id short.
+    .toMatch(
+      /prompt text: S111 attach check\s+<review_comment sectionId="plugin:pixso:pixso:[0-9a-f]{40}/,
+    );
+  const sent = page.locator('[data-message-role="user"]').filter({ hasText: "S111 attach check" });
+  await expect(sent.getByText(/^Pixso · /).first()).toBeVisible({ timeout: 30_000 });
 });

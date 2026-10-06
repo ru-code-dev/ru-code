@@ -64,6 +64,7 @@
  * @module ru-code/plugins/storage
  */
 import type { Migration as PluginMigration, PluginStorage } from "@smart-tools/plugin-sdk/host";
+import { migrationIdProblem } from "@smart-tools/plugin-sdk/host-rules";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -677,6 +678,14 @@ export const runPluginMigrations = (
   Effect.gen(function* () {
     const applied: Array<string> = [];
 
+    // S111 #15 / F4 — the WHOLE list first (`@smart-tools/plugin-sdk/host-rules`
+    // `migrationIdProblem`, the rule the playground and the fakes import too): a blank or repeated
+    // id fails the plugin, named, and NOTHING runs — not the migrations declared before it either
+    // (V2-64, rule 37 "boundaries validate").
+    const problem = migrationIdProblem(migrations);
+    if (problem !== null)
+      return { ok: false, applied, ...problem } satisfies PluginMigrationOutcome;
+
     const bootstrap = yield* Effect.result(
       Effect.gen(function* () {
         yield* sql.unsafe(
@@ -697,16 +706,7 @@ export const runPluginMigrations = (
     }
 
     const alreadyApplied = new Set(bootstrap.success.map((row) => row.id));
-
     for (const migration of migrations) {
-      if (typeof migration.id !== "string" || migration.id.trim().length === 0) {
-        return {
-          ok: false,
-          applied,
-          failedId: "(unnamed)",
-          error: "migration id must be a non-empty string",
-        } satisfies PluginMigrationOutcome;
-      }
       if (alreadyApplied.has(migration.id)) continue;
 
       const statements = migrationStatements(migration.sql);

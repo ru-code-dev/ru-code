@@ -79,7 +79,7 @@ describe("folder picker request store (V2-33)", () => {
     await expect(requestFolderPick("demo", undefined)).resolves.toBeNull();
   });
 
-  // S26 A2: the queue is CAPPED like every other plugin-facing surface (`caps.ts`) — ONE pending
+  // S26 A2: the queue is CAPPED like every other plugin-facing surface (`host-rules`) — ONE pending
   // request per plugin. A button with no in-flight guard clicked five times opens one picker; the
   // other four are answered `null` at once and the plugin is told once; after the one answer the
   // palette is idle again (no re-open), so ⌘K and Esc behave.
